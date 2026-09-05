@@ -361,6 +361,12 @@ Rust target triple straight to clang. Rust spells the iOS simulator with a
 the Rust spelling outright. Nothing is wrong with either tool, they just
 disagree, and the crate passes the string through without translating it.
 
+Worth stating because the error text misleads: it blames the triple, which
+sends the next reader hunting for a typo in their own configuration. There
+is no typo. `aarch64-apple-ios-sim` is the correct and only Rust name for
+that target. clang simply does not accept that spelling, and the crate hands
+it over untranslated.
+
 Fixed through bindgen's own escape hatch rather than by patching or
 vendoring the crate: `BINDGEN_EXTRA_CLANG_ARGS` is exported for the cargo
 step with `--target=arm64-apple-ios-simulator` and the simulator SDK as the
