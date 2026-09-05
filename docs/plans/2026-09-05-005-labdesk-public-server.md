@@ -379,9 +379,11 @@ every other container egress, return anything not arriving on `enp0s6`, return 4
 
 Three consequences.
 
-1. `hbbs` needs three holes here, not five: TCP 21115 for the NAT type test, and TCP and UDP 21116
-   for registration and rendezvous. The relay ports are not opened on this host at all, because the
-   relay is not on it. WebSocket rendezvous on 21118 stays closed until a web client is a shipping
+1. `hbbs` needs three holes here in steady state: TCP 21115 for the NAT type test, and TCP and
+   UDP 21116 for registration and rendezvous. A fourth, TCP 21117, is opened for the length of the
+   cutover only, because during it this host also carries the temporary relay that lets the fleet
+   leave CT 102 (section 5.5, step 2), and it is closed again at step 6. WebSocket rendezvous on
+   21118 stays closed until a web client is a shipping
    surface. Each hole needs a rule in `INPUT`, a rule in `DOCKER-USER` if `hbbs` runs as a
    container, and an entry in the Oracle network security group `labnet-netbird`. The runbook
    records that the subnet's shared security list also allows 444/tcp and 41641/udp from anywhere
@@ -1203,7 +1205,7 @@ verifier is a CI run.
 | WP | Owns | Depends on | Verifier |
 |---|---|---|---|
 | **P1. The rendezvous, stood up** (owner-only) | the Oracle VM: the `hbbs` unit or compose file, its `/data` volume, key pair generation, `TEST_HBBS=no`, and a temporary `hbbr` on 21117 for the length of the cutover, with `hbbs` started without `-r` so clients derive it | none | `ss -tulnH` on the VM shows 21115, 21116 TCP and UDP and 21117; from the workstation a TCP connect to 21116 succeeds and a client holding the right key reaches `key_confirmed`, and a forced-relay session between two machines completes without CT 102 being touched |
-| **P2. Rendezvous firewall and security group** (owner-only) | `/etc/iptables/rules.v4`, `DOCKER-USER`, the Oracle NSG `labnet-netbird` | P1 | an external port scan from the workstation shows exactly 443, 21115 and 21116 open on that host and nothing else, repeated after a deliberate reboot, because a rule that survives only until the next restart is not a rule |
+| **P2. Rendezvous firewall and security group** (owner-only) | `/etc/iptables/rules.v4`, `DOCKER-USER`, the Oracle NSG `labnet-netbird` | P1 | an external port scan from the workstation shows exactly 443, 21115, 21116 and, for the length of the cutover only, 21117 open on that host and nothing else, repeated after a deliberate reboot because a rule that survives only until the next restart is not a rule; the same scan is run again after P7 and must then show 21117 closed here |
 | **P3. Rendezvous isolation** (owner-only) | the second Docker network, the CPU and memory limits, the two `DOCKER-USER` drops between subnets | P1, P2 | from inside the `hbbs` container's network namespace, `netbird-server` is unreachable and `169.254.169.254` answers nothing; `docker stats` under a synthetic registration load shows the control plane still scheduled |
 | **P4. CT 102 headroom** (owner-only) | the Proxmox config for CT 102: `cores`, `memory`, `rootfs` size | none | the Proxmox API reads back `cores 2`, `memory 1024` and a 4 GB rootfs, and the incumbent's services are still answering on 21114 through 21117 over Tailscale afterwards, because this package runs before the fleet has moved |
 | **P5. LabDesk's relay on CT 102** (owner-only) | the `hbbr` systemd unit on CT 102, its working directory, `blocklist.txt`, `blacklist.txt`, `-p 21117`, LabDesk's public key, and the container's outbound firewall rule | P4, P8, P21 | `ss -tulnH` inside CT 102 shows 21117 and nothing from the incumbent; `printf 'tb' \| nc 127.0.0.1 21117` reads back the configured total; a forced-relay session between two converted machines completes through it; `systemctl stop` takes the relay off in one step and clients fall back to hole punching |
