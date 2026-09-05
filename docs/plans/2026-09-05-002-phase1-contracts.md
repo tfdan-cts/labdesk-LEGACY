@@ -203,10 +203,27 @@ Answer gains two members:
   `dispatchedAt` in the same `db.batch()` as the ingest, guarded `WHERE state = 'approved'`, so a
   replayed batch is answered with nothing (section 3.3).
 - `collectNow` is present and `true` when the answer carries at least one job whose row was
-  requested with `urgent`, and the agent's next flush is then 10 s rather than `flushSeconds`
-  (section 6.4). Absent otherwise.
+  requested with `urgent`, and the agent then takes a sample at once and flushes 10 s later rather
+  than at `flushSeconds` (section 6.4). Absent otherwise. THE SAMPLE IS HALF THE CONTRACT: `flush()`
+  returns without sending anything when the spool holds no line, and ten seconds after a flush it
+  never does, so an early flush with no sample brought forward carries nothing at all. Measured on
+  homebox-devserver 2026-09-05, before the sample was brought forward with it: an urgent `flush_dns`
+  exited 0 at 16:27:13 and its result reached the server on the ordinary 300 s tick.
 - Rows left `approved` or `dispatched` past `expiresAt` are moved to `expired` by the minute tick
   in `scheduled.ts` (`minuteTick`), never dispatched, and reported as such.
+
+The batch's own `machine` member names this machine's kind, and that is what makes a job possible
+at all: `machine.platform` is the key every catalog entry is looked up by, and until 2026-09-05
+nothing in the product wrote that column, so a really enrolled machine was refused every tool with
+"That machine has not reported its platform yet."
+
+```json
+"machine": { "hostname": "...", "os": "...", "platform": "linux", "arch": "x86_64",
+             "agentVersion": "1.2.6", "uptimeS": 41736, "loggedInUser": "homebox" }
+```
+
+`platform` is one of `windows`, `linux`, `macos`; the ingest stores a word this build's catalog
+knows and leaves the column alone otherwise, so a machine cannot name itself into a tool set.
 
 Request gains one member, sent on the batch AFTER the job ran:
 

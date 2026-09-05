@@ -89,6 +89,41 @@ wrong, the correction is recorded here rather than left to be rediscovered.
    `power_logoff` argv. `run_as_user` serves Windows and macOS through `labdesk --labdesk-tool
    <id>`; on Windows the exit status of that launch is not observed (`LaunchProcessWin` hands back
    no handle) and the job result says so in its output.
+
+9. `machine.platform` was read everywhere and written nowhere (sections 4.4 and 6.2). Enrolment
+   stores hostname and OS build; the batch stored those and the agent version; nothing in either
+   half of the product ever set `platform` or `arch`. Every catalog entry is keyed by platform, so
+   for a really enrolled machine `POST /org/jobs` answered "That machine has not reported its
+   platform yet." for every tool and `scheduled.ts::jobFor` fired nothing, forever. Found on
+   homebox-devserver 2026-09-05 by enrolling a real machine, which no fixture had done: the seeded
+   rows all carried a platform set by hand. As built: the batch's `machine` member names `platform`
+   and `arch`, and the ingest stores a platform this build's catalog knows and nothing else.
+
+10. `collectNow` bought nothing (phase 1 contracts, section 6.4). It moved the next FLUSH to ten
+    seconds, and `flush()` sends nothing at all when the spool holds no line (`window.sent == 0`),
+    which ten seconds after a flush it never does. Measured on homebox-devserver 2026-09-05: an
+    urgent `flush_dns` exited 0 at 16:27:13 and its result reached the server on the ordinary 300 s
+    tick. As built: an answer asking for it brings the next SAMPLE forward as well, so the early
+    flush has a line to carry the result on.
+
+11. The console lost the whole organization when labnet was not configured (section 8.2). One
+    `try` read the organization's machines and the labnet inbox in sequence, and lab-desk.net
+    answers `/agent/overlay/inbox` 503 when no NetBird is configured for it, so the 503 threw past
+    the assignment: an empty health board, no adapters, no self-healing report and no machine
+    picker, over a subsystem the technician had not asked for. The two reads are separate now.
+    Two more from the same field check: the health board rendered the technician's PEER list rather
+    than the organization's fleet, so a freshly installed console said "No machines yet." over a
+    fleet the server was answering with; and every place needing this machine's own peer id read
+    `serverModel.serverId.text`, which is the formatted id the box shows ("1 180 573 903"), so the
+    console never recognised itself.
+
+12. A Linux tunnel read as down (section 8.2, the adapter view). `link_up` trusted
+    `/sys/class/net/<if>/operstate` alone, and a driver that never calls `netif_carrier_*` leaves
+    that at `unknown`: `tailscale0` on homebox-devserver reported down 2026-09-05 while this
+    session was talking to the machine over it. `unknown` falls back to `IFF_UP` now. The same
+    check found the first `net.adapters` attribute of a run written with no MAC address and zero
+    traffic, because the flush offset is shorter than one sample cadence and the sampler's
+    interface list was still empty; the constructor seeds it.
 -->
 
 <!--

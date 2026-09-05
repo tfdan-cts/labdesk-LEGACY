@@ -271,13 +271,27 @@ fn walk() -> Option<Vec<RawEntry>> {
     Some(entries)
 }
 
-/// Linux: `operstate`, the kernel's own word on the link. The `IFF_UP` flag
-/// is administrative and stays set on an unplugged cable.
+/// Linux: `operstate`, the kernel's own word on the link, except where the
+/// kernel has no word to give.
+///
+/// `IFF_UP` alone is administrative and stays set on an unplugged cable, which
+/// is why `operstate` is read first. But a driver that never calls
+/// `netif_carrier_*` leaves `operstate` at `unknown`
+/// (Documentation/networking/operstates.rst), and every tunnel on a machine is
+/// one of those: `tailscale0`, `wg0`, `tun0` and the netbird interface all read
+/// `unknown` while carrying traffic. Reading that as down reported the VPN
+/// adapter of homebox-devserver as down on 2026-09-05 while this session was
+/// talking to the machine over it, so `unknown` falls back to the
+/// administrative flag, which is the only answer those drivers offer.
 #[cfg(target_os = "linux")]
-fn link_up(name: &str, _flags: i32) -> bool {
-    std::fs::read_to_string(format!("/sys/class/net/{}/operstate", name))
-        .map(|s| s.trim() == "up")
-        .unwrap_or(false)
+fn link_up(name: &str, flags: i32) -> bool {
+    use hbb_common::libc;
+    match std::fs::read_to_string(format!("/sys/class/net/{}/operstate", name)) {
+        Ok(state) if state.trim() == "up" => true,
+        Ok(state) if state.trim() == "unknown" => flags & libc::IFF_UP != 0,
+        Ok(_) => false,
+        Err(_) => flags & libc::IFF_UP != 0,
+    }
 }
 
 /// macOS: administratively up and with a carrier.

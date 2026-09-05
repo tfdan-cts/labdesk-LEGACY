@@ -38,6 +38,18 @@ use std::time::Duration;
 
 const SPOOL_FILE: &str = "agent-spool.jsonl";
 const BATCH_PATH: &str = "/agent/batch";
+/// The catalog's word for this machine's kind, and a wire contract: the server
+/// stores it on the `machine` row and every tool entry is keyed by it, so a
+/// machine that never says which one it is can never be given a job
+/// (labdesk-site/src/worker/tool-catalog.ts, `PLATFORMS`).
+#[cfg(target_os = "windows")]
+const PLATFORM: &str = "windows";
+#[cfg(target_os = "macos")]
+const PLATFORM: &str = "macos";
+#[cfg(target_os = "linux")]
+const PLATFORM: &str = "linux";
+#[cfg(not(any(target_os = "windows", target_os = "macos", target_os = "linux")))]
+const PLATFORM: &str = "";
 /// How often an un-enrolled daemon looks again. `labdesk --enrol` runs in a separate
 /// process and writes the machine id into the identity file, so the only way this one
 /// learns about it is to re-read the file.
@@ -258,7 +270,16 @@ async fn run() {
             next_flush = Instant::now() + Duration::from_secs(wait);
             // An answer carrying an urgent job asks for the result sooner than
             // the cadence (section 2 of the phase 1 contracts).
+            //
+            // A SAMPLE TOO, not only a flush. `flush` sends nothing whatever when the
+            // spool holds no line (`window.sent == 0` returns `Ok(None)` before the body
+            // is built), and ten seconds after a flush has just emptied it, it never
+            // does. Measured on homebox-devserver 2026-09-05: an urgent flush_dns exited
+            // 0 at 16:27:13 and its result reached the server on the ordinary 300 s tick,
+            // so the urgency bought nothing. Sampling first gives the flush a line to
+            // carry the result on.
             if collect_now {
+                next_sample = Instant::now();
                 next_flush = Instant::now() + Duration::from_secs(tools::COLLECT_NOW_SECONDS);
             }
         }
@@ -791,11 +812,18 @@ impl Sampler {
         // the first sample -- a whole cadence later -- a real reading rather than a zero.
         system.refresh_cpu();
         system.refresh_memory();
-        // The disk and interface lists are deliberately left empty. `sample` enumerates
-        // both from scratch every time, so there is nothing for a constructor to seed.
+        // The disk list is deliberately left empty: `sample` enumerates it from scratch
+        // every time, so there is nothing for a constructor to seed. The interface list
+        // is not, because the FIRST flush can come before the first sample -- the flush
+        // offset is a fraction of the flush cadence and the first sample is a whole
+        // sample cadence away -- and `net.adapters` is built from these counters. An
+        // unseeded list writes that attribute with no MAC address and no traffic on
+        // every adapter, and `Attrs` then holds that shape for an hour.
+        let mut networks = Networks::new();
+        networks.refresh_list();
         Self {
             system,
-            networks: Networks::new(),
+            networks,
             disks: Disks::new(),
         }
     }
@@ -876,6 +904,8 @@ impl Sampler {
         serde_json::json!({
             "hostname": crate::hostname(),
             "os": self.system.long_os_version().unwrap_or_default(),
+            "platform": PLATFORM,
+            "arch": std::env::consts::ARCH,
             "agentVersion": crate::VERSION,
             "uptimeS": self.system.uptime(),
             "loggedInUser": crate::platform::get_active_username(),
@@ -933,6 +963,18 @@ mod tests {
 
     fn machine() -> serde_json::Value {
         serde_json::json!({ "hostname": "host-1" })
+    }
+
+    #[test]
+    fn test_the_batch_names_the_platform_and_the_architecture() {
+        // The server keys every catalog entry on `machine.platform` and writes that
+        // column from nowhere else, so a batch that does not name it leaves the column
+        // NULL for the life of the machine and `POST /org/jobs` answers "That machine
+        // has not reported its platform yet." for every tool, forever.
+        let member = Sampler::new().machine();
+        assert!(["windows", "macos", "linux"].contains(&PLATFORM));
+        assert_eq!(member["platform"], PLATFORM);
+        assert_eq!(member["arch"], std::env::consts::ARCH);
     }
 
     #[test]
