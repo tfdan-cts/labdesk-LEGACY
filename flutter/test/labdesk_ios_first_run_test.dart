@@ -47,7 +47,7 @@ void main() {
       )));
 
       expect(find.text('Sign in to lab-desk.net'), findsOneWidget);
-      expect(find.text('Add a server profile'), findsOneWidget);
+      expect(find.text('Use a server I run'), findsOneWidget);
     });
 
     testWidgets('with no server configured it says the built in default is used',
@@ -59,7 +59,7 @@ void main() {
         onSkip: () {},
       )));
 
-      expect(find.textContaining('built in'), findsOneWidget);
+      expect(find.textContaining('built into the app'), findsOneWidget);
     });
 
     testWidgets('with a server configured it names that server', (tester) async {
@@ -72,7 +72,7 @@ void main() {
 
       expect(find.textContaining('labnet.lab-desk.net'), findsOneWidget);
       expect(
-        find.textContaining('built in'),
+        find.textContaining('built into the app'),
         findsNothing,
         reason: 'a configured server is not the default and must not read as one',
       );
@@ -88,7 +88,7 @@ void main() {
       )));
 
       await tester.tap(find.text('Sign in to lab-desk.net'));
-      await tester.tap(find.text('Add a server profile'));
+      await tester.tap(find.text('Use a server I run'));
       await tester.tap(find.text('Not now'));
       await tester.pump();
 

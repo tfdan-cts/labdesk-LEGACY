@@ -51,7 +51,6 @@ class FirstRunView extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     final theme = Theme.of(context);
-    final muted = theme.textTheme.bodyMedium?.color?.withOpacity(0.7);
     // Centred when it fits and scrollable when it does not. A fixed column with
     // spacers overflowed by 60 pixels on a 320 by 480 screen, and a first run
     // screen that cannot be got past is the worst possible one to break.
@@ -70,11 +69,9 @@ class FirstRunView extends StatelessWidget {
               ),
               const SizedBox(height: 12),
               Text(
-                'LabDesk connects your machines through a server. '
-                'Sign in to use the one on your account, or point this app at '
-                'a server you run.',
+                _situation(),
                 textAlign: TextAlign.center,
-                style: TextStyle(color: muted),
+                style: theme.textTheme.bodyMedium,
               ),
               const SizedBox(height: 28),
               FilledButton(
@@ -84,15 +81,9 @@ class FirstRunView extends StatelessWidget {
               const SizedBox(height: 12),
               OutlinedButton(
                 onPressed: onAddProfile,
-                child: const Text('Add a server profile'),
+                child: const Text('Use a server I run'),
               ),
-              const SizedBox(height: 24),
-              Text(
-                _currentServerLine(),
-                textAlign: TextAlign.center,
-                style: theme.textTheme.bodySmall?.copyWith(color: muted),
-              ),
-              const SizedBox(height: 8),
+              const SizedBox(height: 16),
               TextButton(
                 onPressed: onSkip,
                 child: const Text('Not now'),
@@ -104,11 +95,17 @@ class FirstRunView extends StatelessWidget {
     );
   }
 
-  String _currentServerLine() {
+  /// The whole reason this screen exists, so it sits above the buttons and at
+  /// body weight rather than under them in a footnote. A fact that arrives
+  /// after the decision has been made is not disclosure.
+  String _situation() {
     final server = configuredServer.trim();
     if (server.isEmpty) {
-      return 'No server is set, so LabDesk uses the one built in.';
+      return 'Your machines connect through a server. Until you choose one, '
+          'LabDesk falls back to a server built into the app, so your '
+          'connections would go through one you did not pick.';
     }
-    return 'This app is set to $server.';
+    return 'Your machines connect through a server. This app is currently '
+        'set to use $server.';
   }
 }

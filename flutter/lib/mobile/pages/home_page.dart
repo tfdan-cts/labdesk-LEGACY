@@ -38,6 +38,17 @@ class HomePageState extends State<HomePage> {
       ? _selectedIndex == _chatPageTabIndex
       : false; // change this when ios have chat page
 
+  /// Bring the connection page forward from elsewhere in the app.
+  ///
+  /// Found by type rather than by index, because the tabs differ by platform
+  /// and a number here would be wrong on the first platform that gains or
+  /// loses one.
+  void showConnectionPage() {
+    final index = _pages.indexWhere((p) => p is ConnectionPage);
+    if (index < 0) return;
+    setState(() => _selectedIndex = index);
+  }
+
   void refreshPages() {
     setState(() {
       initPages();

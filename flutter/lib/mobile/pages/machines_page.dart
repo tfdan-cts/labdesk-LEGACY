@@ -121,6 +121,8 @@ class _MachinesPageState extends State<MachinesPage> {
               if (labdeskStatus.store.isQueryingPeer(m.id)) m.id
           },
           onConnect: (id) => connect(context, id),
+          onConnectToFirstMachine: () =>
+              HomePage.homeKey.currentState?.showConnectionPage(),
         );
       }),
     );

@@ -27,17 +27,23 @@ void main() {
 
   testWidgets('with no machine it says so and says what to do next',
       (tester) async {
+    var pressed = 0;
     await tester.pumpWidget(_wrap(MachineListView(
       machines: const [],
       onConnect: (_) {},
+      onConnectToFirstMachine: () => pressed++,
     )));
 
     expect(find.text('No machines yet'), findsOneWidget);
     expect(
-      find.textContaining('identifier'),
+      find.text('Connect to a machine'),
       findsOneWidget,
-      reason: 'an empty list that does not say how to fill it is a dead end',
+      reason: 'an empty list that offers no control is a dead end',
     );
+
+    await tester.tap(find.text('Connect to a machine'));
+    await tester.pump();
+    expect(pressed, 1);
   });
 
   testWidgets('a machine nobody has asked about reads as unknown, never as down',

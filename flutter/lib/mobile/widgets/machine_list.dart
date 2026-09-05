@@ -21,6 +21,7 @@ class MachineListView extends StatelessWidget {
     this.savedPasswords = const {},
     this.checking = const {},
     this.now,
+    this.onConnectToFirstMachine,
   });
 
   final List<MachineRow> machines;
@@ -37,6 +38,11 @@ class MachineListView extends StatelessWidget {
   /// Fixed clock for tests. Null means now.
   final DateTime? now;
 
+  /// Where an operator with no machines goes next. When absent the empty state
+  /// still explains itself but offers no control, which is a dead end, so the
+  /// page that owns this list is expected to supply it.
+  final VoidCallback? onConnectToFirstMachine;
+
   @override
   Widget build(BuildContext context) {
     // Always scrollable, empty or not, so a pull to refresh still works when
@@ -44,7 +50,10 @@ class MachineListView extends StatelessWidget {
     if (machines.isEmpty) {
       return ListView(
         physics: const AlwaysScrollableScrollPhysics(),
-        children: const [SizedBox(height: 80), _Empty()],
+        children: [
+          const SizedBox(height: 80),
+          _Empty(onConnect: onConnectToFirstMachine),
+        ],
       );
     }
     return ListView.separated(
@@ -63,28 +72,41 @@ class MachineListView extends StatelessWidget {
 }
 
 class _Empty extends StatelessWidget {
-  const _Empty();
+  const _Empty({this.onConnect});
+
+  final VoidCallback? onConnect;
 
   @override
   Widget build(BuildContext context) {
-    final muted = Theme.of(context).textTheme.bodyMedium?.color?.withOpacity(0.7);
+    final theme = Theme.of(context);
+    final muted = theme.textTheme.bodyMedium?.color?.withOpacity(0.7);
     return Padding(
-        padding: const EdgeInsets.all(32),
-        child: Column(
-          mainAxisSize: MainAxisSize.min,
-          children: [
-            Icon(Icons.devices_other_outlined, size: 44, color: muted),
-            const SizedBox(height: 12),
-            Text('No machines yet',
-                style: Theme.of(context).textTheme.titleMedium),
-            const SizedBox(height: 6),
-            Text(
-              'Connect to a machine by its identifier and it will be listed here.',
-              textAlign: TextAlign.center,
-              style: TextStyle(color: muted),
+      padding: const EdgeInsets.all(32),
+      child: Column(
+        mainAxisSize: MainAxisSize.min,
+        children: [
+          Icon(Icons.devices_other_outlined, size: 44, color: muted),
+          const SizedBox(height: 12),
+          Text('No machines yet', style: theme.textTheme.titleMedium),
+          const SizedBox(height: 6),
+          Text(
+            'Machines you connect to are kept here, '
+            'so the next time is one tap.',
+            textAlign: TextAlign.center,
+            style: TextStyle(color: muted),
+          ),
+          if (onConnect != null) ...[
+            const SizedBox(height: 20),
+            // The way out. An empty screen that names a mechanism and offers
+            // no control leaves the operator to work out where to go next.
+            FilledButton.icon(
+              onPressed: onConnect,
+              icon: const Icon(Icons.add, size: 18),
+              label: const Text('Connect to a machine'),
             ),
           ],
-        ),
+        ],
+      ),
     );
   }
 }
@@ -130,8 +152,13 @@ class _MachineTile extends StatelessWidget {
       trailing: Row(
         mainAxisSize: MainAxisSize.min,
         children: [
-          Text(_word(dot),
-              style: theme.textTheme.bodySmall?.copyWith(color: muted)),
+          Text(
+            _word(dot),
+            style: theme.textTheme.bodySmall?.copyWith(
+              color: _dotColour(context, dot),
+              fontWeight: FontWeight.w500,
+            ),
+          ),
           if (hasSavedPassword) ...[
             const SizedBox(width: 8),
             Icon(Icons.vpn_key_outlined, size: 18, color: muted),
@@ -157,6 +184,22 @@ String _word(LabDeskDot dot) => switch (dot) {
       LabDeskDot.unknown => 'Unknown',
     };
 
+/// One decision about colour, read by both the dot and the word beside it.
+///
+/// A dot is about ten pixels and the word next to it is bigger, so leaving the
+/// word a uniform grey put the whole state signal on the smallest thing in the
+/// row. Colouring both means the state survives a glance.
+Color _dotColour(BuildContext context, LabDeskDot dot) {
+  final theme = Theme.of(context);
+  return switch (dot) {
+    LabDeskDot.online => Colors.green.shade600,
+    LabDeskDot.offline => theme.colorScheme.error,
+    LabDeskDot.checking => Colors.amber.shade700,
+    LabDeskDot.unknown =>
+      theme.textTheme.bodySmall?.color?.withOpacity(0.6) ?? Colors.grey,
+  };
+}
+
 class _StatusDot extends StatelessWidget {
   const _StatusDot({required this.dot});
 
@@ -164,17 +207,10 @@ class _StatusDot extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
-    final theme = Theme.of(context);
     // Hollow covers both states where nothing is known: nobody has asked, and
     // the asking is still out. Neither may be drawn as an answer.
     final unknown = dot == LabDeskDot.unknown || dot == LabDeskDot.checking;
-    final colour = switch (dot) {
-      LabDeskDot.online => Colors.green.shade600,
-      LabDeskDot.offline => theme.colorScheme.error,
-      LabDeskDot.checking => Colors.amber.shade700,
-      LabDeskDot.unknown =>
-        theme.textTheme.bodySmall?.color?.withOpacity(0.5) ?? Colors.grey,
-    };
+    final colour = _dotColour(context, dot);
     return SizedBox(
       width: 24,
       height: 24,

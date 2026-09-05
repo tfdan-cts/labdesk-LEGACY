@@ -170,7 +170,12 @@ void main() {
   testWidgets('machine list with nothing in it', (tester) async {
     await shoot(
       tester,
-      MachineListView(machines: const [], onConnect: (_) {}, now: now),
+      MachineListView(
+        machines: const [],
+        onConnect: (_) {},
+        onConnectToFirstMachine: () {},
+        now: now,
+      ),
       'machine-list-empty',
     );
   }, skip: !_enabled);
