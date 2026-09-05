@@ -170,6 +170,19 @@ jobs:
           rustup target add aarch64-apple-ios-sim
           export BINDGEN_EXTRA_CLANG_ARGS="--target=arm64-apple-ios-simulator -isysroot $(xcrun --sdk iphonesimulator --show-sdk-path)"
           echo "BINDGEN_EXTRA_CLANG_ARGS=$BINDGEN_EXTRA_CLANG_ARGS"
+          # The vcpkg-rs crate maps the Rust target to a vcpkg triplet itself,
+          # and for aarch64-apple-ios-sim it picks arm64-ios, the device
+          # triplet. magnum-opus then looked in installed/arm64-ios/include and
+          # failed with "'opus/opus_multistream.h' file not found", because the
+          # only triplet installed here is the simulator one. Its own
+          # documentation offers the override: "Use this to override vcpkg-rs'
+          # default triplet selection with your own."
+          #
+          # Correctness, not convenience: installing the device triplet instead
+          # would satisfy the header search and then link device slices into a
+          # simulator binary.
+          export VCPKGRS_TRIPLET=arm64-ios-simulator
+          echo "VCPKGRS_TRIPLET=$VCPKGRS_TRIPLET"
           cargo build --locked --features flutter --release --target aarch64-apple-ios-sim --lib
 
       # Runner.xcodeproj links a literal path under target/aarch64-apple-ios,

@@ -407,6 +407,39 @@ repository at 14,720 nodes and 56,306 edges the whole time, and answering
 "who uses HomePage" took one query where grep would have taken several and
 would not have distinguished a definition from a use.
 
+### Run 33988135105: coreaudio fixed, vcpkg-rs picks the wrong triplet
+
+The bindgen fix worked. coreaudio-sys built, and the Rust build went
+further than it ever has before stopping on the fourth instance of the same
+pattern:
+
+    error: failed to run custom build command for `magnum-opus v0.4.0`
+    opus_ffi.h:1:10: fatal error: 'opus/opus_multistream.h' file not found
+
+The log names the cause without ambiguity, two lines above the error:
+
+    cargo:info=arm64-ios
+    cargo:include=.../vcpkg/installed/arm64-ios/include
+
+The `vcpkg-rs` crate maps the Rust target to a vcpkg triplet itself, and for
+`aarch64-apple-ios-sim` it chooses `arm64-ios`, the device triplet. The only
+triplet installed in this job is `arm64-ios-simulator`, so the include
+directory it went looking in does not exist.
+
+Fixed with `VCPKGRS_TRIPLET=arm64-ios-simulator`, which is that crate's own
+documented override: "Use this to override vcpkg-rs' default triplet
+selection with your own." (<https://docs.rs/vcpkg/latest/vcpkg/>, read
+2026-09-05.)
+
+The tempting wrong fix is worth naming, because it would have gone green
+for a while: installing the `arm64-ios` triplet as well would satisfy the
+header search immediately, and then link device slices into a simulator
+binary. That fails later, further from its cause, and possibly not until
+the app refuses to launch.
+
+Fourth dependency, fourth escape hatch the tool already had, and no crate
+patched yet.
+
 ## The bar, written before anything is judged against it
 
 The brief asks for a gauntlet loop: one concrete bar, pieces judged alone,
