@@ -3,7 +3,13 @@ name: CI
 env:
 #   MIN_SUPPORTED_RUST_VERSION: "1.46.0"
 #   CICD_INTERMEDIATES_DIR: "_cicd-intermediates"
-  VCPKG_BINARY_SOURCES: "clear;x-gha,readwrite"
+  # vcpkg binary caching: the 'x-gha' backend was removed from vcpkg, so the old
+  # "clear;x-gha,readwrite" expression was rejected at runtime and every port rebuilt from
+  # source on every run. Use vcpkg's files provider pointed at a directory that actions/cache
+  # saves and restores per job (see the "Cache vcpkg binary packages" steps). The triplet is
+  # part of every cache key so one platform's archives can never restore into another
+  # platform's job.
+  VCPKG_BINARY_SOURCES: "clear;files,${{ github.workspace }}/vcpkg-binary-cache,readwrite"
   # for multiarch gcc compatibility
   VCPKG_COMMIT_ID: "120deac3062162151622ca4860575a33844ba10b"
 
@@ -144,6 +150,15 @@ jobs:
           # arm-unknown-linux-*) sudo apt-get -y update ; sudo apt-get -y install gcc-arm-linux-gnueabihf ;;
           # aarch64-unknown-linux-gnu) sudo apt-get -y update ; sudo apt-get -y install gcc-aarch64-linux-gnu ;;
         esac
+
+    - name: Cache vcpkg binary packages
+      uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+      with:
+        path: ${{ github.workspace }}/vcpkg-binary-cache
+        key: vcpkg-${{ runner.os }}-x64-linux-${{ env.VCPKG_COMMIT_ID }}-${{ hashFiles('vcpkg.json') }}
+        restore-keys: |
+          vcpkg-${{ runner.os }}-x64-linux-${{ env.VCPKG_COMMIT_ID }}-
+          vcpkg-${{ runner.os }}-x64-linux-
 
     - name: Setup vcpkg with Github Actions binary cache
       uses: lukka/run-vcpkg@b1a0dd252f06b9e25b3c022a9a03bd7a427fb6a2 # v11
@@ -342,6 +357,15 @@ jobs:
            libxfixes-dev \
            nasm \
            wget
+
+    - name: Cache vcpkg binary packages
+      uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+      with:
+        path: ${{ github.workspace }}/vcpkg-binary-cache
+        key: vcpkg-${{ runner.os }}-x64-linux-${{ env.VCPKG_COMMIT_ID }}-${{ hashFiles('vcpkg.json') }}
+        restore-keys: |
+          vcpkg-${{ runner.os }}-x64-linux-${{ env.VCPKG_COMMIT_ID }}-
+          vcpkg-${{ runner.os }}-x64-linux-
 
     - name: Setup vcpkg with Github Actions binary cache
       uses: lukka/run-vcpkg@b1a0dd252f06b9e25b3c022a9a03bd7a427fb6a2 # v11
