@@ -33,10 +33,10 @@ class CommandFramer {
   /// exit status is spelled out rather than read off $?.
   static String frame(String command, String platform) {
     if (platform.toLowerCase().contains('win')) {
-      return '$command; Write-Output (\'${kLabDeskEndMarker}=\''
+      return '$command; Write-Output (\'$kLabDeskEndMarker=\''
           ' + \$(if (\$?) { 0 } else { 1 }))';
     }
-    return '$command; echo "${kLabDeskEndMarker}=\$?"';
+    return '$command; echo "$kLabDeskEndMarker=\$?"';
   }
 }
 

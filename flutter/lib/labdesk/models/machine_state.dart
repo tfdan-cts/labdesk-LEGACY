@@ -183,7 +183,7 @@ List<MetricSample> parseMetricHistory(Map<dynamic, dynamic> j) {
                 (from.toInt() + offset) * 1000,
                 isUtc: true)
             .toLocal(),
-        cpu: share(row.length > 0 ? row[0] : null),
+        cpu: share(row[0]),
         memory: share(row.length > 1 ? row[1] : null),
         disk: share(row.length > 2 ? row[2] : null),
       ));

@@ -151,6 +151,7 @@ class _LabDeskConsolePageState extends State<LabDeskConsolePage> {
   /// which fleet it belongs to.
   var _fleets = const <OrgFleet>[];
   var _mustNameFleet = false;
+  var _fleetsRead = false;
 
   /// The self-healing switch as it stands on this machine, and whether the
   /// service has reported since it was last flipped.
@@ -1315,7 +1316,7 @@ class _LabDeskConsolePageState extends State<LabDeskConsolePage> {
       await _maybeAskConsent(inbox);
       await _pollDetail();
       await _pollNetViews();
-      if (_fleets.isEmpty) await _readFleets();
+      if (!_fleetsRead) await _readFleets();
     } on OverlayBrokerException catch (e) {
       // A sign-in that no longer holds is the account surface's to report,
       // and the previous account's machines must not stay on screen.
@@ -1395,6 +1396,9 @@ class _LabDeskConsolePageState extends State<LabDeskConsolePage> {
       setState(() {
         _fleets = fleets;
         _mustNameFleet = ids != null && ids.length > 1;
+        // Read once per sign-in, not once per poll: an organization with no
+        // fleets would otherwise be asked twice every fifteen seconds for ever.
+        _fleetsRead = true;
       });
     } catch (_) {}
   }
@@ -1434,6 +1438,7 @@ class _LabDeskConsolePageState extends State<LabDeskConsolePage> {
       _history.clear();
       _fleets = const <OrgFleet>[];
       _mustNameFleet = false;
+      _fleetsRead = false;
     });
   }
 
