@@ -34,12 +34,12 @@ env:
   FLUTTER_VERSION: "3.24.5"
   RUST_VERSION: "1.75"
   VCPKG_COMMIT_ID: "120deac3062162151622ca4860575a33844ba10b"
-  # No VCPKG_BINARY_SOURCES here on purpose. The rest of the repository sets
-  # "clear;x-gha,readwrite", and vcpkg now answers that with "the 'x-gha' binary
-  # caching backend has been removed", so it caches nothing and only prints a
-  # warning. Carrying a setting that does nothing would suggest this job has a
-  # binary cache when it does not; it rebuilds the ports each run, which is
-  # about eight and a half minutes.
+  # The files backend, not x-gha: vcpkg removed x-gha, and the value the rest of
+  # the repository carried cached nothing while printing a warning. The files
+  # backend needs no feed and no credentials, and actions/cache carries the
+  # directory between runs. Measured on the shared workflows at 390 seconds cold
+  # against 3 seconds warm.
+  VCPKG_BINARY_SOURCES: "clear;files,${{ github.workspace }}/vcpkg-binary-cache,readwrite"
   # The device type is fixed so screenshots are comparable between runs; the
   # runtime is resolved at run time because the runner image moves.
   SIM_DEVICE_TYPE: "com.apple.CoreSimulator.SimDeviceType.iPhone-17"
@@ -59,13 +59,10 @@ jobs:
     # the six hours GitHub allows.
     timeout-minutes: 90
     steps:
-      - name: Export GitHub Actions cache environment variables
-        uses: actions/github-script@d7906e4ad0b1822421a7e6a35d5ca353c962f410 # v6
-        with:
-          script: |
-            core.exportVariable('ACTIONS_CACHE_URL', process.env.ACTIONS_CACHE_URL || '');
-            core.exportVariable('ACTIONS_RUNTIME_TOKEN', process.env.ACTIONS_RUNTIME_TOKEN || '');
-
+      # There is deliberately no step exporting ACTIONS_CACHE_URL and
+      # ACTIONS_RUNTIME_TOKEN here. Those existed to feed vcpkg's x-gha backend,
+      # which no longer exists; actions/cache does not read them.
+      #
       # nasm and yasm are what the ffmpeg and aom ports want. autoconf,
       # automake and libtool are what the libsodium port wants: it builds
       # through vcpkg_configure_make and fails with "libsodium requires autoconf
@@ -92,7 +89,27 @@ jobs:
             git apply ${{ github.workspace }}/.github/patches/flutter_3.24.4_dropdown_menu_enableFilter.diff
           fi
 
-      - name: Setup vcpkg with Github Actions binary cache
+      # Restore and save are split rather than using actions/cache whole,
+      # because this workflow cancels superseded runs and actions/cache only
+      # saves in its post step on success. A cancelled run would never populate
+      # the cache, which is exactly the run this job has most often.
+      #
+      # The triplet is in the key literally. arm64-ios-simulator is the only
+      # consumer of that triplet in the repository, and a key without it would
+      # quietly hand this job another platform's binaries.
+      - name: Restore the vcpkg binary cache
+        uses: actions/cache/restore@6f8efc29b200d32929f49075959781ed54ec270c # v3
+        with:
+          path: ${{ github.workspace }}/vcpkg-binary-cache
+          key: vcpkg-${{ runner.os }}-arm64-ios-simulator-${{ env.VCPKG_COMMIT_ID }}-${{ hashFiles('vcpkg.json') }}
+          restore-keys: |
+            vcpkg-${{ runner.os }}-arm64-ios-simulator-${{ env.VCPKG_COMMIT_ID }}-
+            vcpkg-${{ runner.os }}-arm64-ios-simulator-
+
+      # run-vcpkg's own cache covers the vcpkg tool and repository, not the
+      # built packages. Its log group says so outright, which is the sentence
+      # that would otherwise make a reader think the packages were cached.
+      - name: Setup vcpkg
         uses: lukka/run-vcpkg@b1a0dd252f06b9e25b3c022a9a03bd7a427fb6a2 # v11
         with:
           vcpkgGitCommitId: ${{ env.VCPKG_COMMIT_ID }}
@@ -132,6 +149,18 @@ jobs:
           lib="$VCPKG_ROOT/installed/arm64-ios-simulator/lib"
           ls -l "$lib/libsodium.a"
           echo "SODIUM_LIB_DIR=$lib" >> "$GITHUB_ENV"
+
+      # Saved here, after both vcpkg calls and with if: always(), so a run that
+      # is later cancelled still leaves the ports cached for the next one. A key
+      # that already exists makes this warn rather than fail, which is why it
+      # tolerates its own error.
+      - name: Save the vcpkg binary cache
+        if: always()
+        continue-on-error: true
+        uses: actions/cache/save@6f8efc29b200d32929f49075959781ed54ec270c # v3
+        with:
+          path: ${{ github.workspace }}/vcpkg-binary-cache
+          key: vcpkg-${{ runner.os }}-arm64-ios-simulator-${{ env.VCPKG_COMMIT_ID }}-${{ hashFiles('vcpkg.json') }}
 
       - name: Install Rust toolchain
         uses: dtolnay/rust-toolchain@e97e2d8cc328f1b50210efc529dca0028893a2d9 # v1
