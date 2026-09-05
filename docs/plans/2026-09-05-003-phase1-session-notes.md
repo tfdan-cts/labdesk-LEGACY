@@ -445,3 +445,33 @@ no sighting at all, so the shot shows the absence rather than a borrowed timesta
 `flutter test -j 1 test/labdesk_*.dart`: 337 tests, all passed, including the new
 `test/labdesk_health_board_test.dart`. `dart analyze` on the changed files reports no error and
 no warning. The rendered board is `wp18-health-board.png` in the round evidence directory.
+
+## Integration round, homebox-devserver, 2026-09-05
+
+The first round where a real machine was enrolled and driven end to end rather than exercised
+against fixtures, and it found five defects that every unit test and every shots run had passed
+over. The server under test was the deployed Worker's code (`labdesk-site` `dev`, `0a10465`) run
+locally, reached from homebox over HTTPS through a front on the machine itself, because no
+production enrolment token exists and only the owner mints one. Everything on the machine side is
+the real client from the dispatch build `p1-ready-1`.
+
+What the field check proved, in order: the machine enrolled with a token minted through
+`POST /console/org/enrol-token`; its collector posted telemetry that landed in `metric_batch`,
+`machine_state`, `machine_attr`, `disk` and `disk_sample` (a Micron 3400 NVMe and a Seagate
+ST1000VX008, read by the real disk path); a `flush_dns` catalog job was requested, approved by a
+second owner, dispatched in a batch answer, run as system and its result row written; a connect
+ticket was delivered to the machine inside its own signed uplink; the self-healing switch in the
+console wrote `labdesk-selfheal = 'Y'` into the daemon's own config and the daemon logged
+`[selfheal] watching connectivity` a minute later.
+
+The defects, all fixed in this round and all recorded in the architecture's corrections block as
+items 9 to 12: `machine.platform` was read by five places and written by none, so no really
+enrolled machine could ever be given a job; `collectNow` moved the flush but not the sample, and a
+flush with an empty spool sends nothing, so an urgent job's result still waited a full cadence; one
+`try` read the organization's machines and the labnet inbox together, so a 503 from a server with
+no NetBird blanked the health board, the adapter view, the self-healing report and the machine
+picker; the health board rendered the technician's peer list rather than the organization's fleet;
+and every place that needed this machine's own peer id read the formatted id the box shows, so the
+console never recognised itself. A sixth, smaller: a Linux tunnel whose `operstate` is `unknown`
+read as down, and the first adapter attribute of every run was written before the sampler had ever
+listed an interface, so it carried no MAC address and no traffic.
