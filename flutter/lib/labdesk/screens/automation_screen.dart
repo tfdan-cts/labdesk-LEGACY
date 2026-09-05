@@ -2,6 +2,7 @@ import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 
 import '../models/automation_models.dart';
+import '../models/automation_presets.dart';
 import '../models/machine_row.dart';
 import '../services/automation_engine.dart';
 import '../theme/console_theme.dart';
@@ -25,10 +26,10 @@ class AutomationScreen extends StatefulWidget {
     required this.rules,
     this.log = const [],
     this.machines = const [],
-    this.monitoredIds = const {},
     this.onSave,
     this.onToggle,
     this.onRunNow,
+    this.onApplyPreset,
     this.now,
   });
 
@@ -39,14 +40,13 @@ class AutomationScreen extends StatefulWidget {
 
   final List<MachineRow> machines;
 
-  /// Machines the console is monitoring. A metric rule can only read a figure
-  /// for one of these, so the editor says which they are rather than letting an
-  /// operator write a threshold that will never be evaluated.
-  final Set<String> monitoredIds;
-
   /// The whole list, after an add, an edit or a delete. One callback rather
   /// than three: the client persists the list as one value.
   final ValueChanged<List<Rule>>? onSave;
+
+  /// One of the ready-made rules, applied. The client mints the id, which is
+  /// why this is not just an [onSave] of a rule built here.
+  final ValueChanged<AutomationPreset>? onApplyPreset;
 
   final void Function(String ruleId, bool enabled)? onToggle;
   final ValueChanged<String>? onRunNow;
@@ -121,6 +121,13 @@ class _AutomationScreenState extends State<AutomationScreen> {
         children: [
           const _Notice(),
           const SizedBox(height: 16),
+          if (widget.onApplyPreset != null) ...[
+            _Presets(
+              applied: {for (final r in widget.rules) r.name},
+              onApply: widget.onApplyPreset!,
+            ),
+            const SizedBox(height: 16),
+          ],
           Panel(
             title: 'Rules',
             subtitle: widget.rules.isEmpty
@@ -171,7 +178,6 @@ class _AutomationScreenState extends State<AutomationScreen> {
             _Editor(
               draft: draft,
               machines: widget.machines,
-              monitoredIds: widget.monitoredIds,
               onChanged: () => setState(() {}),
               onSave: _save,
               onCancel: _close,
@@ -231,10 +237,10 @@ class _Notice extends StatelessWidget {
             const SizedBox(width: 10),
             Expanded(
               child: Text(
-                'Rules run only while LabDesk is open on this machine. There '
-                'is no server and no agent on the far machines: this console '
-                'checks the conditions itself, once a second, and does the '
-                'work over its own connection.',
+                'Rules run only while LabDesk is open on this machine. The '
+                'figures come from the machines themselves, reported to '
+                'lab-desk.net on their flush, but this console is what checks the conditions, '
+                'once a second, and does the work over its own connection.',
                 style: C.small(color: C.textMuted),
               ),
             ),
@@ -404,7 +410,7 @@ class _LogRow extends StatelessWidget {
 /// chooser needs its own enumeration of the kinds to pick between.
 enum _TriggerKind { cameOnline, wentOffline, metricAbove, uptimeAbove, every, atTime }
 
-enum _ActionKind { run, notify, wol, monitor, session }
+enum _ActionKind { run, notify, wol, session }
 
 /// The editor's working copy of a rule.
 ///
@@ -464,8 +470,6 @@ class _Draft {
       case Notify(:final message):
         actionKind = _ActionKind.notify;
         messageText.text = message;
-      case MonitorOn():
-        actionKind = _ActionKind.monitor;
       case OpenSession():
         actionKind = _ActionKind.session;
       case WakeOnLan():
@@ -529,7 +533,6 @@ class _Draft {
           ),
         _ActionKind.notify => Notify(message: messageText.text.trim()),
         _ActionKind.wol => const WakeOnLan(),
-        _ActionKind.monitor => const MonitorOn(),
         _ActionKind.session => const OpenSession(),
       };
 
@@ -567,7 +570,6 @@ class _Editor extends StatelessWidget {
   const _Editor({
     required this.draft,
     required this.machines,
-    required this.monitoredIds,
     required this.onChanged,
     required this.onSave,
     required this.onCancel,
@@ -576,7 +578,6 @@ class _Editor extends StatelessWidget {
 
   final _Draft draft;
   final List<MachineRow> machines;
-  final Set<String> monitoredIds;
   final VoidCallback onChanged;
   final VoidCallback onSave;
   final VoidCallback onCancel;
@@ -708,13 +709,9 @@ class _Editor extends StatelessWidget {
           _numberRow('for', draft.forMinutesText, 'minutes'),
           const SizedBox(height: 8),
           Text(
-            monitoredIds.isEmpty
-                ? 'No machine is monitored, so there are no figures to read '
-                    'yet. Turn monitoring on for a machine under Fleet › '
-                    'Health.'
-                : 'Figures come from monitoring, which is on for '
-                    '${monitoredIds.length} machine'
-                    '${monitoredIds.length == 1 ? '' : 's'}.',
+            'Figures are the machine\'s own, reported on its flush. A machine '
+            'your organization has not enrolled reports none, and a rule over '
+            'it does not fire.',
             style: C.small(color: C.textFaint),
           ),
         ];
@@ -804,12 +801,6 @@ class _Editor extends StatelessWidget {
           Text('Sends the magic packet. Only reaches machines on a network '
               'this one can broadcast to.', style: C.small(color: C.textFaint)),
         ];
-      case _ActionKind.monitor:
-        return [
-          Text('Turns the console\'s own monitoring on for the machine, which '
-              'is what gives metric rules something to read.',
-              style: C.small(color: C.textFaint)),
-        ];
       case _ActionKind.session:
         return [
           Text('Opens a desktop session in its own window. Loud on purpose.',
@@ -834,7 +825,6 @@ class _Editor extends StatelessWidget {
         for (final m in machines)
           _CheckRow(
             label: m.displayName,
-            trailing: monitoredIds.contains(m.id) ? 'monitored' : null,
             on: !all && draft.targets.contains(m.id),
             enabled: !all,
             onTap: all
@@ -902,7 +892,6 @@ class _Editor extends StatelessWidget {
         _ActionKind.run => 'Run a command',
         _ActionKind.notify => 'Notify',
         _ActionKind.wol => 'Wake-on-LAN',
-        _ActionKind.monitor => 'Start monitoring',
         _ActionKind.session => 'Open a session',
       };
 }
@@ -960,14 +949,12 @@ class _CheckRow extends StatefulWidget {
   const _CheckRow({
     required this.label,
     required this.on,
-    this.trailing,
     this.enabled = true,
     this.onTap,
   });
 
   final String label;
   final bool on;
-  final String? trailing;
   final bool enabled;
   final VoidCallback? onTap;
 
@@ -997,10 +984,6 @@ class _CheckRowState extends State<_CheckRow> {
               Text(widget.label,
                   style: C.small(
                       color: widget.enabled ? C.text : C.textFaint)),
-              if (widget.trailing != null) ...[
-                const SizedBox(width: 8),
-                Text(widget.trailing!, style: C.micro()),
-              ],
             ],
           ),
         ),
@@ -1077,4 +1060,61 @@ String _ago(DateTime then, DateTime? now) {
   if (s < 3600) return '${s ~/ 60}m ago';
   if (s < 86400) return '${s ~/ 3600}h ago';
   return '${s ~/ 86400}d ago';
+}
+
+
+/// The ready-made rules, offered above the list.
+///
+/// Applying one adds a real, editable rule; there is no second kind of rule and
+/// nothing keeps a link back to the preset afterwards. A preset whose rule is
+/// already in the list reads as added rather than disappearing, so the set the
+/// operator is choosing from does not change shape under them.
+class _Presets extends StatelessWidget {
+  const _Presets({required this.applied, required this.onApply});
+
+  /// Rule names already in the list. A preset's title is the rule's name, so
+  /// this is what says which have been taken.
+  final Set<String> applied;
+  final ValueChanged<AutomationPreset> onApply;
+
+  @override
+  Widget build(BuildContext context) {
+    return Panel(
+      title: 'Ready-made rules',
+      subtitle: 'The ones most technicians set up first',
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.stretch,
+        children: [
+          for (final p in AutomationPreset.all)
+            Padding(
+              padding: const EdgeInsets.only(bottom: 12),
+              child: Row(
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: [
+                  Expanded(
+                    child: Column(
+                      crossAxisAlignment: CrossAxisAlignment.start,
+                      children: [
+                        Text(p.title, style: C.body()),
+                        const SizedBox(height: 2),
+                        Text(p.description, style: C.small(color: C.textFaint)),
+                      ],
+                    ),
+                  ),
+                  const SizedBox(width: 16),
+                  if (applied.contains(p.title))
+                    Text('Added', style: C.small(color: C.textFaint))
+                  else
+                    GhostButton(
+                      label: 'Add',
+                      glyph: LdIcons.add,
+                      onPressed: () => onApply(p),
+                    ),
+                ],
+              ),
+            ),
+        ],
+      ),
+    );
+  }
 }

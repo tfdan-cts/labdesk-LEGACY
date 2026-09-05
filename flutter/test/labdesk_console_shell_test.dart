@@ -5,6 +5,7 @@ import 'package:flutter_test/flutter_test.dart';
 import 'package:flutter_hbb/common/formatter/id_formatter.dart';
 import 'package:flutter_hbb/common/labdesk_peer_status.dart';
 import 'package:flutter_hbb/labdesk/models/machine_metrics.dart';
+import 'package:flutter_hbb/labdesk/models/machine_state.dart';
 import 'package:flutter_hbb/labdesk/models/machine_row.dart';
 import 'package:flutter_hbb/labdesk/screens/console_shell.dart';
 import 'package:flutter_hbb/labdesk/screens/settings_screen.dart';
@@ -72,12 +73,10 @@ void main() {
 
     testWidgets('Health is a tab inside Fleet and shows every machine at once',
         (tester) async {
-      String? toggled;
       await tester.pumpWidget(_wrap(ConsoleShell(
         machines: rows,
         initialSection: ConsoleSection.fleet,
         healthFor: (id) => MachineHealth(machineId: id, connected: false),
-        onToggleMonitor: (id) => toggled = id,
       )));
       // The tab, and the machine table's own heading.
       expect(find.text('Machines'), findsWidgets);
@@ -86,23 +85,28 @@ void main() {
 
       expect(find.text('alpha'), findsOneWidget);
       expect(find.text('beta'), findsOneWidget);
-      // Only a reachable machine offers monitoring.
-      expect(find.text('Monitor'), findsOneWidget);
-      await tester.tap(find.text('Monitor'));
-      await tester.pumpAndSettle();
-      expect(toggled, '1');
+      // Nothing has to be turned on for a figure to exist any more.
+      expect(find.text('Monitor'), findsNothing);
     });
 
-    testWidgets('a monitored machine says so', (tester) async {
+    testWidgets('the figures come from the machine with no session open',
+        (tester) async {
       await tester.pumpWidget(_wrap(ConsoleShell(
         machines: rows,
         initialSection: ConsoleSection.fleet,
-        monitoredIds: const {'1'},
-        healthFor: (id) => MachineHealth(machineId: id, connected: true),
+        healthFor: (id) => MachineHealth(
+          machineId: id,
+          connected: false,
+          state: const MachineState(
+              status: 'online', cpuPct: 61, memPct: 44, worstDisk: 'failing'),
+          remote: const MachineState(status: 'online', cpuPct: 61, memPct: 44)
+              .metrics(),
+        ),
       )));
       await tester.tap(find.text('Health'));
       await tester.pumpAndSettle();
-      expect(find.text('Monitoring'), findsOneWidget);
+      expect(find.text('61'), findsWidgets);
+      expect(find.text('Drive failing'), findsWidgets);
     });
   });
 

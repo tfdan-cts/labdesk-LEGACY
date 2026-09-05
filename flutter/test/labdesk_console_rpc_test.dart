@@ -1,6 +1,7 @@
 import 'package:flutter_test/flutter_test.dart';
 import 'package:flutter_hbb/common/labdesk_peer_status.dart';
 import 'package:flutter_hbb/labdesk/models/console_rpc.dart';
+import 'package:flutter_hbb/labdesk/models/machine_state.dart';
 import 'package:flutter_hbb/labdesk/models/machine_metrics.dart';
 import 'package:flutter_hbb/labdesk/models/machine_row.dart';
 
@@ -44,31 +45,31 @@ void main() {
       expect(byLabel(h.session, 'Codec').source, MetricSource.session);
     });
 
-    test('remote figures are read from a completed probe', () {
+    test('the machine figures are the hot row the collector sent', () {
       final h = buildMachineHealth(
         machine: row,
-        connected: true,
-        probe: {
-          'state': 'complete',
-          'metrics': [
-            {'label': 'CPU', 'value': '7', 'unit': '%', 'ratio': 0.07, 'source': 'remote'},
-            {'label': 'Memory', 'value': '3.1 / 7.6 GB', 'ratio': 0.41, 'source': 'remote'},
-          ],
-        },
+        connected: false,
+        state: const MachineState(
+            status: 'online', cpuPct: 7, memPct: 41, fsWorstPct: 93, uptimeS: 3600),
       );
       expect(byLabel(h.remote, 'CPU').ratio, closeTo(0.07, 1e-9));
-      expect(byLabel(h.remote, 'Memory').source, MetricSource.remote);
-      expect(h.remote.length, 2);
+      expect(byLabel(h.remote, 'Memory').source, MetricSource.collector);
+      expect(byLabel(h.remote, 'Disk').value, '93');
+      expect(byLabel(h.remote, 'Uptime').value, '1h 0m');
+      // No session is needed for any of it: this is what WP18 changed.
+      expect(h.connected, isFalse);
     });
 
-    test('a failed probe renders the placeholders, never a number', () {
+    test('a machine that reported no readings shows placeholders, never zeros',
+        () {
       final h = buildMachineHealth(
         machine: row,
         connected: true,
-        probe: {'state': 'failed', 'timedOut': true, 'metrics': []},
+        state: const MachineState(status: 'unknown'),
       );
       expect(h.remote.length, 4);
       expect(h.remote.every((m) => !m.isAvailable), isTrue);
+      expect(h.remote.map((m) => m.display).toSet(), {'--'});
     });
   });
 }

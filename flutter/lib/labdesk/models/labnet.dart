@@ -36,6 +36,7 @@ class Labnet {
     required this.name,
     required this.fullAccess,
     required this.owner,
+    this.fleetId,
     this.members = const [],
   });
 
@@ -47,6 +48,10 @@ class Labnet {
 
   /// Whether the signed-in account owns it, which is what may change it.
   final bool owner;
+
+  /// The fleet the labnet belongs to, which a caller narrowed to several
+  /// fleets has to name when creating one.
+  final String? fleetId;
   final List<LabnetMember> members;
 }
 
@@ -84,6 +89,7 @@ class LabnetInbox {
             id: _str(l['id']),
             name: _str(l['name']),
             fullAccess: l['fullAccess'] == true,
+            fleetId: l['fleetId'] is String ? l['fleetId'] as String : null,
             owner: l['owner'] == true,
             members: [
               for (final m in _list(l['members']))

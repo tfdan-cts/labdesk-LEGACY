@@ -22,6 +22,7 @@ class ThisMachineScreen extends StatelessWidget {
     this.profileSwitcher,
     this.enrol,
     this.labnet,
+    this.selfHeal,
     this.onEditPassword,
     this.onRefreshPassword,
     this.onOpenIdMenu,
@@ -50,6 +51,10 @@ class ThisMachineScreen extends StatelessWidget {
 
   /// The labnet card: whether this machine takes encrypted direct connections.
   final Widget? labnet;
+
+  /// The self-healing card: whether the background service repairs this
+  /// machine's own network when it drops.
+  final Widget? selfHeal;
 
   final VoidCallback? onEditPassword;
   final VoidCallback? onRefreshPassword;
@@ -220,6 +225,10 @@ class ThisMachineScreen extends StatelessWidget {
           if (labnet != null) ...[
             const SizedBox(height: 16),
             labnet!,
+          ],
+          if (selfHeal != null) ...[
+            const SizedBox(height: 16),
+            selfHeal!,
           ],
           if (serviceRunning != null) ...[
             const SizedBox(height: 16),

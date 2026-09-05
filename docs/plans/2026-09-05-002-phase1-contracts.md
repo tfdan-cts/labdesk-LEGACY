@@ -815,12 +815,15 @@ out and the code wins.
 
 - Section 5, the client half (WP18): `flutter/lib/labdesk/services/metrics_collector.dart` and
   `probe_reader.dart` are still present and `console_page.dart` still probes over the PTY.
+  *Closed by the client lane's Flutter console round; see section 13.*
 - Section 7, both console surfaces: `grep -rn selfheal flutter/lib` and the same over the site's
-  `src/` are empty, so no console can set or show the switch yet.
+  `src/` are empty, so no console can set or show the switch yet. *The Flutter half is closed;
+  see section 13.*
 - Section 8: there is no `src/worker/routes/rules.ts`, no `test/rules.test.ts`, and `preset`
   appears nowhere in either repository.
 - Section 9 items 1 to 6, and the WP17 web pages: `src/app/pages/` holds `account`, `admin`,
-  `auth`, `download` and `org` only.
+  `auth`, `download` and `org` only. *Items 1, 2, 3 and 5 are closed on the desktop; see
+  section 13.*
 
 ### Corrections to the contract above, from the code as built
 
@@ -863,3 +866,45 @@ out and the code wins.
    shortens it for a job, a session over labnet falls back to the shared password path, which
    phase 1 keeps (plan section 0.3). This is why the client half of section 3 is proven by unit
    test and not in the field.
+
+## 13. The Flutter console, WP18: what the client lane built and where it had to differ
+
+Read from the code at the head this section landed on, not recalled.
+
+### Built
+
+| Contract | Where |
+|---|---|
+| 5, the client half | `flutter/lib/labdesk/models/machine_state.dart` (`MachineState`, `parseMetricHistory`), read by `services/overlay_broker.dart` (`machines()` on `?state=1`, `machineState`, `metrics`) and rendered by `models/console_rpc.dart::buildMachineHealth` and `screens/health_board.dart`. `services/metrics_collector.dart`, `services/probe_reader.dart`, their two tests, `LabDeskTerminalRpc.probe`/`probeOn` and the window method `labdesk_probe` are deleted in the same commit. `MetricSource.remote` is now `MetricSource.collector`. |
+| 5, reachability | `console_data.dart::buildMachineRows` takes `serverStatusOf`, so an enrolled machine's dot is the Worker's `status` and every other peer keeps the client's own poll. |
+| 6, the console half | `models/net_view.dart` (`MachineNetView.fromAttrs`, `NetAdapter`, `NetReachability`) and `screens/adapters_card.dart`, at the top of the Network section with a machine picker. |
+| 7, the Flutter surface | `screens/selfheal_card.dart` on This machine, setting `labdesk-selfheal` through `bind.mainSetOption` and rendering `net.reachability.selfheal`, with "waiting for the service" between a flip and the first report. |
+| 9 items 1, 2, 3, 5 | The fresh-token retry in `console_page.dart::_labnetDo` (on `needsFreshSignIn` it shows the client's own `loginDialog()` and retries the same call); `createLabnet(name, fleetId:)` with the fleet picker the create form offers a caller narrowed to more than one fleet; `renameLabnet`; and member ids already resolved to names by `NetworkScreen._nameOf`. |
+
+### Where it differs from the contract, and why
+
+1. Section 5, uptime. `GET /org/machines?state=1` answers `status`, `seenAt`, `cpuPct`,
+   `memPct`, `fsWorstPct`, `worstDisk` and the machine columns, and no `uptimeS` or
+   `loggedInUser` (`src/worker/routes/org.ts`, the `hot` projection). The health card wants both.
+   Rather than call `/state` per machine per poll, which is the N+1 the plan rules out, the
+   console asks ONE machine a poll for its own hot row, round robin, and merges what only that
+   answer carries. Uptime on a card is therefore up to `machines * 15 s` old, which for a figure
+   that only climbs is not a lie.
+2. Section 5, history. The console backfills each machine once from
+   `GET /org/machines/:id/metrics` over the last twelve hours, on the same round robin, and adds
+   one sample per uplink from the fleet poll after that, keyed on `seenAt` so a fifteen-second
+   poll does not record one five-minute flush twenty times.
+3. Section 8, the presets. `src/worker/routes/rules.ts` carries `GET /org/rules` and the enabled
+   switch only: there is no create, no delete and no `/org/rules/presets` route, so an editor
+   over those routes could not work. The Automation section therefore keeps its local rule store
+   and its own tick, and the presets are ready-made LOCAL rules
+   (`flutter/lib/labdesk/models/automation_presets.dart`). Four of them are the contract's own,
+   in the console's vocabulary; `disk_failing` is absent because `diskHealthBelow` is a trigger
+   only the Worker's engine has, and a preset that could never fire is worse than an absent one;
+   `cpu_pegged` is added because the same shape is the one technicians ask for next. When the
+   create, delete and preset routes land, the editor moves to the organization's rules and the
+   local store goes with it.
+4. The `monitorOn` action is deleted from `automation_models.dart` with the monitoring it turned
+   on. A rule stored with it is dropped on load and the rest of the list survives
+   (`decodeRules` already drops an entry it cannot parse), which is the right outcome: it named a
+   thing that no longer exists, and the rules are a local option on one machine.

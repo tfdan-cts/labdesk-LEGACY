@@ -113,7 +113,7 @@ Widget _network(LabnetInbox inbox) => NetworkScreen(
       inbox: inbox,
       thisMachineId: '482910337',
       machines: [for (final m in _machines) NetworkMachine(id: m.id, name: m.displayName)],
-      onCreate: (_) {},
+      onCreate: (_, __) {},
       onApprove: (_) {},
       onDecline: (_) {},
       onInvite: (_, __) {},

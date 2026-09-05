@@ -35,13 +35,13 @@ they belong with.
 | Section | Key | What renders it | What is behind it today |
 |---|---|---|---|
 | Connect | Ctrl+1 | `screens/connect_screen.dart`, with the client's `OnlineStatusWidget` beneath it | The client's five peer stores, folded into one list by `buildMachineRows`. Live. |
-| Fleet | Ctrl+2 | `screens/fleet_console.dart` on the Machines tab, `screens/health_board.dart` on the Health tab | Reachability polled by the console. Figures only for machines the operator has switched monitoring on for. |
+| Fleet | Ctrl+2 | `screens/fleet_console.dart` on the Machines tab, `screens/health_board.dart` on the Health tab | Reachability and figures from lab-desk.net for every enrolled machine; the console's own poll answers for peers the server has never been told about. |
 | Sessions | Ctrl+3 | `screens/sessions_screen.dart` | Chat read from this client's own remote desktop windows. Incoming connections are not in it. |
 | Terminal | Ctrl+4 | `screens/terminal_screen.dart` | One command at a time over a hidden shell. Needs a terminal session, an open link, or a saved password. |
 | Tools | Ctrl+5 | `screens/tools_screen.dart` | The same shell path, running the commands in `services/tool_catalog.dart`. |
-| Automation | Ctrl+6 | `screens/automation_screen.dart` | Rules evaluated in this process, once a second, only while the console is open. |
+| Automation | Ctrl+6 | `screens/automation_screen.dart` | Rules evaluated in this process, once a second, only while the console is open, plus the ready-made rules in `models/automation_presets.dart`. |
 | Actions | Ctrl+7 | `screens/actions_screen.dart` | Five actions. Three open a session; two need one already open. |
-| Network | Ctrl+8 | `screens/network_screen.dart` | labnets from lab-desk.net, over the two planes described under *labnet* below. Nothing in it has yet been exercised from a signed-in console against production. |
+| Network | Ctrl+8 | `screens/network_screen.dart`, with `screens/adapters_card.dart` above it | The machine's own adapters and internet verdict, and the labnets from lab-desk.net over the two planes described under *labnet* below. Nothing in it has yet been exercised from a signed-in console against production. |
 | This machine | Ctrl+9 | `screens/this_machine_screen.dart` | The client's `ServerModel`. Live. |
 | Settings | none | `settingsPageBody` from `desktop_setting_page.dart`, one page at a time | The client's own settings. Live. |
 
@@ -89,7 +89,8 @@ client rather than drawing an empty frame.
 with its own identity, connection and remote system panels. Nothing in the running application
 imports it. Its only caller is `flutter/tool/shots/shots_test.dart`, the screenshot harness, so
 it is still rendered into the shot set while no navigation reaches it. The Health tab in Fleet
-renders `HealthBoard` instead.
+renders `HealthBoard` instead. Its wording still describes the PTY probe that WP18 removed, which
+is one more reason nothing should route to it.
 
 ## What the old home page was
 
@@ -146,17 +147,20 @@ rather than the time the button was pressed.
 poll. Before the first answer it draws skeleton rows, because an empty list that is still loading
 is not an empty fleet.
 
-**Fleet, Health.** One card per machine, online machines first. Monitoring is off by default and
-is offered only for a machine the poll calls online. While it is on, the console probes that
-machine every 30 s: `services/metrics_collector.dart` holds one command per platform for Linux,
-Windows and macOS, tagging every field with `LABDESK_` so a shell banner cannot be mistaken for a
-number, and `services/probe_reader.dart` keeps a probe that ran and produced nothing distinct
-from one that was never attempted. Round trip, throughput, frame rate and codec come from a
-remote desktop window instead (`labdesk_session_stats`), so they appear only while such a session
-is open. Anything not obtained renders as `--`, never zero. Readings are held in memory, capped
-at 240 samples per machine, which is two hours at that cadence, and are dropped when monitoring
-is turned off; each card draws CPU, memory and disk over that history under the figure. The set
-of monitored machines is persisted in the local option `labdesk-monitored`.
+**Fleet, Health.** One card per machine, online machines first. There is no monitoring switch:
+every machine the organization has enrolled reports CPU, memory, the fullest filesystem and the
+worst drive verdict to lab-desk.net on its own flush, and the console reads them back with the
+fleet in one request, `GET /console/org/machines?state=1` (`services/overlay_broker.dart`,
+`machines()`). The PTY probe that used to take those figures is gone, with
+`services/metrics_collector.dart` and `services/probe_reader.dart`. One machine a poll is also
+asked for its own hot row, `GET /console/org/machines/:id/state`, because the fleet answer carries
+no uptime and no signed-in user; the first time round it is asked for its stored history too,
+`GET /console/org/machines/:id/metrics`, which is what the sparklines are drawn from. Round trip,
+throughput, frame rate and codec still come from a remote desktop window
+(`labdesk_session_stats`), so they appear only while such a session is open. Anything not obtained
+renders as `--`, never zero, and `unreadable` on a drive is drawn as its own state rather than as
+healthy. A peer lab-desk.net holds no machine for says so on its card instead of showing four
+dashes with no reason.
 
 **Sessions.** Chat for the sessions this client opened, read with `labdesk_chat_get` from each
 remote desktop window and sent back the same way, so the floating chat in the session window and
@@ -180,8 +184,11 @@ carries the sentence saying so instead of a table.
 
 **Automation.** Rules are evaluated by the console's own one-second timer, in this process. Close
 LabDesk and nothing runs, and the screen says so above the list. A rule with a metric condition
-can only read a figure for a machine that is being monitored, so the editor names which machines
-those are.
+reads the figures the machine itself reported, so it works for every enrolled machine and for no
+other. Above the list sit the ready-made rules of `models/automation_presets.dart`: a disk nearly
+full, ten minutes offline, memory or CPU held high, and flushing DNS on a Windows machine that has
+just come back. Applying one adds an ordinary rule, editable and deletable like any other; a
+preset whose rule is already in the list reads as added rather than being offered twice.
 
 **Actions.** Connect, Open terminal and Transfer files open a session and are always available.
 Capture screen and Restart machine act on a remote desktop session that is already open: they are
@@ -348,12 +355,14 @@ book routes. What the console has no surface for is managing the organization. C
   organization's machines; it has no page that creates a fleet or changes a role. The console's
   **Fleet** section is a different thing wearing the same word: this client's own machine list and
   its reachability, held locally.
-* **Nothing here reads server-computed health.** The health engine on the worker produces nothing
-  the console displays.
-* **Health figures come from shell commands over a PTY, not from an agent.** The privileged
-  collector in `src/labdesk/collector.rs` and the disk health module in `src/labdesk/disk/` have
-  no FFI bind at HEAD, so nothing they produce, SMART surfaces included, reaches this interface.
-  Work adding those binds is in flight in `src/flutter_ffi.rs` and is not committed.
+* **The health engine's own events are not read yet.** `GET /console/org/events` and the
+  acknowledgement route exist and the console does not call them, so a rule the worker fired is
+  visible on the web console and not here.
+* **Health rules are still the console's own, not the organization's.** `GET /console/org/rules`
+  and the switch beside it exist on lab-desk.net; there is no create, delete or preset route yet,
+  so the Automation section keeps its local rule store (`labdesk-automation`) and its own tick,
+  and the presets are applied into that store. The editor moves to the organization's rules when
+  those routes land.
 * **No update is driven from the console.** The update banner offers the client's own flow, which
   installs in place on Windows and, through the service process, on macOS and, since 2026-09-05, on
   Linux. `crate::updater::start_auto_update_linux` runs in the root service that

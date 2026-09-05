@@ -2,6 +2,9 @@ import 'dart:convert';
 import 'dart:io';
 
 import '../models/labnet.dart';
+import '../models/machine_metrics.dart';
+import '../models/machine_state.dart';
+import '../models/net_view.dart';
 
 /// One HTTP exchange: status code and body text. Injected so the broker can
 /// be exercised without a network and run on `HttpClient` in the application.
@@ -76,6 +79,16 @@ class OverlayBrokerException implements Exception {
   /// The device's sign-in no longer holds; the console asks for it again.
   bool get signInAgain => status == 401 && !machinePlane;
 
+  /// The token is good but too old for a change this sensitive. `actor()`
+  /// refuses full access, deleting a labnet, minting an enrolment token and
+  /// creating a fleet on any console token older than `FRESH_SECONDS`
+  /// (`src/worker/org.ts`), and the answer is this one sentence. The console
+  /// signs in again and retries rather than telling the operator to restart.
+  bool get needsFreshSignIn =>
+      status == 403 &&
+      !machinePlane &&
+      message.startsWith('Sign in again');
+
   @override
   String toString() => message;
 }
@@ -94,6 +107,9 @@ class OrgMachine {
     required this.id,
     required this.peerId,
     required this.name,
+    this.platform = '',
+    this.fleetId,
+    this.state = const MachineState(),
   });
 
   /// `machine.id`, minted by the Worker at `/agent/enrol`.
@@ -101,6 +117,20 @@ class OrgMachine {
 
   /// `machine.peerId`, the id in the connect box.
   final String peerId;
+  final String name;
+  final String platform;
+  final String? fleetId;
+
+  /// The hot row beside the machine, from `?state=1`. Every reading is null
+  /// until the agent has sent one.
+  final MachineState state;
+}
+
+/// One fleet of the organization, for the picker a narrowed technician needs
+/// when creating a labnet (`GET /console/org/fleets`).
+class OrgFleet {
+  const OrgFleet({required this.id, required this.name});
+  final String id;
   final String name;
 }
 
@@ -334,8 +364,10 @@ class OverlayBroker {
   /// and fleets. It is the only route on which `machine.id` and the peer id
   /// appear together, so it is both the map [machineIdOf] is built from and the
   /// console's own list of the machines an account may invite.
+  /// `?state=1`, so the hot row rides the same answer in the same left join
+  /// rather than one request per machine (contract section 5).
   Future<List<OrgMachine>> machines() async {
-    final j = await _human('GET', '/console/org/machines');
+    final j = await _human('GET', '/console/org/machines?state=1');
     return [
       for (final m in _rows(j['machines']))
         OrgMachine(
@@ -344,8 +376,53 @@ class OverlayBroker {
           name: _str(m['displayName']).isNotEmpty
               ? _str(m['displayName'])
               : _str(m['hostname']),
+          platform: _str(m['platform']),
+          fleetId: m['fleetId'] is String ? m['fleetId'] as String : null,
+          state: MachineState.fromJson(m),
         ),
     ];
+  }
+
+  /// The hot row for one machine, which carries what the fleet answer does not:
+  /// uptime, the signed-in user and the agent version.
+  Future<MachineState> machineState(String machineId) async =>
+      MachineState.fromJson(
+          await _human('GET', '/console/org/machines/$machineId/state'));
+
+  /// The machine's own network view, read out of the agent attributes on
+  /// `GET /console/org/machines/:id` (contract section 6).
+  Future<MachineNetView> netView(String machineId) async {
+    final j = await _human('GET', '/console/org/machines/$machineId');
+    final attrs = j['attrs'];
+    return attrs is Map
+        ? MachineNetView.fromAttrs(attrs)
+        : MachineNetView.empty;
+  }
+
+  /// The stored history over a range, in unix seconds.
+  Future<List<MetricSample>> metrics(String machineId,
+      {required int from, required int to}) async {
+    final j = await _human(
+        'GET', '/console/org/machines/$machineId/metrics?from=$from&to=$to');
+    return parseMetricHistory(j);
+  }
+
+  /// The fleets this caller may name, for the create form.
+  Future<List<OrgFleet>> fleets() async {
+    final j = await _human('GET', '/console/org/fleets');
+    return [
+      for (final f in _rows(j['fleets']))
+        OrgFleet(id: _str(f['id']), name: _str(f['name'])),
+    ];
+  }
+
+  /// The caller's own standing. `fleetIds` is null for an actor who sees the
+  /// whole organization and a list for one narrowed to fleets, which is what
+  /// decides whether creating a labnet has to name a fleet.
+  Future<List<String>?> fleetIds() async {
+    final j = await _human('GET', '/console/org');
+    final ids = j['fleetIds'];
+    return ids is List ? [for (final i in ids) '$i'] : null;
   }
 
   /// What the Network section shows, read off BOTH planes because the two
@@ -386,6 +463,7 @@ class OverlayBroker {
             id: _str(l['id']),
             name: _str(l['name']),
             fullAccess: l['fullAccess'] == true,
+            fleetId: l['fleetId'] is String ? l['fleetId'] as String : null,
             // Every labnet this route answers is one the same caller may
             // manage: it is scoped to their organization and narrowed to their
             // fleets by the predicate `ownedLabnet` applies to every write
@@ -423,17 +501,27 @@ class OverlayBroker {
     }
   }
 
-  Future<Labnet> createLabnet(String name) async {
-    final j = await _human('POST', '/console/overlay/labnets', {'name': name});
+  /// [fleetId] is required of a caller narrowed to more than one fleet: the
+  /// Worker answers 400 "Name the fleet this labnet belongs to." without it
+  /// (`src/worker/routes/overlay.ts`).
+  Future<Labnet> createLabnet(String name, {String? fleetId}) async {
+    final j = await _human('POST', '/console/overlay/labnets', {
+      'name': name,
+      if (fleetId != null && fleetId.isNotEmpty) 'fleetId': fleetId,
+    });
     return Labnet(
         id: '${j['id']}',
         name: '${j['name']}',
         fullAccess: j['fullAccess'] == true,
+        fleetId: j['fleetId'] is String ? j['fleetId'] as String : null,
         owner: true);
   }
 
   Future<void> setFullAccess(String id, bool on) =>
       _human('PATCH', '/console/overlay/labnets/$id', {'fullAccess': on});
+
+  Future<void> renameLabnet(String id, String name) =>
+      _human('PATCH', '/console/overlay/labnets/$id', {'name': name});
 
   Future<void> deleteLabnet(String id) =>
       _human('DELETE', '/console/overlay/labnets/$id');

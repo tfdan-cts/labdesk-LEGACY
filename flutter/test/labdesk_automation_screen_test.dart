@@ -317,7 +317,7 @@ void main() {
     await tester.tap(find.text('Metric above'));
     await tester.pumpAndSettle();
 
-    expect(find.textContaining('No machine is monitored'), findsOneWidget);
+    expect(find.textContaining('reported on its flush'), findsOneWidget);
     expect(find.text('workshop'), findsWidgets);
   });
 }

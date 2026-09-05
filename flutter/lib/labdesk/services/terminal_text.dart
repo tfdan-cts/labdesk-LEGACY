@@ -1,8 +1,14 @@
-import 'metrics_collector.dart';
-
 // A PTY is a terminal, so what comes back is display bytes: colour codes,
 // cursor moves, title sets and carriage returns mixed into the text. None of
 // that survives into a list of output lines, so it is removed before parsing.
+/// Written by a framed command as its last line, carrying the shell's exit
+/// status.
+///
+/// A PTY is a byte stream with a prompt at either end, not a request and a
+/// response, so without this there is no way to tell a finished command from
+/// one still arriving, or a failed one from a silent shell.
+const kLabDeskEndMarker = 'LABDESK_END';
+
 final _osc = RegExp(r'\x1B\][^\x07\x1B]*(?:\x07|\x1B\\)');
 final _csi = RegExp(r'\x1B\[[0-?]*[ -/]*[@-~]');
 final _esc = RegExp(r'\x1B[ -/]*[0-~]');
@@ -14,7 +20,7 @@ String stripAnsi(String s) => s
     .replaceAll(_esc, '')
     .replaceAll('\r', '');
 
-final _marker = RegExp('${RegExp.escape(MetricsCollector.endMarker)}=(-?\\d+)');
+final _marker = RegExp('${RegExp.escape(kLabDeskEndMarker)}=(-?\\d+)');
 
 /// Appends the end marker to an arbitrary command, in the syntax of the shell
 /// the peer's terminal service actually starts.
@@ -24,13 +30,13 @@ class CommandFramer {
   /// On Windows the terminal service prefers PowerShell (pwsh, then Windows
   /// PowerShell) and only falls back to cmd.exe when neither exists, so the
   /// marker is written in PowerShell syntax: $? is a boolean there, so the
-  /// exit status is spelled out the same way MetricsCollector.framed does.
+  /// exit status is spelled out rather than read off $?.
   static String frame(String command, String platform) {
     if (platform.toLowerCase().contains('win')) {
-      return '$command; Write-Output (\'${MetricsCollector.endMarker}=\''
+      return '$command; Write-Output (\'${kLabDeskEndMarker}=\''
           ' + \$(if (\$?) { 0 } else { 1 }))';
     }
-    return '$command; echo "${MetricsCollector.endMarker}=\$?"';
+    return '$command; echo "${kLabDeskEndMarker}=\$?"';
   }
 }
 
@@ -56,7 +62,7 @@ class CommandOutput {
     for (final line in body.split('\n')) {
       // The PTY echoes what was typed, prompt and all, before running it.
       if (command.isNotEmpty && line.contains(command)) continue;
-      if (line.contains(MetricsCollector.endMarker)) continue;
+      if (line.contains(kLabDeskEndMarker)) continue;
       lines.add(line);
     }
     while (lines.isNotEmpty && lines.first.trim().isEmpty) {

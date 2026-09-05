@@ -16,13 +16,18 @@ import 'package:flutter/material.dart';
 
 import 'common/labdesk_peer_status.dart';
 import 'labdesk/charts/reachability_chart.dart';
+import 'labdesk/models/automation_models.dart';
 import 'labdesk/models/labnet.dart';
 import 'labdesk/models/machine_metrics.dart';
 import 'labdesk/models/machine_row.dart';
+import 'labdesk/models/machine_state.dart';
+import 'labdesk/models/net_view.dart';
 import 'labdesk/screens/console_shell.dart';
 import 'labdesk/screens/enrol_card.dart';
 import 'labdesk/screens/labnet_card.dart';
+import 'labdesk/screens/automation_screen.dart';
 import 'labdesk/screens/network_screen.dart';
+import 'labdesk/screens/selfheal_card.dart';
 import 'labdesk/screens/settings_screen.dart';
 import 'labdesk/screens/terminal_screen.dart';
 import 'labdesk/screens/this_machine_screen.dart';
@@ -43,6 +48,8 @@ class LabDeskPreviewApp extends StatefulWidget {
 
 class _LabDeskPreviewAppState extends State<LabDeskPreviewApp> {
   bool _refreshing = false;
+  bool _selfHeal = true;
+  var _rules = <Rule>[];
 
   final _terminal = <TerminalLine>[
     const TerminalLine('Session opened on workshop-nas', kind: TerminalLineKind.notice),
@@ -111,6 +118,23 @@ class _LabDeskPreviewAppState extends State<LabDeskPreviewApp> {
                     state: const LabnetCardState(LabnetPhase.on, ip: '100.64.0.3'),
                     onDisable: () {},
                   ),
+                  selfHeal: SelfHealCard(
+                    on: _selfHeal,
+                    reachability: _reachability,
+                    onChanged: (v) => setState(() => _selfHeal = v),
+                  ),
+                ),
+            ConsoleSection.automation: (_) => AutomationScreen(
+                  rules: _rules,
+                  machines: _fixtures,
+                  now: _now,
+                  onSave: (next) => setState(() => _rules = next),
+                  onToggle: (id, on) => setState(() => _rules = [
+                        for (final r in _rules)
+                          r.id == id ? r.copyWith(enabled: on) : r,
+                      ]),
+                  onApplyPreset: (p) => setState(
+                      () => _rules = [..._rules, p.toRule('rule-${p.id}')]),
                 ),
             ConsoleSection.network: (_) => NetworkScreen(
                   inbox: const LabnetInbox(
@@ -135,7 +159,16 @@ class _LabDeskPreviewAppState extends State<LabDeskPreviewApp> {
                   machines: [
                     for (final m in _fixtures) NetworkMachine(id: m.id, name: m.displayName),
                   ],
-                  onCreate: (_) {},
+                  fleets: const [
+                    NetworkFleet(id: 'F1', name: 'Workshop'),
+                    NetworkFleet(id: 'F2', name: 'Office'),
+                  ],
+                  mustNameFleet: true,
+                  netMachineId: '482910337',
+                  netView: _netView,
+                  onSelectNetMachine: (_) {},
+                  onRename: (_, __) {},
+                  onCreate: (_, __) {},
                   onApprove: (_) {},
                   onDecline: (_) {},
                   onInvite: (_, __) {},
@@ -151,15 +184,88 @@ class _LabDeskPreviewAppState extends State<LabDeskPreviewApp> {
   }
 }
 
+/// The machine's own network, as the agent reports it (`net.adapters` and
+/// `net.reachability`).
+const _netView = MachineNetView(
+  reported: true,
+  reachability: NetReachability(
+      internet: 'online', at: 1788480300, probe: 'tcp443', selfheal: 'watching'),
+  adapters: [
+    NetAdapter(
+      name: 'eth0',
+      up: true,
+      mac: 'aa:bb:cc:dd:ee:ff',
+      kind: 'physical',
+      rxBytes: 91234567890,
+      txBytes: 4234567890,
+      addresses: [
+        NetAddress(addr: '192.168.1.20', prefix: 24, family: 'inet'),
+        NetAddress(addr: 'fe80::1c2d:3e4f:5a6b:7c8d', prefix: 64, family: 'inet6'),
+      ],
+    ),
+    NetAdapter(
+      name: 'labdesk-netbird',
+      up: true,
+      kind: 'overlay',
+      rxBytes: 8123456,
+      txBytes: 7654321,
+      addresses: [NetAddress(addr: '100.64.0.3', prefix: 16, family: 'inet')],
+    ),
+    NetAdapter(name: 'wlan0', up: false, mac: '11:22:33:44:55:66', kind: 'physical'),
+  ],
+);
+
+final _reachability = _netView.reachability;
+
+/// The hot row the collector sends, per fixture machine, so the board shows
+/// what a reporting fleet looks like beside one that reports nothing.
+const _states = <String, MachineState>{
+  '482910337': MachineState(
+      status: 'online',
+      cpuPct: 14,
+      memPct: 61,
+      fsWorstPct: 49,
+      uptimeS: 526440,
+      loggedInUser: 'dan',
+      agentVersion: '1.2.6',
+      worstDisk: 'ok'),
+  '118374662': MachineState(
+      status: 'online',
+      cpuPct: 71,
+      memPct: 44,
+      fsWorstPct: 93,
+      uptimeS: 7200,
+      agentVersion: '1.2.6',
+      worstDisk: 'warn'),
+  '905513280': MachineState(
+      status: 'online',
+      cpuPct: 3,
+      memPct: 22,
+      fsWorstPct: 61,
+      uptimeS: 91000,
+      agentVersion: '1.2.4',
+      worstDisk: 'failing'),
+  '204471839': MachineState(
+      status: 'online',
+      cpuPct: 38,
+      memPct: 77,
+      fsWorstPct: 55,
+      uptimeS: 2600000,
+      agentVersion: '1.2.6',
+      worstDisk: 'unreadable'),
+};
+
 MachineHealth _healthFor(String id) {
   final connected = id == '482910337';
   MachineRow? row;
   for (final m in _fixtures) {
     if (m.id == id) row = m;
   }
+  final state = _states[id];
   return MachineHealth(
     machineId: id,
     connected: connected,
+    state: state,
     identity: [
       Metric(label: 'Hostname', value: row?.hostname ?? '--', source: MetricSource.known),
       Metric(label: 'Platform', value: row?.platform ?? '--', source: MetricSource.known),
@@ -179,19 +285,13 @@ MachineHealth _healthFor(String id) {
             Metric.unavailable('Codec'),
             Metric.unavailable('Displays'),
           ],
-    remote: connected
-        ? const [
-            Metric(label: 'CPU', value: '14', unit: '%', source: MetricSource.remote, ratio: 0.14),
-            Metric(label: 'Memory', value: '61', unit: '%', source: MetricSource.remote, ratio: 0.61),
-            Metric(label: 'Disk', value: '49', unit: '%', source: MetricSource.remote, ratio: 0.49),
-            Metric(label: 'Uptime', value: '6d 2h', source: MetricSource.remote),
-          ]
-        : const [
-            Metric.unavailable('CPU'),
-            Metric.unavailable('Memory'),
-            Metric.unavailable('Disk'),
-            Metric.unavailable('Uptime'),
-          ],
+    remote: state?.metrics() ??
+        const [
+          Metric.unavailable('CPU'),
+          Metric.unavailable('Memory'),
+          Metric.unavailable('Disk'),
+          Metric.unavailable('Uptime'),
+        ],
   );
 }
 

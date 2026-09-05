@@ -5,36 +5,28 @@ import '../charts/metric_sparkline.dart';
 import '../models/machine_metrics.dart';
 import '../models/machine_row.dart';
 import '../theme/console_theme.dart';
-import '../theme/ld_icons.dart';
 
 /// Health for the whole fleet at once: one card per machine.
 ///
-/// The earlier Health screen showed one machine, and only after it had been
-/// picked on Fleet and a terminal window opened to it. This board sits as a tab
-/// inside Fleet, lists every machine, and lets the operator turn monitoring on
-/// per machine. Monitoring means the console keeps its own headless connection
-/// to that machine and asks it about itself every half minute; the far side
-/// lists that connection like any other, which is what an agentless monitor
-/// honestly is.
+/// The figures are the machine's own. Every enrolled machine's agent takes them
+/// on its own flush and sends them to lab-desk.net, and the console reads them
+/// back with the fleet: no session, no terminal channel and nobody watching is
+/// needed for a reading to exist (WP18). A machine the organization has not
+/// enrolled has no readings at all, and the card says so rather than showing
+/// four dashes with no reason.
 ///
-/// Presentational: it takes rows, health per row and two sets, and hands back
-/// a toggle. Nothing here touches the client.
+/// Presentational: it takes rows and health per row. Nothing here touches the
+/// client.
 class HealthBoard extends StatelessWidget {
   const HealthBoard({
     super.key,
     required this.machines,
     required this.healthFor,
-    this.monitoredIds = const {},
-    this.probingIds = const {},
-    this.onToggleMonitor,
     this.now,
   });
 
   final List<MachineRow> machines;
   final MachineHealth Function(String machineId) healthFor;
-  final Set<String> monitoredIds;
-  final Set<String> probingIds;
-  final ValueChanged<String>? onToggleMonitor;
   final DateTime? now;
 
   @override
@@ -56,9 +48,10 @@ class HealthBoard extends StatelessWidget {
         crossAxisAlignment: CrossAxisAlignment.stretch,
         children: [
           Text(
-            'Monitoring keeps a connection of its own to a machine and reads '
-            'its figures every 30 s. It appears on that machine as an incoming '
-            'terminal session. Machines that are offline cannot be monitored.',
+            'Every enrolled machine reports its own figures to lab-desk.net on '
+            'its flush, and the console reads them back with the fleet. A '
+            'machine that is not enrolled with your organization reports '
+            'nothing, and reads as such.',
             style: C.small(color: C.textMuted),
           ),
           const SizedBox(height: 16),
@@ -91,12 +84,6 @@ class HealthBoard extends StatelessWidget {
               child: HealthCard(
                 machine: m,
                 health: healthFor(m.id),
-                monitored: monitoredIds.contains(m.id),
-                probing: probingIds.contains(m.id),
-                onToggleMonitor: m.status == LabDeskPeerStatus.online &&
-                        onToggleMonitor != null
-                    ? () => onToggleMonitor!(m.id)
-                    : null,
                 now: now,
               ),
             ),
@@ -111,17 +98,11 @@ class HealthCard extends StatelessWidget {
     super.key,
     required this.machine,
     required this.health,
-    required this.monitored,
-    required this.probing,
-    this.onToggleMonitor,
     this.now,
   });
 
   final MachineRow machine;
   final MachineHealth health;
-  final bool monitored;
-  final bool probing;
-  final VoidCallback? onToggleMonitor;
   final DateTime? now;
 
   @override
@@ -175,13 +156,8 @@ class HealthCard extends StatelessWidget {
                   ],
                 ),
               ),
-              if (online)
-                GhostButton(
-                  label: monitored ? 'Monitoring' : 'Monitor',
-                  glyph: monitored ? LdIcons.check : LdIcons.health,
-                  busy: probing,
-                  onPressed: onToggleMonitor,
-                ),
+              if (health.state?.worstDisk != null)
+                _DriveChip(verdict: health.state!.worstDisk!),
             ],
           ),
           const SizedBox(height: 14),
@@ -218,14 +194,19 @@ class HealthCard extends StatelessWidget {
     if (rtt != null && rtt.isAvailable) parts.add('${rtt.value} ms round trip');
     if (codec != null && codec.isAvailable) parts.add('${codec.value}');
     if (parts.isNotEmpty) return 'Desktop session: ${parts.join(', ')}.';
-    if (monitored) {
-      return probing
-          ? 'Asking the machine...'
-          : (health.remote.any((m) => m.isAvailable)
-              ? 'Read over the console\'s own connection.'
-              : 'Connected; no figures yet.');
+    final state = health.state;
+    if (state == null) {
+      return 'Not enrolled with your organization, so it reports no figures.';
     }
-    return 'Not monitored. Figures appear once monitoring is on.';
+    final said = <String>[];
+    if (state.loggedInUser != null) said.add('${state.loggedInUser} signed in');
+    if (state.agentVersion != null) said.add('agent ${state.agentVersion}');
+    if (said.isEmpty) {
+      return health.remote.any((m) => m.isAvailable)
+          ? 'Reported by the machine itself.'
+          : 'Enrolled; no readings sent yet.';
+    }
+    return 'Reported by the machine itself: ${said.join(', ')}.';
   }
 
   /// [trail] is null when the card shows no history row, and empty for a
@@ -283,6 +264,34 @@ class HealthCard extends StatelessWidget {
           ],
         ],
       ),
+    );
+  }
+}
+
+/// The worst verdict over the machine's drives, in the one place on the card
+/// that carries a colour of its own. `unreadable` is not green: a drive nobody
+/// could read is not a drive that is fine (plan section 8.2).
+class _DriveChip extends StatelessWidget {
+  const _DriveChip({required this.verdict});
+
+  final String verdict;
+
+  @override
+  Widget build(BuildContext context) {
+    final (label, colour) = switch (verdict) {
+      'ok' => ('Drives ok', C.ok),
+      'warn' => ('Drive warning', C.accent),
+      'failing' => ('Drive failing', C.bad),
+      _ => ('Drives unreadable', C.idle),
+    };
+    return Container(
+      padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 4),
+      decoration: BoxDecoration(
+        color: colour.withOpacity(0.14),
+        borderRadius: C.roundedSm,
+        border: Border.all(color: colour.withOpacity(0.4)),
+      ),
+      child: Text(label, style: C.small(color: colour)),
     );
   }
 }

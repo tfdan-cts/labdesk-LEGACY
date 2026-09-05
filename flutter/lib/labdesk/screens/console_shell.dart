@@ -127,9 +127,6 @@ class ConsoleShell extends StatefulWidget {
     this.onRefresh,
     this.now,
     this.healthFor,
-    this.monitoredIds = const {},
-    this.probingIds = const {},
-    this.onToggleMonitor,
     this.terminalLines = const [],
     this.terminalLinesFor,
     this.connectedIds = const {},
@@ -162,12 +159,6 @@ class ConsoleShell extends StatefulWidget {
 
   /// Health for a machine, resolved lazily so the shell holds no state.
   final MachineHealth Function(String machineId)? healthFor;
-
-  /// Machines the client is monitoring over its own connection, and the ones
-  /// it is asking right now. The Health tab shows both and offers the toggle.
-  final Set<String> monitoredIds;
-  final Set<String> probingIds;
-  final ValueChanged<String>? onToggleMonitor;
 
   final List<TerminalLine> terminalLines;
 
@@ -364,9 +355,6 @@ class _ConsoleShellState extends State<ConsoleShell> {
                     machines: widget.machines,
                     healthFor: (id) =>
                         widget.healthFor?.call(id) ?? MachineHealth.empty,
-                    monitoredIds: widget.monitoredIds,
-                    probingIds: widget.probingIds,
-                    onToggleMonitor: widget.onToggleMonitor,
                     now: widget.now,
                   ),
               },

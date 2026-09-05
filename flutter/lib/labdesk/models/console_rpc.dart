@@ -1,5 +1,6 @@
 import 'machine_metrics.dart';
 import 'machine_row.dart';
+import 'machine_state.dart';
 
 /// Methods the console sends to a remote-desktop window, keyed by peer id.
 ///
@@ -22,18 +23,22 @@ const kLabDeskRpcChatGet = 'labdesk_chat_get';
 /// conversation rather than two views that drift apart.
 const kLabDeskRpcChatSend = 'labdesk_chat_send';
 
-/// What Health shows for one machine, assembled from what the client could
-/// actually get: identity it already holds, the session window's quality
-/// figures, and the terminal window's probe of the machine itself.
+/// What Health shows for one machine: identity the client already holds, the
+/// session window's quality figures, and the readings the machine's own
+/// collector sent to lab-desk.net.
 ///
-/// Anything not obtained renders as unavailable. A probe that ran and failed
-/// yields the same four placeholders as no probe at all: the screen's wording
-/// already says when the figures exist, and "--" is the honest value for both.
+/// The figures no longer come from a terminal probe. The agent takes them on
+/// its own flush and the console reads them back, so they exist for every
+/// enrolled machine whether or not anyone has a session open and whether or
+/// not this console was running when they were taken (WP18, contract section 5).
+///
+/// A machine lab-desk.net holds nothing for renders as unavailable. "--" is the
+/// honest value for a reading nobody took; zero would be a measurement.
 MachineHealth buildMachineHealth({
   required MachineRow machine,
   required bool connected,
   Map<String, dynamic>? sessionStats,
-  Map<String, dynamic>? probe,
+  MachineState? state,
   MetricHistory? history,
 }) {
   Metric known(String label, String? value) => value == null || value.isEmpty
@@ -63,36 +68,18 @@ MachineHealth buildMachineHealth({
     stat('Codec', 'codecFormat'),
   ];
 
-  final remote = <Metric>[];
-  final metrics = probe?['metrics'];
-  if (metrics is List) {
-    for (final m in metrics) {
-      if (m is! Map) continue;
-      final label = m['label'];
-      final value = m['value'];
-      if (label is! String || value is! String) continue;
-      final ratio = m['ratio'];
-      remote.add(Metric(
-        label: label,
-        value: value,
-        unit: m['unit'] is String ? m['unit'] as String : null,
-        ratio: ratio is num ? ratio.toDouble() : null,
-        source: MetricSource.remote,
-      ));
-    }
-  }
-  if (remote.isEmpty) {
-    remote.addAll(const [
-      Metric.unavailable('CPU'),
-      Metric.unavailable('Memory'),
-      Metric.unavailable('Disk'),
-      Metric.unavailable('Uptime'),
-    ]);
-  }
+  final remote = state?.metrics() ??
+      const [
+        Metric.unavailable('CPU'),
+        Metric.unavailable('Memory'),
+        Metric.unavailable('Disk'),
+        Metric.unavailable('Uptime'),
+      ];
 
   return MachineHealth(
     machineId: machine.id,
     connected: connected,
+    state: state,
     identity: identity,
     session: session,
     remote: remote,

@@ -1,11 +1,22 @@
 import 'package:flutter/material.dart';
 
 import '../models/labnet.dart';
+import '../models/net_view.dart';
 import '../theme/console_theme.dart';
+import 'adapters_card.dart';
 
 /// A machine the operator can add to a labnet: its id and how it is known.
 class NetworkMachine {
   const NetworkMachine({required this.id, required this.name});
+  final String id;
+  final String name;
+}
+
+/// A fleet, for the one case where creating a labnet has to name one: a
+/// technician narrowed to several fleets. The Worker refuses the create
+/// otherwise (`src/worker/routes/overlay.ts`).
+class NetworkFleet {
+  const NetworkFleet({required this.id, required this.name});
   final String id;
   final String name;
 }
@@ -23,9 +34,16 @@ class NetworkScreen extends StatelessWidget {
     required this.inbox,
     required this.thisMachineId,
     this.machines = const [],
+    this.fleets = const [],
+    this.mustNameFleet = false,
+    this.netView = MachineNetView.empty,
+    this.netMachineId = '',
+    this.netBusy = false,
+    this.onSelectNetMachine,
     this.busy = false,
     this.error = '',
     this.onCreate,
+    this.onRename,
     this.onApprove,
     this.onDecline,
     this.onInvite,
@@ -40,9 +58,22 @@ class NetworkScreen extends StatelessWidget {
 
   /// The machines this account can add, from the address book.
   final List<NetworkMachine> machines;
+
+  /// The fleets this caller may name. Offered on the create form only when
+  /// [mustNameFleet] says the server would refuse a create without one.
+  final List<NetworkFleet> fleets;
+  final bool mustNameFleet;
+
+  /// One machine's own network, as it reported it.
+  final MachineNetView netView;
+  final String netMachineId;
+  final bool netBusy;
+  final ValueChanged<String>? onSelectNetMachine;
+
   final bool busy;
   final String error;
-  final void Function(String name)? onCreate;
+  final void Function(String name, String? fleetId)? onCreate;
+  final void Function(String labnetId, String name)? onRename;
   final void Function(String labnetId)? onApprove;
   final void Function(String labnetId)? onDecline;
   final void Function(String labnetId, String deviceId)? onInvite;
@@ -65,6 +96,15 @@ class NetworkScreen extends StatelessWidget {
       child: Column(
         crossAxisAlignment: CrossAxisAlignment.stretch,
         children: [
+          AdaptersCard(
+            view: netView,
+            machineName: _nameOf(netMachineId),
+            selectedId: netMachineId,
+            busy: netBusy,
+            machines: [for (final m in machines) (m.id, m.name)],
+            onSelect: onSelectNetMachine,
+          ),
+          const SizedBox(height: 16),
           if (!inbox.enrolled) ...[
             _Card(
               title: 'Not on labnet',
@@ -132,6 +172,9 @@ class NetworkScreen extends StatelessWidget {
                 for (final m in machines)
                   if (!l.members.any((x) => x.deviceId == m.id)) m,
               ],
+              onRename: onRename == null
+                  ? null
+                  : (id) => _askName(context, renaming: id, initial: l.name),
               onInvite: onInvite,
               onFullAccess: onFullAccess,
               onLeave: onLeave,
@@ -145,32 +188,126 @@ class NetworkScreen extends StatelessWidget {
     );
   }
 
-  Future<void> _askName(BuildContext context) async {
-    final controller = TextEditingController();
-    final name = await showDialog<String>(
+  /// The one dialog, for creating and for renaming.
+  ///
+  /// A caller narrowed to several fleets has to say which fleet a new labnet
+  /// belongs to, because the Worker refuses the create without one and there
+  /// was previously no way to answer it. Anyone who sees the whole organization
+  /// is not asked.
+  Future<void> _askName(BuildContext context,
+      {String? renaming, String initial = ''}) async {
+    final asking = renaming == null && mustNameFleet && fleets.isNotEmpty;
+    final answer = await showDialog<(String, String?)>(
       context: context,
-      builder: (ctx) => AlertDialog(
-        backgroundColor: C.surface,
-        title: Text('New labnet', style: C.h2()),
-        content: TextField(
-          controller: controller,
-          autofocus: true,
-          style: C.body(),
-          decoration: const InputDecoration(hintText: 'Name'),
-          onSubmitted: (v) => Navigator.of(ctx).pop(v),
-        ),
-        actions: [
-          _TextAction(label: 'Cancel', onTap: () => Navigator.of(ctx).pop()),
-          const SizedBox(width: 16),
-          _TextAction(
-              label: 'Create',
-              onTap: () => Navigator.of(ctx).pop(controller.text)),
-        ],
+      builder: (ctx) => _NameDialog(
+        title: renaming == null ? 'New labnet' : 'Rename labnet',
+        confirm: renaming == null ? 'Create' : 'Rename',
+        initial: initial,
+        fleets: asking ? fleets : const [],
       ),
     );
-    controller.dispose();
-    final trimmed = name?.trim() ?? '';
-    if (trimmed.isNotEmpty) onCreate?.call(trimmed);
+    final name = answer?.$1.trim() ?? '';
+    if (name.isEmpty) return;
+    if (renaming == null) {
+      onCreate?.call(name, answer?.$2);
+    } else {
+      onRename?.call(renaming, name);
+    }
+  }
+}
+
+/// The name prompt, owning its own controller.
+///
+/// Stateful because the controller has to outlive the dialog's route exactly:
+/// a controller disposed the moment `showDialog` returns is still attached to
+/// the field the route is animating away, and Flutter asserts on it.
+class _NameDialog extends StatefulWidget {
+  const _NameDialog({
+    required this.title,
+    required this.confirm,
+    required this.initial,
+    required this.fleets,
+  });
+
+  final String title;
+  final String confirm;
+  final String initial;
+
+  /// Empty when the caller need not name a fleet, which is every case but a
+  /// technician narrowed to more than one.
+  final List<NetworkFleet> fleets;
+
+  @override
+  State<_NameDialog> createState() => _NameDialogState();
+}
+
+class _NameDialogState extends State<_NameDialog> {
+  late final TextEditingController _name =
+      TextEditingController(text: widget.initial);
+  late String? _fleetId =
+      widget.fleets.isEmpty ? null : widget.fleets.first.id;
+
+  @override
+  void dispose() {
+    _name.dispose();
+    super.dispose();
+  }
+
+  void _submit() => Navigator.of(context).pop((_name.text, _fleetId));
+
+  @override
+  Widget build(BuildContext context) {
+    return AlertDialog(
+      backgroundColor: C.surface,
+      title: Text(widget.title, style: C.h2()),
+      content: SizedBox(
+        width: 360,
+        child: Column(
+          mainAxisSize: MainAxisSize.min,
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            TextField(
+              controller: _name,
+              autofocus: true,
+              style: C.body(),
+              decoration: const InputDecoration(hintText: 'Name'),
+              onSubmitted: (_) => _submit(),
+            ),
+            if (widget.fleets.isNotEmpty) ...[
+              const SizedBox(height: 16),
+              Text('Fleet', style: C.micro()),
+              const SizedBox(height: 6),
+              for (final f in widget.fleets)
+                GestureDetector(
+                  onTap: () => setState(() => _fleetId = f.id),
+                  child: Padding(
+                    padding: const EdgeInsets.symmetric(vertical: 5),
+                    child: Row(
+                      children: [
+                        Container(
+                          width: 8,
+                          height: 8,
+                          decoration: BoxDecoration(
+                            color: _fleetId == f.id ? C.accent : C.hairline,
+                            shape: BoxShape.circle,
+                          ),
+                        ),
+                        const SizedBox(width: 8),
+                        Text(f.name, style: C.body()),
+                      ],
+                    ),
+                  ),
+                ),
+            ],
+          ],
+        ),
+      ),
+      actions: [
+        _TextAction(label: 'Cancel', onTap: () => Navigator.of(context).pop()),
+        const SizedBox(width: 16),
+        _TextAction(label: widget.confirm, onTap: _submit),
+      ],
+    );
   }
 }
 
@@ -181,6 +318,7 @@ class _LabnetCard extends StatelessWidget {
     required this.nameOf,
     required this.busy,
     required this.candidates,
+    this.onRename,
     this.onInvite,
     this.onFullAccess,
     this.onLeave,
@@ -193,6 +331,7 @@ class _LabnetCard extends StatelessWidget {
   final String Function(String) nameOf;
   final bool busy;
   final List<NetworkMachine> candidates;
+  final void Function(String labnetId)? onRename;
   final void Function(String labnetId, String deviceId)? onInvite;
   final void Function(String labnetId, bool on)? onFullAccess;
   final void Function(String labnetId)? onLeave;
@@ -266,6 +405,10 @@ class _LabnetCard extends StatelessWidget {
                   candidates: candidates,
                   onPick: busy ? null : (id) => onInvite!(labnet.id, id),
                 ),
+              if (labnet.owner && onRename != null)
+                _TextAction(
+                    label: 'Rename',
+                    onTap: busy ? null : () => onRename!(labnet.id)),
               if (labnet.owner && onFullAccess != null)
                 _TextAction(
                     label: labnet.fullAccess

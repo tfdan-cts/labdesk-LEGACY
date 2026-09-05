@@ -17,7 +17,7 @@ void main() {
     });
 
     test('a metric with a null value is not available even if sourced', () {
-      const m = Metric(label: 'CPU', value: null, source: MetricSource.remote);
+      const m = Metric(label: 'CPU', value: null, source: MetricSource.collector);
       expect(m.isAvailable, isFalse);
       expect(m.display, '--');
     });
@@ -30,7 +30,7 @@ void main() {
         connected: true,
         identity: [Metric(label: 'Host', value: 'nas', source: MetricSource.known)],
         session: [Metric.unavailable('Round trip')],
-        remote: [Metric(label: 'CPU', value: '12', unit: '%', source: MetricSource.remote)],
+        remote: [Metric(label: 'CPU', value: '12', unit: '%', source: MetricSource.collector)],
       );
       expect(h.availableCount, 2);
     });

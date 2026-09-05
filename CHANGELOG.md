@@ -25,6 +25,11 @@ past that release:
   lands pending and cannot sign in until an admin approves it) and an overview of the
   organizations, machines and open labnet sessions, and the private-phase Access wall came
   down. The `/console` prefix this build speaks stays served.
+- lab-desk.net is public since 2026-09-05. The Cloudflare zone was hardened and every setting
+  read back live, the site's admin gained a registration switch (default off: a self sign-up
+  lands pending and cannot sign in until an admin approves it) and an overview of the
+  organizations, machines and open labnet sessions, and the private-phase Access wall came
+  down. The `/console` prefix this build speaks stays served.
 - The direct listener signs its identity when bound to the overlay address, so a direct session
   completes instead of falling back to the relay every time, and a peer whose key the broker has
   not yet learned is reported as unproven and falls through rather than being called an
@@ -38,6 +43,23 @@ past that release:
 - Full Flutter CI runs again: the manifest job inherited a permissions block that failed the
   workflow at startup since it was added, previews with a suffix stay prereleases, and the
   dispatch workflow builds one at a time.
+- The console's health figures come from the machine, not from a session. Every machine enrolled
+  with your organization reports its own CPU, memory, fullest filesystem and drive verdict on its
+  flush, and Fleet reads them back for the whole fleet in one request, with the stored history
+  behind the sparklines. The monitoring switch is gone with the terminal probe that needed it:
+  there is nothing to turn on, and a figure exists whether or not anybody is connected. A peer
+  your organization has not enrolled says so on its card instead of showing four dashes.
+- Network shows a machine's own adapters: link state, addresses, MAC and byte counters, with the
+  internet verdict the machine reached itself and what self-healing was doing at the time.
+- This machine gains the self-healing switch. It sets the option the service reads, and what it
+  shows beside itself is the step the service reported, so a switch that has not been picked up
+  reads as waiting rather than as done.
+- Automation offers ready-made rules: a disk nearly full, ten minutes offline, memory or CPU held
+  high, and a DNS flush when a Windows machine comes back. Adding one leaves an ordinary rule you
+  can edit or delete. The rule action that turned monitoring on is gone with monitoring.
+- Labnets can be renamed, a technician who works across several fleets is asked which fleet a new
+  labnet belongs to instead of being refused, and a change lab-desk.net wants a fresh sign-in for
+  asks for it and then goes through rather than failing.
 
 Known open at this commit: no session has been opened over a labnet address from the product;
 the field test is the owner's. The aarch64 Windows and iOS jobs of the `labnet-ready` dispatch

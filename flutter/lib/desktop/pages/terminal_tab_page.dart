@@ -351,10 +351,6 @@ class _TerminalTabPageState extends State<TerminalTabPage> {
       } else if (call.method == kWindowEventGetRemoteList ||
           call.method == kWindowEventLabDeskTerminalList) {
         return LabDeskTerminalRpc.peerList(tabController);
-      } else if (call.method == kWindowEventLabDeskProbe) {
-        final args = jsonDecode(call.arguments);
-        return jsonEncode(
-            await LabDeskTerminalRpc.probe(args['id'], args['platform']));
       } else if (call.method == kWindowEventLabDeskTermRun) {
         final args = jsonDecode(call.arguments);
         return jsonEncode(
