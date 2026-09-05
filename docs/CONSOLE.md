@@ -147,7 +147,11 @@ rather than the time the button was pressed.
 poll. Before the first answer it draws skeleton rows, because an empty list that is still loading
 is not an empty fleet.
 
-**Fleet, Health.** One card per machine, online machines first. There is no monitoring switch:
+**Fleet, Health.** One card per machine, in the product's three states rather than two: the online
+machines first, then a group headed Offline, then a group headed Unknown. A machine LabDesk has had
+no answer for is captioned as unknown and never as offline, with the last sighting printed only when
+one exists, because "no answer yet" is not a report that a machine is down. There is no monitoring
+switch:
 every machine the organization has enrolled reports CPU, memory, the fullest filesystem and the
 worst drive verdict to lab-desk.net on its own flush, and the console reads them back with the
 fleet in one request, `GET /console/org/machines?state=1` (`services/overlay_broker.dart`,

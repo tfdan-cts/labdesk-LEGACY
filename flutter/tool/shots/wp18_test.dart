@@ -72,9 +72,13 @@ MachineRow _m(String id, String alias, String host, String platform,
       status: status,
       alias: alias,
       group: 'Workshop',
-      lastSeenOnline: status == LabDeskPeerStatus.offline
-          ? _now.subtract(const Duration(hours: 19))
-          : _now.subtract(const Duration(seconds: 8)),
+      lastSeenOnline: switch (status) {
+        LabDeskPeerStatus.offline => _now.subtract(const Duration(hours: 19)),
+        // Nobody has had an answer for this one, so there is no sighting to
+        // print and the card has to render the absence as an absence.
+        LabDeskPeerStatus.unknown => null,
+        LabDeskPeerStatus.online => _now.subtract(const Duration(seconds: 8)),
+      },
       lastChecked: _now.subtract(const Duration(seconds: 8)),
     );
 

@@ -36,12 +36,14 @@ class HealthBoard extends StatelessWidget {
         child: Text('No machines yet.', style: C.small(color: C.textFaint)),
       );
     }
-    final online = machines
-        .where((m) => m.status == LabDeskPeerStatus.online)
-        .toList(growable: false);
-    final rest = machines
-        .where((m) => m.status != LabDeskPeerStatus.online)
-        .toList(growable: false);
+    // The product's one triplet, kept apart on the board as well as in the
+    // caption: a machine nobody has had an answer for is not a machine that
+    // is down, so it never sits under a heading that says it is.
+    List<MachineRow> of(LabDeskPeerStatus s) =>
+        machines.where((m) => m.status == s).toList(growable: false);
+    final online = of(LabDeskPeerStatus.online);
+    final offline = of(LabDeskPeerStatus.offline);
+    final unknown = of(LabDeskPeerStatus.unknown);
     return SingleChildScrollView(
       padding: const EdgeInsets.fromLTRB(24, 18, 24, 24),
       child: Column(
@@ -56,11 +58,17 @@ class HealthBoard extends StatelessWidget {
           ),
           const SizedBox(height: 16),
           _grid(context, online),
-          if (rest.isNotEmpty) ...[
+          if (offline.isNotEmpty) ...[
             const SizedBox(height: 22),
-            Text('Not reachable', style: C.micro()),
+            Text('Offline', style: C.micro()),
             const SizedBox(height: 10),
-            _grid(context, rest),
+            _grid(context, offline),
+          ],
+          if (unknown.isNotEmpty) ...[
+            const SizedBox(height: 22),
+            Text('Unknown', style: C.micro()),
+            const SizedBox(height: 10),
+            _grid(context, unknown),
           ],
         ],
       ),
@@ -107,7 +115,6 @@ class HealthCard extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
-    final online = machine.status == LabDeskPeerStatus.online;
     final statusColor = switch (machine.status) {
       LabDeskPeerStatus.online => C.ok,
       LabDeskPeerStatus.offline => C.bad,
@@ -174,7 +181,7 @@ class HealthCard extends StatelessWidget {
           ),
           const SizedBox(height: 12),
           Text(
-            _footer(online, session),
+            _footer(session),
             style: C.small(color: C.textFaint),
           ),
         ],
@@ -182,11 +189,24 @@ class HealthCard extends StatelessWidget {
     );
   }
 
-  String _footer(bool online, Map<String, Metric> session) {
-    if (!online) {
-      return machine.lastSeenOnline == null
-          ? 'Offline. Not seen online this session.'
-          : 'Offline. Last seen ${machine.sinceSeen(now: now)} ago.';
+  /// One caption per state, and three states rather than two. A machine
+  /// LabDesk has had no answer about is rendered as unknown, never as offline
+  /// with a last-seen time it did not earn.
+  String _footer(Map<String, Metric> session) {
+    switch (machine.status) {
+      case LabDeskPeerStatus.offline:
+        return machine.lastSeenOnline == null
+            ? 'Offline. Not seen online this session.'
+            : 'Offline. Last seen ${machine.sinceSeen(now: now)} ago.';
+      case LabDeskPeerStatus.unknown:
+        return machine.lastSeenOnline == null
+            ? 'Unknown. LabDesk has had no answer for this machine, which is '
+                'not a report that it is down.'
+            : 'Unknown. No answer since it was last seen '
+                '${machine.sinceSeen(now: now)} ago, which is not a report '
+                'that it is down.';
+      case LabDeskPeerStatus.online:
+        break;
     }
     final rtt = session['Round trip'];
     final codec = session['Codec'];
