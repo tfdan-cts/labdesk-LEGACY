@@ -401,3 +401,35 @@ Open at this head:
 - `CHANGELOG.md` and `docs/plans/2026-09-05-001-production-program.md` each carry an accidentally
   duplicated paragraph from another session's uncommitted work. They were left exactly as found
   and no changelog line was written for 1.2.5 or 1.2.6.
+
+## Flutter console, WP18 with the network view, the self-heal switch, the presets and labnet stage 2, round 1
+
+Client `526756bd4` on `feat/labnet` (the feature commit is `de97fe565`, the analyzer fix
+`526756bd4`). Full Flutter CI run 33989733524, Dart job 101369747885, success on that exact head.
+`flutter test -j 1 test/labdesk_*.dart` locally: 335 tests, all passed.
+
+What landed is written out in section 13 of `docs/plans/2026-09-05-002-phase1-contracts.md`,
+including the four places the code had to differ from the contract. What a later round should pick
+up, none of which breaks anything shipped:
+
+- The Automation section still keeps its own rule store and its own tick, because
+  `src/worker/routes/rules.ts` carries only `GET /org/rules` and the enabled switch. When the
+  create, delete and `/org/rules/presets` routes land, the editor moves to the organization's rules
+  and `labdesk-automation` and `automation_engine.dart` go with them.
+- `GET /org/machines?state=1` answers no `uptimeS` and no `loggedInUser`, so those two come from a
+  round-robin `/state` read of one machine a poll. On a large fleet a card's uptime can be
+  `machines * 15 s` old. Adding the two columns to the fleet projection would remove the second
+  request entirely.
+- Nothing here has been exercised against a signed-in console in production: no account exists for
+  the program, so every route is proven by unit test against a fake wire and by the shots harness
+  against fixtures.
+- `flutter/lib/labdesk/screens/health_screen.dart` is still unreferenced and its wording still
+  describes the PTY probe this round deleted. It is rendered only by `tool/shots/shots_test.dart`.
+- The health card's footer says "Offline." for a machine whose status is `unknown`, which is not
+  the same thing. Pre-existing, visible in `wp18-health-board.png`.
+- The console reads no health events: `GET /console/org/events` and the acknowledgement route exist
+  and nothing calls them.
+- The preview harness `lib/labdesk_preview.dart` renders every new surface, but it cannot be run
+  with `-d chrome`: this project has no `flutter/web` directory. The screenshots in the evidence
+  directory come from the new `flutter/tool/shots/wp18_test.dart` instead, which renders the real
+  widgets to PNG in a widget test and needs no device.
