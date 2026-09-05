@@ -344,6 +344,38 @@ This workflow now sets no `VCPKG_BINARY_SOURCES` at all and says why,
 because carrying a dead setting suggests a cache that does not exist.
 Passed to dvonr-02 rather than changed, since it is their workflow.
 
+### Run 33987037867: past libsodium, stopped by clang
+
+The autoconf fix worked and so did the libsodium one. The vcpkg step, the
+libsodium step, the toolchain and the bridge restore all passed, and the
+Rust build ran for about three minutes before stopping on a third distinct
+cause:
+
+    error: failed to run custom build command for `coreaudio-sys v0.2.15`
+    unable to generate bindings: ClangDiagnostic("error: version 'sim' in
+    target triple 'aarch64-apple-ios-sim' is invalid")
+
+`coreaudio-sys` generates its bindings with bindgen, and bindgen hands the
+Rust target triple straight to clang. Rust spells the iOS simulator with a
+`-sim` suffix; clang spells it as a `-simulator` environment and rejects
+the Rust spelling outright. Nothing is wrong with either tool, they just
+disagree, and the crate passes the string through without translating it.
+
+Fixed through bindgen's own escape hatch rather than by patching or
+vendoring the crate: `BINDGEN_EXTRA_CLANG_ARGS` is exported for the cargo
+step with `--target=arm64-apple-ios-simulator` and the simulator SDK as the
+sysroot. The sysroot goes with it because a simulator build wants the
+simulator SDK's headers, and every bindgen crate in this build is building
+for the simulator. The device build is untouched, as ever: it uses
+`aarch64-apple-ios`, which clang accepts.
+
+This is the third dependency to be surprised by the simulator triple, after
+`libsodium-sys` and the vcpkg triplet question. The pattern is worth naming:
+the device target is well travelled and the simulator target is not, so
+anything that maps or forwards a triple is a candidate to break, and the
+fix is usually an environment variable the crate already respects rather
+than a change to the crate.
+
 ## The bar, written before anything is judged against it
 
 The brief asks for a gauntlet loop: one concrete bar, pieces judged alone,

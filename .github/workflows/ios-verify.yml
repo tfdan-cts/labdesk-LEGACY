@@ -153,9 +153,23 @@ jobs:
 
       # No hwcodec: flutter/ios_x64.sh, the inherited simulator build, leaves it
       # out too, and a VideoToolbox encode is not something a simulator proves.
+      #
+      # coreaudio-sys generates its bindings with bindgen, which hands the Rust
+      # target triple straight to clang. clang does not accept this one:
+      #
+      #   unable to generate bindings: ClangDiagnostic("error: version 'sim' in
+      #   target triple 'aarch64-apple-ios-sim' is invalid")
+      #
+      # Rust spells the simulator with a -sim suffix and clang spells it with a
+      # -simulator environment, so the triple is corrected for clang through
+      # bindgen's own escape hatch rather than by patching a crate. The sysroot
+      # goes with it: a simulator build wants the simulator SDK's headers, and
+      # every bindgen crate in this build is building for the simulator.
       - name: Build the rust lib for the simulator
         run: |
           rustup target add aarch64-apple-ios-sim
+          export BINDGEN_EXTRA_CLANG_ARGS="--target=arm64-apple-ios-simulator -isysroot $(xcrun --sdk iphonesimulator --show-sdk-path)"
+          echo "BINDGEN_EXTRA_CLANG_ARGS=$BINDGEN_EXTRA_CLANG_ARGS"
           cargo build --locked --features flutter --release --target aarch64-apple-ios-sim --lib
 
       # Runner.xcodeproj links a literal path under target/aarch64-apple-ios,
