@@ -425,11 +425,23 @@ up, none of which breaks anything shipped:
   against fixtures.
 - `flutter/lib/labdesk/screens/health_screen.dart` is still unreferenced and its wording still
   describes the PTY probe this round deleted. It is rendered only by `tool/shots/shots_test.dart`.
-- The health card's footer says "Offline." for a machine whose status is `unknown`, which is not
-  the same thing. Pre-existing, visible in `wp18-health-board.png`.
 - The console reads no health events: `GET /console/org/events` and the acknowledgement route exist
   and nothing calls them.
 - The preview harness `lib/labdesk_preview.dart` renders every new surface, but it cannot be run
   with `-d chrome`: this project has no `flutter/web` directory. The screenshots in the evidence
   directory come from the new `flutter/tool/shots/wp18_test.dart` instead, which renders the real
   widgets to PNG in a widget test and needs no device.
+
+## Client lane, Flutter console, round 2
+
+One defect closed, commit `8df1535a1` on `feat/labnet`. The health card branched on a single
+`online` bool, so a machine whose reachability is `unknown` was captioned "Offline. Last seen 8s
+ago." and sat under a heading that called it unreachable. Unknown is the absence of an answer,
+not a report that a machine is down. `screens/health_board.dart` now groups the board in the
+product's three states, Online, Offline and Unknown, with one caption per state, and the last
+sighting is printed only where one exists. `tool/shots/wp18_test.dart` gives its unknown machine
+no sighting at all, so the shot shows the absence rather than a borrowed timestamp.
+
+`flutter test -j 1 test/labdesk_*.dart`: 337 tests, all passed, including the new
+`test/labdesk_health_board_test.dart`. `dart analyze` on the changed files reports no error and
+no warning. The rendered board is `wp18-health-board.png` in the round evidence directory.
