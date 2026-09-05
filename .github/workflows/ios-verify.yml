@@ -121,12 +121,28 @@ jobs:
           vcpkgGitCommitId: ${{ env.VCPKG_COMMIT_ID }}
           doNotCache: false
 
+      # Named ports rather than the manifest, because the manifest asks for
+      # ffmpeg on iOS and this build does not use it: libs/scrap/build.rs has
+      # its ffmpeg() call commented out, and the only ports it resolves are
+      # libyuv, libvpx and aom, with opus for magnum-opus. The manifest is right
+      # for the device build and wrong here.
+      #
+      # It also does not build: ffmpeg:x64-ios fails in its x86 inline assembly
+      # with "invalid input constraint 'c' in asm" at libavcodec/x86/mathops.h,
+      # which is why this is a correctness point and not only a speed one. The
+      # same port built fine for arm64-ios-simulator, so this is specific to
+      # x86 assembly under the iOS ABI.
+      #
+      # Classic mode needs to run from outside the manifest root.
       - name: Install vcpkg dependencies
         shell: bash
         run: |
-          if ! $VCPKG_ROOT/vcpkg \
-            install \
-            --triplet ${{ env.VCPKG_TRIPLET }} \
+          cd "$RUNNER_TEMP"
+          if ! "$VCPKG_ROOT/vcpkg" install \
+            libvpx:${{ env.VCPKG_TRIPLET }} \
+            libyuv:${{ env.VCPKG_TRIPLET }} \
+            aom:${{ env.VCPKG_TRIPLET }} \
+            opus:${{ env.VCPKG_TRIPLET }} \
             --x-install-root="$VCPKG_ROOT/installed"; then
             find "${VCPKG_ROOT}/" -name "*.log" | while read -r _1; do
               echo "$_1:"
@@ -137,6 +153,7 @@ jobs:
             done
             exit 1
           fi
+          ls "$VCPKG_ROOT/installed/${{ env.VCPKG_TRIPLET }}/lib"
 
       - name: Save the vcpkg binary cache
         if: always()

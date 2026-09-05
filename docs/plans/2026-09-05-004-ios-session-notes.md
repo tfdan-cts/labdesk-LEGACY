@@ -497,6 +497,34 @@ not "can the native dependencies be built for this target" but "has anything
 ever built this target before", and the answer to that was sitting in a
 one-line shell script in the repository.
 
+### Run 33990625384: the Intel runner is real, and ffmpeg is not needed
+
+First result: `macos-15-intel` scheduled and ran a real workload, so the
+Intel runner the pivot depends on exists. The Rust build was never reached,
+because vcpkg failed first:
+
+    src/libavcodec/x86/mathops.h:132:18: error: invalid input constraint
+    'c' in asm
+    error: building ffmpeg:x64-ios failed with: BUILD_FAILED
+
+ffmpeg's x86 inline assembly does not compile under the iOS ABI. Worth
+noting that the same port built without complaint for
+`arm64-ios-simulator`, so this is specific to x86 assembly rather than to
+iOS, and it is one real cost of the pivot.
+
+The fix is not to make ffmpeg build. This job does not use it.
+`libs/scrap/build.rs` has its `ffmpeg()` call commented out at line 251, and
+the ports it actually resolves are libyuv, libvpx and aom, with opus for
+magnum-opus. `vcpkg.json` requests ffmpeg for iOS because the manifest is
+shared with the device build, which is a different build with different
+needs.
+
+So the job stops using the manifest and installs those four ports by name in
+classic mode. That is both correct and faster, and it removes a dependency
+this build never had. The lesson from the pivot applies again in miniature:
+the question was not how to make the failing thing build, but whether it was
+needed at all, and the answer was a commented-out line in the repository.
+
 ## The bar, written before anything is judged against it
 
 The brief asks for a gauntlet loop: one concrete bar, pieces judged alone,
