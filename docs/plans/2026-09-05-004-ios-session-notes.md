@@ -382,6 +382,31 @@ anything that maps or forwards a triple is a candidate to break, and the
 fix is usually an environment variable the crate already respects rather
 than a change to the crate.
 
+### An impact check on the tab insertion, and a process correction
+
+Adding a Machines tab to the phone's home page shifts every tab index after
+it, so anything reading a tab by index could be off by one. Checked through
+the codebase graph rather than by grepping and hoping: `HomePage` has
+exactly two consumers outside its own file.
+
+`flutter/lib/models/chat_model.dart:425` reads `isChatPageCurrentTab`, which
+is `isAndroid ? _selectedIndex == _chatPageTabIndex : false`, and
+`_chatPageTabIndex` is only assigned inside the Android branch of
+`initPages`. The new tab is gated to iOS, so no Android index moves and the
+iOS answer was already constant false.
+`flutter/lib/mobile/pages/settings_page.dart:1078` calls `refreshPages`,
+which re-runs `initPages` and does not depend on an index.
+
+No off by one was introduced.
+
+The process correction is worth writing down too. The operating rules say to
+consult the codebase graph before file-by-file exploration and never to
+answer a callers-or-impact question with a blind grep. This session did the
+opposite for most of the day: it grepped. The graph turned out to hold this
+repository at 14,720 nodes and 56,306 edges the whole time, and answering
+"who uses HomePage" took one query where grep would have taken several and
+would not have distinguished a definition from a use.
+
 ## The bar, written before anything is judged against it
 
 The brief asks for a gauntlet loop: one concrete bar, pieces judged alone,
