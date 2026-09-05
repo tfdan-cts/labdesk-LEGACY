@@ -473,6 +473,21 @@ The cost is an Intel runner, `macos-15-intel`, since an x86_64 simulator
 cannot run on Apple silicon under a current Xcode. The probe on 2026-09-05
 showed that label scheduling, so it exists.
 
+**The rule, stated so it is reusable rather than an apology.** When a
+repository already ships a script that builds a thing, that script is a
+statement about which targets are known to work there, and it outranks any
+capability check you can run. A capability check answers "could this be
+built"; the shipped script answers "has this been built", and only the
+second predicts whether the dependency tree will cooperate. Ask the second
+question first. It costs one file read.
+
+The corollary is about stacking. By the fourth environment variable added to
+make one target behave, the count itself was the signal: four overrides is
+not a configuration, it is a structure that breaks on the next dependency
+bump and leaves whoever inherits it unable to say which of the four is load
+bearing. The right response to the fourth workaround was to question the
+input, not to write a fifth.
+
 The honest lesson is about the earlier decision rather than this one. The
 first probe asked whether a vcpkg triplet existed for the arm64 simulator,
 found one, and concluded the arm64 path was viable. The triplet existing
