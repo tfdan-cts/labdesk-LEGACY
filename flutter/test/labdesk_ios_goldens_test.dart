@@ -83,6 +83,20 @@ MachineRow _row(
       lastChecked: lastChecked,
     );
 
+/// Off unless asked for.
+///
+/// Golden images are bytes, and the bytes differ between platforms: these are
+/// rendered on Windows and the repository's Dart tests run on ubuntu, so a
+/// comparison across the two fails on font rasterisation rather than on
+/// anything anyone changed. Leaving them in the shared gate would hand every
+/// other lane a flake they did not cause.
+///
+/// Their job is to be looked at, and that does not need a gate. To regenerate
+/// and inspect:
+///
+///   LABDESK_GOLDENS=1 flutter test --update-goldens test/labdesk_ios_goldens_test.dart
+final _enabled = Platform.environment['LABDESK_GOLDENS'] == '1';
+
 void main() {
   setUpAll(_loadRoboto);
 
@@ -136,7 +150,7 @@ void main() {
       ),
       'machine-list-light',
     );
-  });
+  }, skip: !_enabled);
 
   testWidgets('machine list, dark', (tester) async {
     await shoot(
@@ -151,7 +165,7 @@ void main() {
       'machine-list-dark',
       brightness: Brightness.dark,
     );
-  });
+  }, skip: !_enabled);
 
   testWidgets('machine list with nothing in it', (tester) async {
     await shoot(
@@ -159,7 +173,7 @@ void main() {
       MachineListView(machines: const [], onConnect: (_) {}, now: now),
       'machine-list-empty',
     );
-  });
+  }, skip: !_enabled);
 
   testWidgets('first run, light', (tester) async {
     await shoot(
@@ -172,7 +186,7 @@ void main() {
       ),
       'first-run-light',
     );
-  });
+  }, skip: !_enabled);
 
   testWidgets('first run, dark', (tester) async {
     await shoot(
@@ -186,5 +200,5 @@ void main() {
       'first-run-dark',
       brightness: Brightness.dark,
     );
-  });
+  }, skip: !_enabled);
 }
