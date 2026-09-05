@@ -117,6 +117,7 @@ class ConsoleShell extends StatefulWidget {
   const ConsoleShell({
     super.key,
     required this.machines,
+    this.healthMachines,
     this.samples = const [],
     this.profiles = const [],
     this.profileName = 'Default',
@@ -143,6 +144,16 @@ class ConsoleShell extends StatefulWidget {
   });
 
   final List<MachineRow> machines;
+
+  /// What the Health tab accounts for, when that is not the same list.
+  ///
+  /// [machines] is the technician's own peer list, which is what the Machines
+  /// tab is. The organization's fleet is a different set: on a console that has
+  /// never connected to anything the peer list is empty while lab-desk.net is
+  /// answering with the whole fleet, and the board said "No machines yet." over
+  /// a fleet that was reporting figures (homebox-devserver, 2026-09-05). Null
+  /// falls back to [machines], so the design harness is unaffected.
+  final List<MachineRow>? healthMachines;
   final List<ReachSample> samples;
   final List<ProfileRow> profiles;
   final String profileName;
@@ -352,7 +363,7 @@ class _ConsoleShellState extends State<ConsoleShell> {
                     embedded: true,
                   ),
                 FleetTab.health => HealthBoard(
-                    machines: widget.machines,
+                    machines: widget.healthMachines ?? widget.machines,
                     healthFor: (id) =>
                         widget.healthFor?.call(id) ?? MachineHealth.empty,
                     now: widget.now,

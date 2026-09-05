@@ -89,6 +89,26 @@ void main() {
       expect(find.text('Monitor'), findsNothing);
     });
 
+    testWidgets('the board is the fleet, not the peer list', (tester) async {
+      // A console that has never connected to anything has an empty peer list,
+      // and that is exactly the console a technician installs. Rendering the
+      // peer list on the health board showed "No machines yet." over an
+      // organization the server was answering with (homebox-devserver,
+      // 2026-09-05).
+      await tester.pumpWidget(_wrap(ConsoleShell(
+        machines: const [],
+        healthMachines: rows,
+        initialSection: ConsoleSection.fleet,
+        healthFor: (id) => MachineHealth(machineId: id, connected: false),
+      )));
+      await tester.tap(find.text('Health'));
+      await tester.pumpAndSettle();
+
+      expect(find.text('No machines yet.'), findsNothing);
+      expect(find.text('alpha'), findsOneWidget);
+      expect(find.text('beta'), findsOneWidget);
+    });
+
     testWidgets('the figures come from the machine with no session open',
         (tester) async {
       await tester.pumpWidget(_wrap(ConsoleShell(

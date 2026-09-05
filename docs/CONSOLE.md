@@ -147,7 +147,15 @@ rather than the time the button was pressed.
 poll. Before the first answer it draws skeleton rows, because an empty list that is still loading
 is not an empty fleet.
 
-**Fleet, Health.** One card per machine, in the product's three states rather than two: the online
+**Fleet, Health.** The board accounts for the ORGANIZATION's fleet, which is not the same set as
+the Machines tab beside it: that tab is the technician's own peer list, and on a console that has
+never connected to anything it is empty. The board is those rows plus every machine lab-desk.net
+holds that is not among them, so a freshly installed console shows the fleet on first sign-in. It
+rendered the peer list alone until 2026-09-05, and on homebox-devserver it read "No machines yet."
+while the server was answering the same console with four machines, one of them that machine,
+online and carrying figures.
+
+One card per machine, in the product's three states rather than two: the online
 machines first, then a group headed Offline, then a group headed Unknown. A machine LabDesk has had
 no answer for is captioned as unknown and never as offline, with the last sighting printed only when
 one exists, because "no answer yet" is not a report that a machine is down. There is no monitoring
@@ -252,6 +260,14 @@ each other on LabDesk's port and ping, or on everything when the owner turns ful
 Adding a machine only creates an invitation; the machine joins when a person approves it on
 that machine's own Network section, and may leave the same way. The section is refreshed every
 15 s, and only while an account is signed in.
+
+**Labnet's absence costs nothing else.** A server need not have a labnet at all: lab-desk.net
+answers `/agent/overlay/inbox` with 503 "labnet is not set up on this server yet" when no NetBird
+is configured for it. That answer is confined to the labnet surface. The organization's machines
+are read first and on their own, so a 503 from the inbox leaves the fleet, the health board, the
+adapter view and the self-healing report exactly as they were; only the labnet card carries the
+message. Both reads shared one `try` until 2026-09-05, and on homebox-devserver that 503 blanked
+every one of those surfaces.
 
 **The two planes.** The broker (`services/overlay_broker.dart`) speaks two planes of
 lab-desk.net, and the split is deliberate. The six machine-side calls (`enrol`, `self`, the

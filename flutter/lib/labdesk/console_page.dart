@@ -8,6 +8,7 @@ import 'package:flutter/services.dart';
 import 'package:flutter_hbb/common.dart';
 import 'package:flutter_hbb/common/widgets/dialog.dart';
 import 'package:flutter_hbb/consts.dart';
+import 'package:flutter_hbb/common/formatter/id_formatter.dart' show trimID;
 import 'package:flutter_hbb/common/labdesk_peer_status.dart';
 import 'package:flutter_hbb/common/labdesk_profiles.dart';
 import 'package:flutter_hbb/common/labdesk_status_binding.dart';
@@ -584,10 +585,35 @@ class _LabDeskConsolePageState extends State<LabDeskConsolePage> {
       );
 
   MachineRow? _rowOf(String id) {
-    for (final m in _machines) {
+    for (final m in _fleetRows) {
       if (m.id == id) return m;
     }
     return null;
+  }
+
+  /// Every machine the fleet's health must account for: the technician's own
+  /// peer rows, plus each machine the organization holds that is not among
+  /// them.
+  ///
+  /// The peer list alone is not the fleet. On a console that has never
+  /// connected to anything that list is empty, and until 2026-09-05 the health
+  /// board rendered it: signed in on homebox-devserver the board read "No
+  /// machines yet." while lab-desk.net was answering the same console with four
+  /// machines, one of them that machine, online and carrying figures.
+  List<MachineRow> get _fleetRows {
+    final rows = _machines;
+    final known = {for (final r in rows) r.id};
+    return [
+      ...rows,
+      for (final m in _orgMachines)
+        if (!known.contains(m.peerId))
+          MachineRow(
+            id: m.peerId,
+            hostname: m.name,
+            platform: m.platform,
+            status: _serverStatusOf(m.peerId) ?? LabDeskPeerStatus.unknown,
+          ),
+    ];
   }
 
   MachineHealth _healthFor(String id) {
@@ -1186,13 +1212,13 @@ class _LabDeskConsolePageState extends State<LabDeskConsolePage> {
           selfHeal: SelfHealCard(
             on: _selfHealOn,
             reachability:
-                _netViews[_machineIdOfPeer(model.serverId.text)]?.reachability ??
+                _netViews[_machineIdOfPeer(_thisPeerId)]?.reachability ??
                     NetReachability.unknown,
             // Only a machine that reports at all can be waited on. One that
             // has never sent a network view is not "waiting for the service";
             // it is a machine nobody is hearing from, and the card says that.
             waiting: _selfHealWaiting &&
-                _netViews.containsKey(_machineIdOfPeer(model.serverId.text)),
+                _netViews.containsKey(_machineIdOfPeer(_thisPeerId)),
             onChanged: _setSelfHeal,
           ),
           // Both of these existed on the old left rail and would have been lost
@@ -1237,7 +1263,7 @@ class _LabDeskConsolePageState extends State<LabDeskConsolePage> {
       // and only the three headers come back.
       sign: (method, path, body) async => MachineSignature.decode(
           await bind.mainAgentSign(method: method, path: path, body: body)),
-      peerId: () => gFFI.serverModel.serverId.text,
+      peerId: () => _thisPeerId,
       machineIdOf: _machineIdOfPeer,
     );
     _enrolment = OverlayEnrolment(
@@ -1269,6 +1295,17 @@ class _LabDeskConsolePageState extends State<LabDeskConsolePage> {
   bool get _signedIn =>
       bind.mainGetLocalOption(key: 'access_token').isNotEmpty;
 
+  /// This machine's own peer id, as the server holds it.
+  ///
+  /// `serverModel.serverId` is an `IDTextEditingController`, so its `text` is
+  /// what the box on screen shows: "1 180 573 903", spaces and all. Comparing
+  /// that with a `machine.peerId` matched nothing, so the console never
+  /// recognised itself -- the self-healing card could not report, the Network
+  /// section opened on somebody else's machine, and the labnet broker named
+  /// this machine to the server with the spaces in it (homebox-devserver,
+  /// 2026-09-05). `trimID` is the same function the connect box uses.
+  String get _thisPeerId => trimID(gFFI.serverModel.serverId.text);
+
   /// The `machine.id` lab-desk.net names [peerId] by, or empty when the
   /// organization's machine list holds no such peer. Empty rather than the peer
   /// id itself: a machine the server cannot name is one it must refuse.
@@ -1289,43 +1326,69 @@ class _LabDeskConsolePageState extends State<LabDeskConsolePage> {
       _forgetAccountData();
       return;
     }
+    // THE TWO READS ARE SEPARATE, and that is the whole point of this shape.
+    // The machines are the organization's; the inbox is labnet's, and labnet is
+    // a subsystem a server need not have at all -- lab-desk.net answers
+    // `/agent/overlay/inbox` 503 "labnet is not set up on this server yet" when
+    // no NetBird is configured for it. Reading both inside one `try` meant that
+    // 503 threw past the assignment below, so the console lost the whole
+    // organization over a feature nobody had asked for: an empty health board,
+    // no adapters, no self-healing report and no machine picker, with one red
+    // line on the Network page as the only sign (homebox-devserver,
+    // 2026-09-05).
+    final List<OrgMachine> machines;
     try {
       // First, because it is the map every labnet call names a machine
       // through and the inbox is rendered against it. `?state=1` rides the same
       // answer, so the fleet's figures cost no extra request.
-      final machines = await _broker.machines();
+      machines = await _broker.machines();
+    } on OverlayBrokerException catch (e) {
+      _reportBrokerFailure(e);
+      return;
+    } catch (_) {
+      return;
+    }
+    if (!mounted) return;
+    setState(() {
+      _orgMachines = machines;
+      _orgByPeer = {
+        for (final m in machines)
+          if (m.peerId.isNotEmpty) m.peerId: m
+      };
+      _recordHistory(machines, DateTime.now());
+      if (_netMachineId.isEmpty ||
+          !machines.any((m) => m.id == _netMachineId)) {
+        _netMachineId = _machineIdOfPeer(_thisPeerId);
+        if (_netMachineId.isEmpty && machines.isNotEmpty) {
+          _netMachineId = machines.first.id;
+        }
+      }
+    });
+    try {
       final inbox = await _broker.inbox();
       if (!mounted) return;
       setState(() {
-        _orgMachines = machines;
-        _orgByPeer = {
-          for (final m in machines)
-            if (m.peerId.isNotEmpty) m.peerId: m
-        };
         _inbox = inbox;
         _labnetError = '';
-        _recordHistory(machines, DateTime.now());
-        if (_netMachineId.isEmpty ||
-            !machines.any((m) => m.id == _netMachineId)) {
-          _netMachineId = _machineIdOfPeer(gFFI.serverModel.serverId.text);
-          if (_netMachineId.isEmpty && machines.isNotEmpty) {
-            _netMachineId = machines.first.id;
-          }
-        }
       });
       await _maybeAskConsent(inbox);
-      await _pollDetail();
-      await _pollNetViews();
-      if (!_fleetsRead) await _readFleets();
     } on OverlayBrokerException catch (e) {
-      // A sign-in that no longer holds is the account surface's to report,
-      // and the previous account's machines must not stay on screen.
-      if (e.signInAgain) {
-        _forgetAccountData();
-      } else if (mounted) {
-        setState(() => _labnetError = e.message);
-      }
+      _reportBrokerFailure(e);
     } catch (_) {}
+    await _pollDetail();
+    await _pollNetViews();
+    if (!_fleetsRead) await _readFleets();
+  }
+
+  /// A sign-in that no longer holds is the account surface's to report, and the
+  /// previous account's machines must not stay on screen. Anything else is a
+  /// message for the labnet surface.
+  void _reportBrokerFailure(OverlayBrokerException e) {
+    if (e.signInAgain) {
+      _forgetAccountData();
+    } else if (mounted) {
+      setState(() => _labnetError = e.message);
+    }
   }
 
   /// One machine a cycle: its own hot row, and the first time round its stored
@@ -1368,8 +1431,7 @@ class _LabDeskConsolePageState extends State<LabDeskConsolePage> {
     final wanted = <String>{
       if (_section == ConsoleSection.network && _netMachineId.isNotEmpty)
         _netMachineId,
-      if (_section == ConsoleSection.thisMachine)
-        _machineIdOfPeer(gFFI.serverModel.serverId.text),
+      if (_section == ConsoleSection.thisMachine) _machineIdOfPeer(_thisPeerId),
     }..remove('');
     for (final id in wanted) {
       try {
@@ -1377,7 +1439,7 @@ class _LabDeskConsolePageState extends State<LabDeskConsolePage> {
         if (!mounted) return;
         setState(() {
           _netViews[id] = view;
-          if (id == _machineIdOfPeer(gFFI.serverModel.serverId.text) &&
+          if (id == _machineIdOfPeer(_thisPeerId) &&
               view.reachability.selfHealRunning == _selfHealOn) {
             _selfHealWaiting = false;
           }
@@ -1580,7 +1642,7 @@ class _LabDeskConsolePageState extends State<LabDeskConsolePage> {
   /// rather than by the peer id the rest of the console uses.
   Widget _network(BuildContext context) => NetworkScreen(
         inbox: _inbox,
-        thisMachineId: _machineIdOfPeer(gFFI.serverModel.serverId.text),
+        thisMachineId: _machineIdOfPeer(_thisPeerId),
         machines: [
           for (final m in _orgMachines)
             NetworkMachine(id: m.id, name: m.name),
@@ -1644,6 +1706,7 @@ class _LabDeskConsolePageState extends State<LabDeskConsolePage> {
             _updateBanner(),
             Expanded(child: ConsoleShell(
         machines: machines,
+        healthMachines: _fleetRows,
         samples: labdeskStatus.samples,
         profiles: _profiles,
         profileName: ServerProfilesModel.active.value,
@@ -1676,7 +1739,13 @@ class _LabDeskConsolePageState extends State<LabDeskConsolePage> {
         onTerminalSubmit: _terminalSubmit,
         onRunAction: _runAction,
         sectionRequest: _sectionRequest,
-        onSectionChanged: (s) => setState(() => _section = s),
+        onSectionChanged: (s) {
+          // The adapter list is read for whichever section is showing it, so
+          // the section that has just opened asks now rather than waiting out
+          // the fifteen second poll behind a card that says "Reading...".
+          setState(() => _section = s);
+          _pollNetViews();
+        },
         subItems: {
           ConsoleSection.settings: [
             for (final p in settingsPages())
