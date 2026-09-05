@@ -4,12 +4,26 @@
 # and logs. Reading code is not verification and a green build is not a working
 # screen; the screenshot is the evidence.
 #
-# Why the simulator and not the ipa job in flutter-build.yml: that job builds
-# aarch64-apple-ios, a device slice, which cannot be run anywhere we have. This
-# one builds aarch64-apple-ios-sim against vcpkg's arm64-ios-simulator triplet,
-# which the runner probe on 2026-09-05 confirmed exists as a community triplet,
-# so it stays on the default arm64 runner. It does not replace the ipa job and
-# does not publish anything.
+# Why x86_64 on an Intel runner rather than arm64 on the default one.
+#
+# The obvious route is aarch64-apple-ios-sim on macos-latest, and it was tried
+# first, across four runs. Four separate dependencies do not know that target:
+# libsodium-sys panics with "Unknown iOS build target", bindgen hands the triple
+# to clang which rejects the -sim spelling outright, magnum-opus resolves the
+# vcpkg triplet to the device one and cannot find opus headers, and vcpkg-rs
+# does the same. Each has an environment-variable escape hatch, and stacking
+# them still fails: SODIUM_LIB_DIR and BINDGEN_EXTRA_CLANG_ARGS are global,
+# while a single "cargo build --target" also compiles build scripts for the
+# host, so the simulator's libsodium was linked into a macOS build script and
+# ld refused it. Scoping an environment variable to the target and not the host
+# needs an unstable cargo flag.
+#
+# x86_64-apple-ios is the older, well travelled simulator target. Every one of
+# those dependencies already knows it, vcpkg-rs maps it to the built-in x64-ios
+# triplet, and clang accepts it. It needs an Intel runner, which is the whole
+# cost. The repository already ships this exact build as flutter/ios_x64.sh.
+#
+# The four workarounds are gone rather than accumulated. That is the point.
 name: iOS simulator verification
 
 on:
@@ -35,14 +49,11 @@ env:
   RUST_VERSION: "1.75"
   VCPKG_COMMIT_ID: "120deac3062162151622ca4860575a33844ba10b"
   # The files backend, not x-gha: vcpkg removed x-gha, and the value the rest of
-  # the repository carried cached nothing while printing a warning. The files
-  # backend needs no feed and no credentials, and actions/cache carries the
-  # directory between runs. Measured on the shared workflows at 390 seconds cold
-  # against 3 seconds warm.
+  # the repository carried cached nothing while printing a warning. Measured on
+  # the shared workflows at 390 seconds cold against 3 seconds warm.
   VCPKG_BINARY_SOURCES: "clear;files,${{ github.workspace }}/vcpkg-binary-cache,readwrite"
-  # The device type is fixed so screenshots are comparable between runs; the
-  # runtime is resolved at run time because the runner image moves.
-  SIM_DEVICE_TYPE: "com.apple.CoreSimulator.SimDeviceType.iPhone-17"
+  VCPKG_TRIPLET: "x64-ios"
+  RUST_TARGET: "x86_64-apple-ios"
 
 jobs:
   # The same bridge the release build uses, rather than a second copy of the
@@ -53,21 +64,20 @@ jobs:
   simulator:
     name: build and run on a simulator
     needs: [generate-bridge]
-    runs-on: macos-latest
-    # The vcpkg and cargo builds are the long part. The cap exists so a stuck
-    # job says so in an hour and a half rather than holding a macOS runner for
-    # the six hours GitHub allows.
+    # Intel, for the reason at the top of this file.
+    runs-on: macos-15-intel
+    # The cap exists so a stuck job says so rather than holding a macOS runner
+    # for the six hours GitHub allows.
     timeout-minutes: 90
     steps:
       # There is deliberately no step exporting ACTIONS_CACHE_URL and
-      # ACTIONS_RUNTIME_TOKEN here. Those existed to feed vcpkg's x-gha backend,
-      # which no longer exists; actions/cache does not read them.
+      # ACTIONS_RUNTIME_TOKEN here. Those fed vcpkg's x-gha backend, which no
+      # longer exists; actions/cache does not read them.
       #
-      # nasm and yasm are what the ffmpeg and aom ports want. autoconf,
-      # automake and libtool are what the libsodium port wants: it builds
-      # through vcpkg_configure_make and fails with "libsodium requires autoconf
-      # from the system package manager" without them, which is not something
-      # the ports install for themselves.
+      # nasm and yasm are what the ffmpeg and aom ports want. The autotools are
+      # what any port going through vcpkg_configure_make wants, and the ports do
+      # not install them for themselves; a job's package list has to satisfy the
+      # union of what every port it builds needs.
       - name: Install dependencies
         run: brew install nasm yasm autoconf automake libtool
 
@@ -92,19 +102,15 @@ jobs:
       # Restore and save are split rather than using actions/cache whole,
       # because this workflow cancels superseded runs and actions/cache only
       # saves in its post step on success. A cancelled run would never populate
-      # the cache, which is exactly the run this job has most often.
-      #
-      # The triplet is in the key literally. arm64-ios-simulator is the only
-      # consumer of that triplet in the repository, and a key without it would
-      # quietly hand this job another platform's binaries.
+      # the cache, which is the run this job has most often.
       - name: Restore the vcpkg binary cache
         uses: actions/cache/restore@6f8efc29b200d32929f49075959781ed54ec270c # v3
         with:
           path: ${{ github.workspace }}/vcpkg-binary-cache
-          key: vcpkg-${{ runner.os }}-arm64-ios-simulator-${{ env.VCPKG_COMMIT_ID }}-${{ hashFiles('vcpkg.json') }}
+          key: vcpkg-${{ runner.os }}-${{ env.VCPKG_TRIPLET }}-${{ env.VCPKG_COMMIT_ID }}-${{ hashFiles('vcpkg.json') }}
           restore-keys: |
-            vcpkg-${{ runner.os }}-arm64-ios-simulator-${{ env.VCPKG_COMMIT_ID }}-
-            vcpkg-${{ runner.os }}-arm64-ios-simulator-
+            vcpkg-${{ runner.os }}-${{ env.VCPKG_TRIPLET }}-${{ env.VCPKG_COMMIT_ID }}-
+            vcpkg-${{ runner.os }}-${{ env.VCPKG_TRIPLET }}-
 
       # run-vcpkg's own cache covers the vcpkg tool and repository, not the
       # built packages. Its log group says so outright, which is the sentence
@@ -120,7 +126,7 @@ jobs:
         run: |
           if ! $VCPKG_ROOT/vcpkg \
             install \
-            --triplet arm64-ios-simulator \
+            --triplet ${{ env.VCPKG_TRIPLET }} \
             --x-install-root="$VCPKG_ROOT/installed"; then
             find "${VCPKG_ROOT}/" -name "*.log" | while read -r _1; do
               echo "$_1:"
@@ -132,47 +138,25 @@ jobs:
             exit 1
           fi
 
-      # libsodium-sys 0.2.7, which sodiumoxide pins, predates
-      # aarch64-apple-ios-sim: its build script maps the target triple to an
-      # iOS build flavour and panics with "Unknown iOS build target" on any
-      # triple it does not recognise. It skips that path entirely when
-      # SODIUM_LIB_DIR is set, so the simulator slice comes from vcpkg like
-      # every other native dependency rather than from a patched crate.
-      #
-      # Run from outside the repository: naming a package is classic mode, and
-      # vcpkg refuses that inside a manifest root.
-      - name: A libsodium the simulator can link
-        run: |
-          cd "$RUNNER_TEMP"
-          "$VCPKG_ROOT/vcpkg" install libsodium:arm64-ios-simulator \
-            --x-install-root="$VCPKG_ROOT/installed"
-          lib="$VCPKG_ROOT/installed/arm64-ios-simulator/lib"
-          ls -l "$lib/libsodium.a"
-          echo "SODIUM_LIB_DIR=$lib" >> "$GITHUB_ENV"
-
-      # Saved here, after both vcpkg calls and with if: always(), so a run that
-      # is later cancelled still leaves the ports cached for the next one. A key
-      # that already exists makes this warn rather than fail, which is why it
-      # tolerates its own error.
       - name: Save the vcpkg binary cache
         if: always()
         continue-on-error: true
         uses: actions/cache/save@6f8efc29b200d32929f49075959781ed54ec270c # v3
         with:
           path: ${{ github.workspace }}/vcpkg-binary-cache
-          key: vcpkg-${{ runner.os }}-arm64-ios-simulator-${{ env.VCPKG_COMMIT_ID }}-${{ hashFiles('vcpkg.json') }}
+          key: vcpkg-${{ runner.os }}-${{ env.VCPKG_TRIPLET }}-${{ env.VCPKG_COMMIT_ID }}-${{ hashFiles('vcpkg.json') }}
 
       - name: Install Rust toolchain
         uses: dtolnay/rust-toolchain@e97e2d8cc328f1b50210efc529dca0028893a2d9 # v1
         with:
           toolchain: ${{ env.RUST_VERSION }}
-          targets: aarch64-apple-ios-sim
+          targets: ${{ env.RUST_TARGET }}
           components: "rustfmt"
 
       - uses: Swatinem/rust-cache@e18b497796c12c097a38f9edb9d0641fb99eee32 # v2
         with:
           prefix-key: rustdesk-lib-cache-ios-sim
-          key: aarch64-apple-ios-sim
+          key: ${{ env.RUST_TARGET }}
 
       - name: Restore bridge files
         uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
@@ -180,39 +164,13 @@ jobs:
           name: bridge-artifact
           path: ./
 
-      # No hwcodec: flutter/ios_x64.sh, the inherited simulator build, leaves it
-      # out too, and a VideoToolbox encode is not something a simulator proves.
-      #
-      # coreaudio-sys generates its bindings with bindgen, which hands the Rust
-      # target triple straight to clang. clang does not accept this one:
-      #
-      #   unable to generate bindings: ClangDiagnostic("error: version 'sim' in
-      #   target triple 'aarch64-apple-ios-sim' is invalid")
-      #
-      # Rust spells the simulator with a -sim suffix and clang spells it with a
-      # -simulator environment, so the triple is corrected for clang through
-      # bindgen's own escape hatch rather than by patching a crate. The sysroot
-      # goes with it: a simulator build wants the simulator SDK's headers, and
-      # every bindgen crate in this build is building for the simulator.
+      # No hwcodec, and no environment overrides: this is exactly the command
+      # flutter/ios_x64.sh already carries, which is why nothing here needs
+      # persuading about the target.
       - name: Build the rust lib for the simulator
         run: |
-          rustup target add aarch64-apple-ios-sim
-          export BINDGEN_EXTRA_CLANG_ARGS="--target=arm64-apple-ios-simulator -isysroot $(xcrun --sdk iphonesimulator --show-sdk-path)"
-          echo "BINDGEN_EXTRA_CLANG_ARGS=$BINDGEN_EXTRA_CLANG_ARGS"
-          # The vcpkg-rs crate maps the Rust target to a vcpkg triplet itself,
-          # and for aarch64-apple-ios-sim it picks arm64-ios, the device
-          # triplet. magnum-opus then looked in installed/arm64-ios/include and
-          # failed with "'opus/opus_multistream.h' file not found", because the
-          # only triplet installed here is the simulator one. Its own
-          # documentation offers the override: "Use this to override vcpkg-rs'
-          # default triplet selection with your own."
-          #
-          # Correctness, not convenience: installing the device triplet instead
-          # would satisfy the header search and then link device slices into a
-          # simulator binary.
-          export VCPKGRS_TRIPLET=arm64-ios-simulator
-          echo "VCPKGRS_TRIPLET=$VCPKGRS_TRIPLET"
-          cargo build --locked --features flutter --release --target aarch64-apple-ios-sim --lib
+          rustup target add ${{ env.RUST_TARGET }}
+          cargo build --locked --features flutter --release --target ${{ env.RUST_TARGET }} --lib
 
       # Runner.xcodeproj links a literal path under target/aarch64-apple-ios,
       # the device slice. Rather than fork the project file for a job that never
@@ -221,7 +179,7 @@ jobs:
       - name: Put the simulator slice where the Xcode project looks for it
         run: |
           mkdir -p target/aarch64-apple-ios/release
-          cp target/aarch64-apple-ios-sim/release/liblibrustdesk.a \
+          cp target/${{ env.RUST_TARGET }}/release/liblibrustdesk.a \
             target/aarch64-apple-ios/release/liblibrustdesk.a
           lipo -info target/aarch64-apple-ios/release/liblibrustdesk.a
 
@@ -231,23 +189,25 @@ jobs:
           flutter pub get
           flutter build ios --simulator --debug
 
-      # iOS 26 simulators are reported to hang on boot a fraction of the time,
-      # and bootstatus waits forever when they do. Bounded so a hung simulator
-      # fails the run instead of burning the job's whole budget on a boot.
       - name: Boot a simulator
         id: sim
         timeout-minutes: 8
         run: |
           xcrun simctl list runtimes
-          # No runtime argument: simctl picks the newest one the device type can
-          # run, which is what we want and is one fewer thing to keep current.
-          udid=$(xcrun simctl create labdesk-verify "$SIM_DEVICE_TYPE")
+          # The newest iPhone this runner offers, resolved rather than pinned,
+          # because the Intel image carries a different Xcode from the arm64 one
+          # and a hardcoded device type is the kind of thing that rots quietly.
+          device_type=$(xcrun simctl list devicetypes \
+            | grep -o 'com.apple.CoreSimulator.SimDeviceType.iPhone-[0-9A-Za-z-]*' \
+            | tail -1)
+          echo "device type: $device_type"
+          udid=$(xcrun simctl create labdesk-verify "$device_type")
           xcrun simctl boot "$udid"
           xcrun simctl bootstatus "$udid" -b
           echo "udid=$udid" >> "$GITHUB_OUTPUT"
 
       # The bundle identifier is read out of the built app rather than written
-      # here, so this step keeps working through the rebrand.
+      # here, so this step keeps working through any rename.
       - name: Install and launch
         id: launch
         run: |
@@ -298,7 +258,7 @@ jobs:
 
       # The rebrand is only real if iOS renders it. Sending the app to the
       # background leaves the home screen up, where the icon and the display
-      # name are the two things the operator sees before anything else.
+      # name are the two things an operator sees before anything else.
       - name: The home screen, for the icon and the name
         if: always()
         run: |

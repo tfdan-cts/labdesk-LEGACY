@@ -440,6 +440,48 @@ the app refuses to launch.
 Fourth dependency, fourth escape hatch the tool already had, and no crate
 patched yet.
 
+### The pivot: four workarounds deleted by changing one input
+
+Run 33989232439 killed the arm64 simulator approach, and the way it died is
+the argument. `VCPKGRS_TRIPLET` did not help, because magnum-opus resolves
+the triplet itself rather than through vcpkg-rs and still printed
+`cargo:info=arm64-ios`. Underneath that sat the real problem:
+
+    ld: building for 'macOS', but linking in object file
+    (liblibsodium_sys...rlib) built for 'iOS-simulator'
+
+`SODIUM_LIB_DIR` and `BINDGEN_EXTRA_CLANG_ARGS` are process-wide, and a
+single `cargo build --target` also compiles build scripts for the host. So
+the simulator's libsodium was bundled into the host rlib and linked into a
+macOS build script, and ld refused it. Scoping an environment variable to
+the target and not the host needs `-Z target-applies-to-host`, which is not
+on stable. There is no fifth workaround of the same kind; the approach had
+run out.
+
+So the input changed instead of the workarounds accumulating.
+`x86_64-apple-ios` is the older, well travelled iOS simulator target, and
+every dependency that did not know `aarch64-apple-ios-sim` already knows it:
+libsodium-sys builds for it, clang accepts the spelling, and vcpkg-rs and
+magnum-opus both resolve it to the built-in `x64-ios` triplet, which is a
+simulator triplet. All four workarounds are deleted rather than added to.
+
+The evidence that this is the trodden path was in the repository the whole
+time: `flutter/ios_x64.sh` is one line, and it is
+`cargo build --locked --features flutter --release --target x86_64-apple-ios`.
+
+The cost is an Intel runner, `macos-15-intel`, since an x86_64 simulator
+cannot run on Apple silicon under a current Xcode. The probe on 2026-09-05
+showed that label scheduling, so it exists.
+
+The honest lesson is about the earlier decision rather than this one. The
+first probe asked whether a vcpkg triplet existed for the arm64 simulator,
+found one, and concluded the arm64 path was viable. The triplet existing
+said nothing about whether the Rust crates could cope, and four runs went
+into discovering that they could not. The question worth asking first was
+not "can the native dependencies be built for this target" but "has anything
+ever built this target before", and the answer to that was sitting in a
+one-line shell script in the repository.
+
 ## The bar, written before anything is judged against it
 
 The brief asks for a gauntlet loop: one concrete bar, pieces judged alone,
