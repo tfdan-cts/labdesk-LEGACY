@@ -35,7 +35,8 @@ These are settled and are not reopened below.
    account or an enrolment token.
 4. The rendezvous runs on the existing Oracle VM that already carries labnet-netbird, alongside
    what it runs now. The relay runs, for now, on the Proxmox container CT 102 that already carries
-   the owner's own private RustDesk server, and is migrated to a host of its own when public
+   the owner's own private RustDesk server and which LabDesk replaces on it outright, and is
+   migrated to a host of its own when public
    demand justifies one. Both the split and that migration are designed for here (owner
    decision, 2026-09-05, amending the single-host decision this plan was started under).
 5. labnet is how machines reach each other. The public server is the fallback and the on-ramp,
@@ -400,7 +401,13 @@ hours are used by other instances. Rendezvous traffic is small and does not move
 egress allowance no longer matters to this plan, because the bytes that would have spent it are on
 the other host now.
 
-### 5.2 The relay host: Proxmox CT 102
+### 5.2 The relay host: Proxmox CT 102, converted
+
+CT 102 is the owner's own private RustDesk ID and relay server today, and it is being converted:
+LabDesk replaces that server on the container outright rather than running beside it (owner
+decision, 2026-09-05, replacing the coexistence design this plan carried an hour earlier).
+Everything below is what is on it now, so the conversion in section 5.5 has a before to be measured
+against, and so the decommissioning in section 5.6 knows what it is removing.
 
 Read through the Proxmox REST API on 2026-09-05. These readings supersede the vault's older audit
 at `40_Areas/infra/rustdesk.md`, which carries its own note that its facts are as of 2026-04-24 and
@@ -422,30 +429,31 @@ Unprivileged Debian LXC, `arch amd64`, `cores 1`, `memory 512`, `swap 512`, `onb
 2 GB are the current allocation and not a ceiling: the node has headroom and the container can be
 grown.
 
-**What it already serves.** The vault records `rustdesk-hbbs` on 21115 and 21116, `rustdesk-hbbr`
-on 21117 and `rustdesk-api` on 21114, deployed from the community-scripts `rustdeskserver.sh`
-package, and the owner's machines depend on it today. Probed from the workstation on 2026-09-05,
-TCP answers on 21114, 21115, 21116, 21117, 21118, 21119 and 22 at `100.71.21.102`, and
+**What it serves today, which is what the conversion removes.** The vault records `rustdesk-hbbs`
+on 21115 and 21116, `rustdesk-hbbr` on 21117 and `rustdesk-api` on 21114, deployed from the
+community-scripts `rustdeskserver.sh` package. Probed from the workstation on 2026-09-05, TCP
+answers on 21114, 21115, 21116, 21117, 21118, 21119 and 22 at `100.71.21.102`, and
 `rustdesk.centaur-diminished.ts.net` resolves to that address. `10.90.80.11:21116` answers on the
-LAN. Note that 21118 and 21119 answer as well, so the existing deployment already binds the
-WebSocket pair: a second relay cannot take the default ports or the default plus two.
+LAN. The owner's machines depend on all of it right now, which is what section 5.5 is about.
 
 **What is not exposed.** Probed from outside, from the Oracle VM to the home connection's public
 address on 2026-09-05, every one of 21114, 21115, 21116, 21117, 21118, 21119 and 443 is closed.
-The owner's RustDesk server is reachable over Tailscale and on the LAN and from nowhere else
-today. Making CT 102 carry a public relay therefore begins with opening a port on the home router,
-which is a change to the owner's home network and not merely to a container. The public address
-itself is deliberately not written down here, because this repository is public.
+The server is reachable over Tailscale and on the LAN and from nowhere else today. Making CT 102
+carry a public relay therefore begins with opening a port on the home router, which is a change to
+the owner's home network and not merely to a container. The public address itself is deliberately
+not written down here, because this repository is public.
 
-**The public relay is a second instance, not a reuse.** Stated plainly because the question decides
-everything after it. The existing `rustdesk-hbbr` keeps its ports, its key and its working
-directory, and the owner's machines keep using it exactly as they do now. LabDesk's public relay is
-a separate `hbbr` process with its own systemd unit, its own working directory, its own
-`blocklist.txt` and `blacklist.txt`, its own bandwidth caps, its own key (LabDesk's, not the
-private server's) and its own port, `-p 21127`, which binds 21127 and 21129 and collides with
-nothing measured above. The `-p` flag is used rather than the `PORT` environment variable, because
-the environment-variables document records that `PORT` set through the environment makes `hbbr`
-listen on `PORT + 1`.
+**Standard ports, because there is nothing left to collide with.** The earlier coexistence draft
+put LabDesk's relay on 21127 to keep clear of the incumbent on 21117. With the incumbent removed
+that reason is gone, and a non-standard port would have been a permanent line of explanation in
+every runbook and every firewall rule for no remaining benefit. So the relay takes 21117, which is
+the port the client dials by default: the controlling side connects with
+`check_port(relay_server, RELAY_PORT)` at `src/client.rs:1189` and the controlled side does the
+same at `src/server.rs:326`, `RELAY_PORT` is 21117 at `libs/hbb_common/src/config.rs:124`, and
+`check_port` supplies that port only when the address carries none. A bare `relay.lab-desk.net`
+therefore means 21117 and nothing needs saying. `get_relay_server`
+(`src/rendezvous_mediator.rs:825` to `:834`) arrives at the same number by its own last resort, the
+rendezvous host's port plus one.
 
 ### 5.3 How each host is reached, so nobody has to search again
 
@@ -466,11 +474,11 @@ The client is told two addresses instead of one, and the client already has the 
 `get_relay_server` at `src/rendezvous_mediator.rs:825` to `:834` reads the `relay-server` option
 first, then whatever the rendezvous server provided, then falls back to the rendezvous host's port
 plus one. So the relay is set twice, deliberately: `hbbs` on the Oracle VM is started with
-`-r relay.lab-desk.net:21127` so that it advertises the relay to every client, which the
+`-r relay.lab-desk.net` so that it advertises the relay to every client, which the
 environment-variables document says is exactly when `RELAY-SERVERS` should be set ("Set this only
-when the relay uses a different IP/hostname or a non-standard port"), and
-`GET /api/client/server` also returns the relay address so a client holds it without having to be
-told by a server it may not have reached yet.
+when the relay uses a different IP/hostname or a non-standard port"; the first of those applies
+here and the second no longer does), and `GET /api/client/server` also returns the relay address so
+a client holds it without having to be told by a server it may not have reached yet.
 
 `relay.lab-desk.net` is a new `A` record in Cloudflare with the proxy off, pointing at the home
 connection's public address, for the same reason `nb.lab-desk.net` is DNS only: Cloudflare's proxy
@@ -479,14 +487,88 @@ owner's home address to the product in public DNS. And a domestic address can ch
 needs a dynamic update, which is a small scheduled Cloudflare API call rather than a manual edit.
 
 **The migration this is designed for.** Moving the relay to a dedicated host later must be a change
-of one DNS record and one `hbbs` flag, and nothing else. That is why the client is told the relay
-address rather than deriving it, why the relay has its own name rather than sharing
-`nb.lab-desk.net`, and why the relay's key is LabDesk's fleet key rather than anything tied to
-CT 102. When the dedicated host exists: stand `hbbr` up on it with the same key and the same caps,
-point `relay.lab-desk.net` at it, restart `hbbs` with the new `-r`, watch both relays until the old
-one is idle, then stop the public unit on CT 102 and close the router forward. No client changes,
-and no session in flight is broken, because a session already paired on the old relay stays on the
-connection it has.
+of one DNS record, and nothing else, because the relay is on the standard port and the `-r` flag
+names it by name. That is why the client is told the relay address rather than deriving it, why the
+relay has its own name rather than sharing `nb.lab-desk.net`, and why the relay's key is LabDesk's
+fleet key rather than anything tied to CT 102. When the dedicated host exists: stand `hbbr` up on it
+with the same key and the same caps, point `relay.lab-desk.net` at it, watch both relays until the
+old one is idle, then stop the unit on CT 102 and close the router forward. No client changes, no
+`hbbs` restart, and no session in flight is broken, because a session already paired on the old
+relay stays on the connection it has.
+
+### 5.5 The cutover, and why it cannot start at CT 102
+
+Converting CT 102 breaks every machine that uses it, and those machines are reached through it.
+This order exists so that nobody is locked out of a machine while converting it. It is the owner's
+to run, not an agent's.
+
+**What is on the old server today, verified from the client side.** This workstation's own live
+configuration, `%APPDATA%\LabDesk\config\LabDesk2.toml` read on 2026-09-05, names
+`rustdesk.centaur-diminished.ts.net` as both `custom-rendezvous-server` and `relay-server`, with
+`api-server` at `http://10.90.80.11:21114`, and carries a `key` whose value is exactly the one the
+vault recorded for that server on 2026-04-24. So the vault's key is the live one, now confirmed
+from a client rather than from the box. Other machines are on the same profile.
+
+**The order.**
+
+1. **Stand the new rendezvous up first, on the other host.** LabDesk's `hbbs` goes on the Oracle VM
+   with the new key. CT 102 is not touched. Two servers are now running and no machine has moved.
+2. **Give the new server a relay of its own, temporarily on the Oracle VM.** Started without `-r`,
+   `hbbs` lets every client derive the relay as the rendezvous host's port plus one
+   (`get_relay_server`, `src/rendezvous_mediator.rs:831`), so opening 21117 on the Oracle VM for
+   the length of the cutover is all this takes. This step is what makes the whole sequence safe: the
+   new server is complete on a host that is not the one being converted, so CT 102 keeps serving
+   the old fleet until the last machine has left it.
+3. **Prove it on a machine that is in the room.** The workstation, converted by hand, with its old
+   values written down first.
+4. **Convert the rest, in this order:** machines an operator can reach without the relay, meaning
+   the LAN, an attended keyboard, or labnet where the machine is already enrolled; then machines
+   that are remote but on the trapLab tailnet; then anything else.
+5. **Decommission the incumbent** only when the last machine has left it (section 5.6).
+6. **Move the relay onto CT 102**: LabDesk's `hbbr` on 21117 with the fleet key, `hbbs` restarted
+   with `-r relay.lab-desk.net`, the router forward opened, and 21117 closed again on the Oracle VM.
+
+**The remote unattended machine, answered plainly.** A machine whose only path is the server being
+replaced cannot be converted safely over that path. Rewriting `custom-rendezvous-server` restarts
+the mediator (`src/ipc.rs:795` and `:803`), and if the machine does not come back on the new server
+there is no way in. Three honest answers, in order of preference.
+
+* **Most of them already have another path.** This workstation reaches CT 102 over Tailscale, which
+  means the tailnet is a route that does not depend on the RustDesk server at all. Any machine on
+  the trapLab tailnet can be converted over the relay and recovered over Tailscale if it does not
+  come back, and the same is true of a machine already enrolled in labnet.
+* **A timed rollback for the ones with no other path.** Before changing anything, schedule a
+  one-shot task on the machine that writes the old server, relay and key back in ten minutes; make
+  the change; cancel the task once the machine is seen on the new server. On Windows that is
+  `schtasks`, on Linux `systemd-run --on-active`. One scheduled task turns an unrecoverable mistake
+  into a ten minute outage.
+* **Leave it until someone is there.** The incumbent keeps running until the last machine has left
+  it, so nothing forces a risky conversion to a deadline.
+
+**If the new server does not come up at all.** Nothing is lost. Steps 1 and 2 changed nothing on
+CT 102, and step 3 changed one machine that is in the room. Put that machine's old values back and
+stop; the incumbent is still serving the fleet, and the plan waits.
+
+### 5.6 Decommissioning the incumbent
+
+Owner-only, and only after the last machine has left it. In this order, because it is the reverse
+of how much the fleet still depends on each part:
+
+1. `rustdesk-api` on 21114. Nothing about transport depends on it.
+2. `rustdesk-hbbs` on 21115 and 21116. The rendezvous has already moved.
+3. `rustdesk-hbbr` on 21117. Last, because it is the transport of last resort for anything still
+   pointed at it, and because LabDesk's relay wants that port.
+
+Each is stopped, then disabled so it does not return at the next boot, then removed. **The data
+directory is kept**, not deleted, until LabDesk's relay has been proven on the same container. It
+holds the incumbent's peer database and its `id_ed25519` pair, and that pair is the only thing that
+could bring the old server back if the cutover has to be reversed. Archive it off the container once
+the replacement is proven, and remove it only then.
+
+`unverified`: the exact unit names and the data directory path. This session held no shell inside
+CT 102; the ports above were probed from outside and the service names come from the vault's record
+of the community-scripts install. Establishing both is the first step of the decommissioning
+package, not an assumption it may proceed on.
 
 ---
 
@@ -750,6 +832,35 @@ increasing order of severity.
    host, or change what the server does with a registration, and LabDesk would find out from a
    support ticket.
 
+**The incumbent's key, and why it is not adopted.** The server on CT 102 has its own key pair
+that the owner's machines trust today; its public half is in this workstation's live
+configuration and in the vault note, and its value is deliberately not repeated here. Adopting
+it for LabDesk's server would make the cutover invisible, because no machine's `key` option
+would have to change at all. It is still refused. That key has been distributed for months, sits
+in plain text in a vault note and in at least one configuration backup directory on this
+workstation, and will remain in configurations on machines that are never converted. Section 8.1
+makes the key the thing that gates every session and the relay, so starting a public service on
+a key with that history would be starting it already leaked. LabDesk's server gets a new pair
+from the ceremony above, and the price is that every machine has to be touched, which section
+5.5 is the sequence for.
+
+**No machine ever trusts both.** A client holds exactly one key: `Config::get_option("key")`,
+returned by `get_key` at `src/common.rs:1879` to `:1898`, is a single string and there is no key
+list anywhere in the client. So a machine trusts the incumbent until the moment its `key` option
+is rewritten and LabDesk's server from that moment on, with no overlap. That is exactly why the
+old server has to stay up until the last machine has left it rather than being switched off on a
+date.
+
+**How a machine learns the new key when the thing that would have told it is the server being
+replaced.** Three routes, and only the last is self service. An operator writes it over a
+session that is open at the time, which is what section 5.5 step 4 describes. An installer
+carries it, which covers a machine being rebuilt anyway. Or the machine signs in to
+lab-desk.net and `GET /api/client/server` hands it the host, the relay and the key together.
+That last route does not depend on the server being replaced in any way, because lab-desk.net is
+a Cloudflare Worker on a different plane entirely, and it is the reason P9 and P11 should land
+before the cutover rather than after it: a machine that can sign in configures itself, and the
+risky manual conversion is then only for machines that cannot.
+
 ---
 
 ## 10. Where labnet sits
@@ -842,8 +953,9 @@ raised so a burst queues rather than drops the legitimate registration beside it
 sees: `hbbs` log volume and the sqlite file growing. `unverified`: no measurement exists of how
 much registration traffic this one OCPU can absorb.
 
-**Relay saturation, at CT 102.** This is the one that now lands on the owner's home connection and
-on a container the owner's own service shares, so it is treated in 11.5 and 12.2 rather than here.
+**Relay saturation, at CT 102.** This is the one that now lands on the owner's home connection,
+and after the conversion it lands on the owner's only relay, so it is treated in 11.5 and 12.2
+rather than here.
 The in-process levers are `TOTAL_BANDWIDTH`, an aggregate cap across all relay connections, and
 `SINGLE_BANDWIDTH` per connection, with `blacklist.txt` and the console commands `ba` and `br` to
 cap one address and `blocklist.txt` with `Ba` and `Br` to refuse one outright. The defaults, 1024
@@ -851,7 +963,7 @@ Mb/s total and 128 Mb/s single, are far above anything a domestic uplink can ser
 single most important thing to change before the router forward is opened.
 
 **Connection flood on the relay port.** The TCP handshake plus the key check is cheap and happens
-before anything expensive, but the process still accepts the socket, and on a 1 core container the
+before anything expensive, but the process still accepts the socket, and on a small container the
 accept loop is the scarce thing. A `conntrack` or `hashlimit` rule at the container, plus a
 connection limit at the home router if it has one, is the answer. `unverified`: what the owner's
 router can express.
@@ -878,7 +990,7 @@ never needed the relay.
 | both up | normal | normal |
 | rendezvous up, relay down | registration and hole punching work; a session that cannot punch a hole fails at `connect_tcp` to the relay, which carries the context string `Failed to connect to relay server` (`src/client.rs:1193`) | most sessions still open; the ones behind two hard NATs do not |
 | rendezvous down, relay up | nothing new registers and no new session is brokered, so the relay is never asked for one; sessions already paired on the relay keep running, because `hbbr` pairs on its own connection and does not consult `hbbs` | This machine shows the id it last had and a not ready state; open sessions survive |
-| home uplink down | the relay is unreachable, so this is the relay-down row above, and the owner's own private RustDesk server and everything else on that LAN goes with it | most sessions still open; the owner loses their own remote access |
+| home uplink down | the relay is unreachable, so this is the relay-down row above | most sessions still open; after the conversion the owner's own machines are on this same server, so the owner is in the same position as every other user rather than a worse one |
 | Oracle VM down | the rendezvous and labnet's NetBird management, signal, relay and STUN all go at once, because they are on the same box | machines already holding an overlay address and a live tunnel keep it until it needs re-signalling; everything else stops |
 | key wrong on the punch hole path | `bail!("Key mismatch")` at `src/client.rs:729` | the translated string `Key mismatch` |
 | key wrong on the TCP rendezvous handshake | `Signature mismatch in key exchange` at `src/common.rs:2034` | the mediator never confirms, This machine stays not ready |
@@ -896,7 +1008,7 @@ environment-variables document notes must be set in the inherited process enviro
 binaries initialize logging before reading `.env`. There is no metrics endpoint in the open source
 server, so the operator's view is the log, the process state and the two loopback consoles. A
 minimal watch is a restart policy on each unit plus an external probe that opens TCP 21116 on the
-Oracle VM and TCP 21127 on `relay.lab-desk.net` and alerts on a refusal, which also catches a
+Oracle VM and TCP 21117 on `relay.lab-desk.net` and alerts on a refusal, which also catches a
 changed home address before a user does.
 
 ### 11.5 The cost question, on a domestic uplink
@@ -943,12 +1055,13 @@ being an efficiency argument and becomes the thing that makes the arrangement vi
 
 ---
 
-## 12. Isolation, on two shared hosts
+## 12. Isolation, on the two hosts
 
-Each host now runs LabDesk's public service beside something the owner already depends on, and the
-two situations are not the same. The Oracle VM shares a public service with a private control
-plane. CT 102 shares a public service with the owner's own private RustDesk server and with a home
-LAN. Both are stated rather than glossed.
+The two hosts pose different questions and neither is glossed. The Oracle VM runs a public
+service beside a private control plane the whole labnet design depends on, and that is a
+coexistence problem. CT 102 runs LabDesk's relay and nothing else once the conversion is done,
+so its question is not coexistence at all: it is that a public service now sits on the owner's
+home connection, inside the owner's LAN, and is the owner's only relay.
 
 ### 12.1 The Oracle VM: rendezvous beside labnet's control plane
 
@@ -978,64 +1091,72 @@ host firewall default drops on INPUT and on both address families.
 4. **Different failure domains for the data.** `hbbs` writes `db_v2.sqlite3` and its key pair into
    its own volume. It does not share `/var/lib/netbird`.
 
-### 12.2 CT 102: a public relay beside the owner's private service
+### 12.2 CT 102: a public relay on the owner's home network
 
-This is the harder one, because the container is 1 core and 512 MB and the owner's machines depend
-on what is already in it. The public relay is a second process in the same container, by owner
-decision, so the isolation is process level and network level rather than machine level. What
-actually holds the line:
+The container runs LabDesk's relay and nothing else once the conversion is done, so the coexistence
+problem this section used to describe is gone: there is no second instance, no split of working
+directories or blocklists, and no private service on the box for public traffic to disturb. What is
+left is that the relay sits on the owner's home connection and inside the owner's LAN, which is a
+different question with different answers.
 
-1. **Only the public relay's port is forwarded.** The router forwards TCP 21127 and nothing else.
-   21114, 21115, 21116, 21117, 21118 and 21119 stay unforwarded, so the private `hbbs`, the private
-   `hbbr` and the `rustdesk-api` panel remain reachable only over Tailscale and on the LAN, exactly
-   as measured in section 5.2. The public blast radius is one TCP port to one process. This is the
-   strongest control available and it costs nothing.
-2. **The public unit is the one that yields.** systemd resource control on the public relay's unit
-   alone: `CPUQuota=`, `MemoryMax=`, `IOWeight=` and a positive `Nice=`, so that under contention
-   the private `hbbs` and `hbbr` win the core. The private units are not touched, which means the
-   owner's service behaves exactly as it does today until the public one is actually busy, and then
-   still wins.
-3. **Grow the container rather than only arbitrate it.** The node has 20 cores and 42 GB of memory
-   unused, and the container's 1 core, 512 MB and 2 GB are an allocation, not a ceiling. Raising it
-   to 2 cores, 1024 MB and 4 GB through the Proxmox API removes most of the contention before any
-   arbitration is needed. Growing an LXC's cores and memory is live; growing the root filesystem is
-   also live for an increase.
-4. **Separate state.** Its own working directory, so its own `blocklist.txt` and
-   `blacklist.txt`, and its own loopback console on its own port. Nothing the public relay reads
-   or writes can touch the private service's files, and it needs no key files of its own,
-   because a non-empty `-k` is used as given and only an empty or `-` value makes `hbbr` load or
-   generate a pair.
-5. **Separate credentials.** The public relay holds LabDesk's fleet public key and nothing else. It
-   is never given the private server's key, and it never needs a private key of its own, because
-   `hbbr` only compares a string (section 1.2).
-6. **Bind narrowing, if the installed build supports it.** Binding the public relay to the LAN
-   address alone keeps it off the Tailscale interface, so the public path and the private path do
-   not share a listening address. `BIND` is documented as available since 1.1.17. `unverified`:
-   which upstream version the community-scripts package installed, so whether `-b` is available at
-   all has to be checked on the box before the design depends on it.
-7. **A one command retreat.** `systemctl stop` on the public unit and closing the router forward
-   returns CT 102 to exactly the state measured in section 5.2. Clients then fail over to hole
-   punching, which is where most of them already are.
+1. **Only the relay's port is forwarded.** The router forwards TCP 21117 and nothing else. The
+   container listens on nothing else once the incumbent is removed, so there is no second service
+   to reach even by mistake, and the rest of the LAN is not reachable through it.
+2. **The relay cannot reach out, and should be stopped from it anyway.** `hbbr` never initiates an
+   outbound connection: the only entry points are `handle_connection` at `src/relay_server.rs:350`,
+   `:362` and `:374`, all from an accepted socket, and `make_pair_` at `:461` pairs two connections
+   that both dialled in. So a stranger cannot use the relay to reach anything on the owner's LAN.
+   An exploited process is a different matter, so the container gets a firewall rule dropping
+   traffic from it to the LAN except what it needs, in the same shape as the `DOCKER-USER` rule on
+   the Oracle VM. **Proposed**, owner-only. `unverified`: the LAN's full addressing beyond the
+   `10.90.80.0/24` this session observed.
+3. **Grow the container rather than only cap it.** The node has 20 cores and roughly 42 GB of
+   memory unused, and the container's 1 core, 512 MB and 2 GB are an allocation, not a ceiling.
+   Raising it to 2 cores, 1024 MB and 4 GB through the Proxmox API removes most of the pressure
+   before any capping is needed. Growing an LXC's cores and memory is live, and so is growing its
+   root filesystem in the increasing direction.
+4. **Caps anyway, because the uplink is the real limit.** `TOTAL_BANDWIDTH`, `SINGLE_BANDWIDTH`,
+   `LIMIT_SPEED` and `DOWNGRADE_START_CHECK` set from a measurement of the home connection, per
+   section 11.5. On a domestic line these are not a nicety; they are the thing that keeps the
+   household's browsing working while the relay is busy.
+5. **It holds the fleet public key and no private key.** `hbbr` compares a string (section 1.2), so
+   the relay host never needs a private half at all, and the host that does hold one is the
+   hardened cloud VM. A compromise of CT 102 yields a key that is already on every LabDesk machine
+   and nothing else.
+6. **Bind narrowing, if the installed build supports it.** Binding the relay to the LAN address
+   alone keeps it off the Tailscale interface, so the tailnet is not a second way in to a public
+   service. `BIND` is documented as available since 1.1.17. `unverified`: which upstream version
+   the replacement is built from is the operator's choice, so this is a build decision rather than
+   an unknown, but it has to be a decision rather than an assumption.
+7. **A one command retreat, with a cost that is now real.** `systemctl stop` on the relay unit and
+   closing the router forward takes the public relay off the internet in one step. What is
+   different after the conversion is that there is no incumbent behind it: clients then have no
+   relay at all and fall back to hole punching, which is where most of them already are, and the
+   owner's own machines are in that same position rather than a protected one. The retreat is still
+   the right move in an emergency; it is just no longer free.
 
-**The residual, named honestly.** The two services share one kernel, one network namespace, one
-uplink, one container filesystem and one Proxmox node. A kernel bug, a container escape, an uplink
-saturation or a node problem hits both, and no amount of systemd tuning changes that. An LXC is a
-weaker boundary than a VM, and this one is unprivileged with `nesting=1` and `keyctl=1`, which is
-the community-scripts default rather than a hardening choice. The structural fix is a container of
-its own, which is one `pct clone` away on a node with this much headroom, and after that a host of
-its own, which is the migration the owner has already scheduled. Until then the honest summary is
-that the public relay is fenced by a single forwarded port and a scheduler priority, and that both
-are real but neither is a boundary.
+**The residual, named honestly.** The relay sits on one unprivileged LXC with `nesting=1` and
+`keyctl=1`, which is the community-scripts default rather than a hardening choice, on one node,
+behind one domestic uplink. A kernel bug, a container escape, an uplink saturation or a node problem
+takes it out, and it takes the owner's own remote access with it, because after the conversion the
+owner is a user of this server like everyone else. The structural fix is the migration to a
+dedicated host that the owner has already scheduled, and until then the honest summary is that the
+public relay is fenced by a single forwarded port and a resource allocation, and that both are real
+but neither is a boundary.
 
 ### 12.3 The blast radius if either host is lost
 
 The Oracle VM carries the rendezvous and labnet's whole control plane, so losing it stops
-coordination on both paths at once (section 11.4). CT 102 carries the public relay and the owner's
-private RustDesk server, so losing it stops the fallback for LabDesk and the owner's own remote
-access together. Neither is mitigated in this plan beyond the existing weekly boot volume backup on
-the Oracle side and Proxmox's own backup on the other. **Proposed** and owner-only: confirm CT 102
-is in the node's backup schedule before it takes public traffic, because it is about to become
-harder to rebuild than it is today.
+coordination on both paths at once (section 11.4). CT 102 carries the relay, and after the
+conversion it is the only relay the owner has, so losing it costs LabDesk its fallback path and
+costs the owner the same thing at the same moment. Neither is mitigated in this plan beyond the
+existing weekly boot volume backup on the Oracle side and Proxmox's own backup on the other.
+
+**Proposed** and owner-only, and now more pressing than it was under the coexistence design:
+confirm CT 102 is in the node's backup schedule before it takes public traffic, and keep the
+incumbent's archived data directory (section 5.6) somewhere that is not that container. The
+container is about to become both harder to rebuild and the only thing standing between the owner
+and a lost relay.
 
 ---
 
@@ -1081,13 +1202,13 @@ verifier is a CI run.
 
 | WP | Owns | Depends on | Verifier |
 |---|---|---|---|
-| **P1. The rendezvous, stood up** (owner-only) | the Oracle VM: the `hbbs` unit or compose file, its `/data` volume, key pair generation, `TEST_HBBS=no` | none | `ss -tulnH` on the VM shows 21115 and 21116 TCP and UDP; from the workstation a TCP connect to 21116 succeeds and a client holding the right key reaches `key_confirmed` |
+| **P1. The rendezvous, stood up** (owner-only) | the Oracle VM: the `hbbs` unit or compose file, its `/data` volume, key pair generation, `TEST_HBBS=no`, and a temporary `hbbr` on 21117 for the length of the cutover, with `hbbs` started without `-r` so clients derive it | none | `ss -tulnH` on the VM shows 21115, 21116 TCP and UDP and 21117; from the workstation a TCP connect to 21116 succeeds and a client holding the right key reaches `key_confirmed`, and a forced-relay session between two machines completes without CT 102 being touched |
 | **P2. Rendezvous firewall and security group** (owner-only) | `/etc/iptables/rules.v4`, `DOCKER-USER`, the Oracle NSG `labnet-netbird` | P1 | an external port scan from the workstation shows exactly 443, 21115 and 21116 open on that host and nothing else, repeated after a deliberate reboot, because a rule that survives only until the next restart is not a rule |
 | **P3. Rendezvous isolation** (owner-only) | the second Docker network, the CPU and memory limits, the two `DOCKER-USER` drops between subnets | P1, P2 | from inside the `hbbs` container's network namespace, `netbird-server` is unreachable and `169.254.169.254` answers nothing; `docker stats` under a synthetic registration load shows the control plane still scheduled |
-| **P4. CT 102 headroom** (owner-only) | the Proxmox config for CT 102: `cores`, `memory`, `rootfs` size | none | the Proxmox API reads back `cores 2`, `memory 1024` and a 4 GB rootfs, and the container's existing services are still answering on 21114 through 21117 over Tailscale afterwards |
-| **P5. The public relay unit** (owner-only) | a second `hbbr` systemd unit on CT 102, its own working directory, `blocklist.txt`, `blacklist.txt`, `-p 21127`, LabDesk's public key, the `CPUQuota`, `MemoryMax`, `IOWeight` and `Nice` settings | P4, P8 | `ss -tulnH` inside CT 102 shows 21127 and 21129 listening beside the untouched 21114 to 21119; `printf 'tb' \| nc 127.0.0.1 21127` reads back the configured total; the private `hbbs` and `hbbr` still answer over Tailscale; `systemctl stop` on the public unit returns the box to the measurement in section 5.2 |
+| **P4. CT 102 headroom** (owner-only) | the Proxmox config for CT 102: `cores`, `memory`, `rootfs` size | none | the Proxmox API reads back `cores 2`, `memory 1024` and a 4 GB rootfs, and the incumbent's services are still answering on 21114 through 21117 over Tailscale afterwards, because this package runs before the fleet has moved |
+| **P5. LabDesk's relay on CT 102** (owner-only) | the `hbbr` systemd unit on CT 102, its working directory, `blocklist.txt`, `blacklist.txt`, `-p 21117`, LabDesk's public key, and the container's outbound firewall rule | P4, P8, P21 | `ss -tulnH` inside CT 102 shows 21117 and nothing from the incumbent; `printf 'tb' \| nc 127.0.0.1 21117` reads back the configured total; a forced-relay session between two converted machines completes through it; `systemctl stop` takes the relay off in one step and clients fall back to hole punching |
 | **P6. Bandwidth caps from a measurement** (owner-only) | the public relay unit's `TOTAL_BANDWIDTH`, `SINGLE_BANDWIDTH`, `LIMIT_SPEED`, `DOWNGRADE_START_CHECK` | P5 | the home connection's upstream is measured first and the number recorded; the console reads back a total at no more than a third of it; a scripted transfer is capped at the configured single |
-| **P7. The router forward and DNS** (owner-only) | one port forward for TCP 21127 on the home router, the `relay.lab-desk.net` `A` record with the proxy off, the dynamic update for it | P5 | from outside, TCP 21127 on `relay.lab-desk.net` answers and 21114 through 21119 and 443 are still closed, which is the same probe section 5.2 ran and is the before and after pair; the dynamic updater is proven by changing the record by hand and watching it be corrected |
+| **P7. The router forward and DNS** (owner-only) | one port forward for TCP 21117 on the home router, the `relay.lab-desk.net` `A` record with the proxy off, the dynamic update for it | P5, P6 | from outside, TCP 21117 on `relay.lab-desk.net` answers and 21114, 21115, 21116, 21118, 21119 and 443 are still closed, which is the same probe section 5.2 ran and is the before and after pair; the dynamic updater is proven by changing the record by hand and watching it be corrected |
 | **P8. The key ceremony** (owner-only) | `id_ed25519` and `id_ed25519.pub` on the Oracle VM, the public half into the Worker secret and into the relay unit | P1 | the same public key string reads back from the `hbbs` working directory, from the relay unit's environment and from `GET /api/client/server`, and the private half exists in exactly one place |
 | **P9. `GET /api/client/server`** | `src/worker/routes/client-api.ts`, `wrangler` secrets `LABDESK_RENDEZVOUS_HOST`, `LABDESK_RELAY_HOST`, `LABDESK_SERVER_KEY` | none | `npx vitest run test/client-server.test.ts`: an unauthenticated call answers 401, an expired bearer answers 401, a valid bearer answers the three fields with the relay carrying its non-default port, and the key is absent from every other route's answer |
 | **P10. Client: remove the upstream fallback** | `libs/hbb_common/src/config.rs` (two constants), `src/common.rs` (`get_key`), `src/client.rs` (rows 4, 5, 6 of section 13) | none | `cargo test` in CI, plus a new test asserting that `Config::get_rendezvous_server()` with no option set returns an empty host rather than `rs-ny.rustdesk.com`, and a grep gate in CI that fails the build if `rustdesk.com` appears in `libs/hbb_common/src/config.rs` |
@@ -1100,17 +1221,31 @@ verifier is a CI run.
 | **P17. Rotation runbook** | `docs/LABNET-SERVER.md` (a new section covering both hosts) | P1, P5, P8, P9 | a rehearsed rotation with one test machine: it picks up the new key from `GET /api/client/server`, and the switch on `hbbs` and on the public relay unit is done and read back |
 | **P18. The migration runbook** | `docs/LABNET-SERVER.md` (the relay migration section) | P5, P7 | a dry run on paper against the real record and the real `-r` flag, reviewed against section 5.4; the runbook is what the owner follows when the dedicated host exists |
 | **P19. Documentation** | `docs/CONSOLE.md`, `docs/SECURITY-POSTURE.md`, `README.md`, `install.ps1` and `install.sh` help text | P10, P12 | a documentation pass that reads every changed sentence against the code it describes, in the same commit as the change |
+| **P20. The fleet cutover** (owner-only) | no files; the configuration of every machine currently on the incumbent | P1, P8, P9, P11 | the machine list is built first, with each machine's out-of-band path recorded beside it; then each machine is confirmed online on the new rendezvous before the next is touched, and a forced-relay session to it completes; the incumbent is left running throughout, and the package is done when nothing live is registered on it |
+| **P21. Decommission the incumbent** (owner-only) | the `rustdesk-api`, `rustdesk-hbbs` and `rustdesk-hbbr` units on CT 102 and their data directory | P20 | the unit names and data directory path are established first, since section 5.6 marks both unverified; then, from the workstation, 21114, 21115, 21116 and 21117 no longer answer at `100.71.21.102`; the three units read `disabled`; and the data directory, including the incumbent's `id_ed25519` pair, is archived off the container before anything is deleted |
 
 **Parallelism.** P1, P4, P9, P10 and P15 start immediately. P2 and P3 follow P1. P8 follows P1 and
-feeds P5 and P9. P5 needs P4 and P8, P6 and P7 follow P5. P11 needs P9 and P10. P12 needs P10. P13
-needs P9, and P14 needs P13. P17 and P18 come last because they document what the others built.
+feeds P9 and P20. P11 needs P9 and P10. P12 needs P10. P13 needs P9, and P14 needs P13. P17 and
+P18 come last because they document what the others built.
 
-**Owner-only.** P1 through P8 touch the Oracle tenancy, the Proxmox node, the container the owner's
-own service runs in, the home router and public DNS. P14's publication is a new public repository
-under the owner's account, and the AGPL obligation in section 8.2 makes publication part of
-shipping it rather than optional. The key ceremony in P8 is owner-only for the same reason the
-NetBird service token was. **Nothing in this plan is deployed to either host by an agent**, and
-P5 in particular touches a container the owner's machines depend on today.
+**The one serial chain, and it is the important one.** P1 and P8, then P9 and P11 so that a
+machine can configure itself by signing in, then P20 to move the fleet, then P21 to remove the
+incumbent, then P5, P6 and P7 to put LabDesk's relay on the port the incumbent has just given up.
+Nothing in that chain may be reordered, because each step is what makes the next one safe: the
+new server exists before anything moves, the fleet has left before anything is removed, and the
+port is free before anything binds it.
+
+**Owner-only.** P1 through P8, P20 and P21 touch the Oracle tenancy, the Proxmox node, the
+container the owner's own server runs on, the configuration of the owner's own machines, the home
+router and public DNS. P14's publication is a new public repository under the owner's account, and
+the AGPL obligation in section 8.2 makes publication part of shipping it rather than optional. The
+key ceremony in P8 is owner-only for the same reason the NetBird service token was.
+
+**Nothing in this plan is deployed to either host by an agent.** P20 and P21 are the sharpest
+case: P20 changes the configuration of machines the owner reaches through the server being
+replaced, and P21 removes a server those machines used that morning. Both are run by the owner,
+in the order section 5.5 sets, with the incumbent left running until the last machine has left
+it.
 
 ---
 
@@ -1149,19 +1284,24 @@ P5 in particular touches a container the owner's machines depend on today.
    the mitigation.
 8. **Making labnet the default changes what the product does without being asked.** Section 10.2
    flags it as an owner decision rather than deciding it.
-9. **The public relay shares a container with a service the owner depends on daily.** Section 12.2
-   gives it a forwarded port of its own, a scheduler priority and separate state, and says plainly
-   that none of those is a boundary. The first time the public relay is busy is the first time
-   anyone learns what it does to the owner's own remote access, and that is a bad way to learn it.
-   The mitigation is P6's measurement before P7's forward, and the one command retreat.
-10. **A domestic uplink is a worse place for a relay than a cloud host, in every way except cost.**
+9. **The cutover is the riskiest thing in this plan, and it is the owner's to run.** Every machine
+   has to leave a server it is reached through, one at a time, and a machine that does not come
+   back on the new server is gone unless it has another path. Section 5.5 orders it so that the
+   incumbent is still running throughout, and names the timed rollback for machines with no
+   tailnet and no labnet. The residual risk is a machine nobody remembered had no other path.
+10. **Converting CT 102 removes the owner's own fallback.** Until now the owner had a private
+    RustDesk server that was nobody else's business. Afterwards the owner is a user of the public
+    service, sharing its uplink, its caps and its outages with strangers. That is what the owner
+    asked for, and it is worth writing down that it is a real loss of independence rather than a
+    tidy-up. The mitigation is P6's measurement before P7's forward, and the one command retreat.
+11. **A domestic uplink is a worse place for a relay than a cloud host, in every way except cost.**
     Asymmetric bandwidth, a consumer NAT table, a possible data cap, terms that may forbid it, and
     an address that changes. The plan sets caps and a dynamic DNS update against those, but the
     honest position is that this arrangement is a stopgap the owner has already scheduled a
     migration away from.
-11. **Publishing the home address in DNS is not reversible in the way a config change is.** Once
+12. **Publishing the home address in DNS is not reversible in the way a config change is.** Once
     `relay.lab-desk.net` has pointed at it, that association is in passive DNS history for good.
-12. **The Oracle VM now carries two of the three legs.** The rendezvous and labnet's whole control
+13. **The Oracle VM now carries two of the three legs.** The rendezvous and labnet's whole control
     plane are on one box, so the split improved the relay's failure independence and left the more
     concentrated failure exactly where it was (section 11.4).
 
@@ -1190,10 +1330,17 @@ P5 in particular touches a container the owner's machines depend on today.
   upstream one.
 * Whether CT 102 is in the Proxmox node's backup schedule. It is about to become harder to rebuild
   than it is today (section 12.3).
-* The public key of the private RustDesk server already on CT 102. The vault records one as of
-  2026-04-24 with its own unverified note, and this session held no shell in the container to
-  check it. It does not matter to this plan, because the public relay carries LabDesk's key and
-  never the private server's, but it is the sort of thing a reader will assume was checked.
+* The exact systemd unit names on CT 102 and the path of the incumbent's data directory. This
+  session held no shell in the container: the ports were probed from outside and the service
+  names come from the vault's record of the community-scripts install. Establishing both is the
+  first step of the decommissioning package rather than something it may assume.
+* How many machines are on the incumbent, and which of them have a tailnet or labnet path. Only
+  this workstation's configuration was read. The cutover in section 5.5 cannot be scheduled until
+  that list exists, and building it is the first step of P20.
+* The incumbent's public key is **not** in this list any more: it was read from this
+  workstation's live configuration on 2026-09-05 and matches what the vault recorded on
+  2026-04-24, so the vault's value is confirmed. Its private half is on CT 102 and was not
+  inspected.
 * The node's free memory as reported here (62.1 GB total, 19.4 GB used) differs from the figure
   this plan was handed (66.7 GB with 16.3 GB free), which matches the node's root filesystem
   instead (66.4 GB with 18.2 GB used). The readings in section 5.2 are this session's own, taken
