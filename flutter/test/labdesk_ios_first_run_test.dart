@@ -59,7 +59,7 @@ void main() {
         onSkip: () {},
       )));
 
-      expect(find.textContaining('built into the app'), findsOneWidget);
+      expect(find.textContaining('built in'), findsOneWidget);
     });
 
     testWidgets('with a server configured it names that server', (tester) async {
@@ -72,7 +72,7 @@ void main() {
 
       expect(find.textContaining('labnet.lab-desk.net'), findsOneWidget);
       expect(
-        find.textContaining('built into the app'),
+        find.textContaining('built in'),
         findsNothing,
         reason: 'a configured server is not the default and must not read as one',
       );

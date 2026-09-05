@@ -107,7 +107,7 @@ class FirstRunView extends StatelessWidget {
   String _currentServerLine() {
     final server = configuredServer.trim();
     if (server.isEmpty) {
-      return 'No server is set, so this app uses the one built into the app.';
+      return 'No server is set, so LabDesk uses the one built in.';
     }
     return 'This app is set to $server.';
   }
