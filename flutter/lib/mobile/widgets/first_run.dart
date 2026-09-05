@@ -81,7 +81,7 @@ class FirstRunView extends StatelessWidget {
               const SizedBox(height: 12),
               OutlinedButton(
                 onPressed: onAddProfile,
-                child: const Text('Use a server I run'),
+                child: const Text('Use your own server'),
               ),
               const SizedBox(height: 16),
               TextButton(
@@ -101,9 +101,9 @@ class FirstRunView extends StatelessWidget {
   String _situation() {
     final server = configuredServer.trim();
     if (server.isEmpty) {
-      return 'Your machines connect through a server. Until you choose one, '
-          'LabDesk falls back to a server built into the app, so your '
-          'connections would go through one you did not pick.';
+      return 'Your machines connect through a server, which relays every '
+          'session between them and this phone. Until you pick one, LabDesk '
+          'uses a public server you have not chosen.';
     }
     return 'Your machines connect through a server. This app is currently '
         'set to use $server.';

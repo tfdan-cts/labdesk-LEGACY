@@ -139,8 +139,11 @@ class _MachineTile extends StatelessWidget {
     return ListTile(
       onTap: () => onConnect(machine.id),
       leading: _StatusDot(dot: dot),
+      // Two lines, because a truncated name is a machine an operator cannot
+      // tell from another one, and this row is a one-tap connect. The width
+      // beside it was going spare.
       title: Text(machine.displayName,
-          maxLines: 1, overflow: TextOverflow.ellipsis),
+          maxLines: 2, overflow: TextOverflow.ellipsis),
       subtitle: Text(
         _subtitle(),
         maxLines: 1,
@@ -173,7 +176,9 @@ class _MachineTile extends StatelessWidget {
     // last seen, and rendering a dash there would only invite reading it as a
     // time. It is left out entirely.
     if (machine.lastSeenOnline == null) return machine.id;
-    return '${machine.id}  .  Seen ${machine.sinceSeen(now: now)} ago';
+    // A middle dot, not a full stop: a period after an identifier reads as the
+    // end of a sentence and makes the identifier itself look truncated.
+    return '${machine.id}  ·  Seen ${machine.sinceSeen(now: now)} ago';
   }
 }
 
@@ -191,10 +196,18 @@ String _word(LabDeskDot dot) => switch (dot) {
 /// row. Colouring both means the state survives a glance.
 Color _dotColour(BuildContext context, LabDeskDot dot) {
   final theme = Theme.of(context);
+  final dark = theme.brightness == Brightness.dark;
   return switch (dot) {
-    LabDeskDot.online => Colors.green.shade600,
+    LabDeskDot.online => dark ? Colors.green.shade400 : Colors.green.shade700,
     LabDeskDot.offline => theme.colorScheme.error,
-    LabDeskDot.checking => Colors.amber.shade700,
+    // Amber has to change with the background rather than stay one value.
+    // Measured on the rendered image, amber 700 text came out at roughly two
+    // to one against the light surface, which is the exact "controls you
+    // cannot see" complaint the bar was written against. The dark amber below
+    // measures about five and a half to one on light; on dark the light amber
+    // is the one that carries.
+    LabDeskDot.checking =>
+      dark ? Colors.amber.shade300 : const Color(0xFF8A5A00),
     LabDeskDot.unknown =>
       theme.textTheme.bodySmall?.color?.withOpacity(0.6) ?? Colors.grey,
   };

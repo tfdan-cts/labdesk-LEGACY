@@ -56,6 +56,28 @@ Future<void> _loadRoboto() async {
   }
 }
 
+/// The machine list never appears on its own: the phone's home page wraps it in
+/// an app bar and a tab bar. Rendering it bare produced critiques about a
+/// missing title and a row under the notch, which are the harness's fault and
+/// not the screen's. The frame is included so what is judged is what an
+/// operator sees.
+Widget _inHomePage(Widget child) => Scaffold(
+      appBar: AppBar(title: const Text('LabDesk'), centerTitle: true),
+      body: child,
+      bottomNavigationBar: BottomNavigationBar(
+        currentIndex: 1,
+        type: BottomNavigationBarType.fixed,
+        items: const [
+          BottomNavigationBarItem(
+              icon: Icon(Icons.connected_tv), label: 'Connection'),
+          BottomNavigationBarItem(
+              icon: Icon(Icons.devices_other), label: 'Machines'),
+          BottomNavigationBarItem(
+              icon: Icon(Icons.settings), label: 'Settings'),
+        ],
+      ),
+    );
+
 Widget _frame(Widget child, {required Brightness brightness}) => MaterialApp(
       debugShowCheckedModeBanner: false,
       theme: ThemeData(
@@ -108,7 +130,7 @@ void main() {
         status: LabDeskPeerStatus.online,
         lastSeenOnline: now,
         lastChecked: now),
-    _row('4',
+    _row('486201933',
         hostname: 'front-desk',
         status: LabDeskPeerStatus.offline,
         lastSeenOnline: now.subtract(const Duration(hours: 3)),
@@ -141,13 +163,13 @@ void main() {
   testWidgets('machine list, light', (tester) async {
     await shoot(
       tester,
-      MachineListView(
+      _inHomePage(MachineListView(
         machines: machines,
         onConnect: (_) {},
-        savedPasswords: const {'1180573903', '4'},
+        savedPasswords: const {'1180573903', '486201933'},
         checking: const {'820104412'},
         now: now,
-      ),
+      )),
       'machine-list-light',
     );
   }, skip: !_enabled);
@@ -155,13 +177,13 @@ void main() {
   testWidgets('machine list, dark', (tester) async {
     await shoot(
       tester,
-      MachineListView(
+      _inHomePage(MachineListView(
         machines: machines,
         onConnect: (_) {},
-        savedPasswords: const {'1180573903', '4'},
+        savedPasswords: const {'1180573903', '486201933'},
         checking: const {'820104412'},
         now: now,
-      ),
+      )),
       'machine-list-dark',
       brightness: Brightness.dark,
     );
@@ -170,12 +192,12 @@ void main() {
   testWidgets('machine list with nothing in it', (tester) async {
     await shoot(
       tester,
-      MachineListView(
+      _inHomePage(MachineListView(
         machines: const [],
         onConnect: (_) {},
         onConnectToFirstMachine: () {},
         now: now,
-      ),
+      )),
       'machine-list-empty',
     );
   }, skip: !_enabled);
