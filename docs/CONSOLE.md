@@ -382,8 +382,9 @@ book routes. What the console has no surface for is managing the organization. C
   on the web console of the `labdesk-site` repository, which since the evening of 2026-09-05 is
   eight pages LIVE in production: `/fleet`, `/machine/:id`, `/people`, `/enrol`, `/rules`,
   `/jobs`, `/alerts` and `/updates`, beside the `/org` page that creates the organization and its
-  fleets, and `/account` and `/accept-invitation`. Site `dev` is `2960665` and Worker version
-  `6203a2e6` has served them since 00:18Z. That is where a person is
+  fleets, and `/account` and `/accept-invitation`. The merge that brought them was `2960665` and
+  its build put version `6203a2e6` in production at 2026-09-06T00:18:03Z; every later commit to
+  `dev` deploys a newer one, so read the live version from the dashboard. That is where a person is
   invited, a role is changed, a job is approved and an alert is acknowledged. This client spends
   a token and lists the organization's machines; it has no page that creates a fleet or changes a
   role. The console's

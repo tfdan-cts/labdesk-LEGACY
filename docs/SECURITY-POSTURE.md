@@ -317,8 +317,9 @@ either, so not even a hand-crafted request with an owner cookie can read back a
 CPU, memory or disk figure.
 
 **15. There is no web operator console.** CLOSED 2026-09-05, kept for the
-record. The console is live in production: site `dev` `2960665`, Workers Builds
-`3666a6f2`, Worker version `6203a2e6` serving since 00:18:03Z. `/fleet`,
+record. The console is live in production: the merge `2960665` and its build
+`3666a6f2` put version `6203a2e6` in production at 2026-09-06T00:18:03Z, and
+later commits to `dev` deploy newer versions. `/fleet`,
 `/machine/:id`, `/people`, `/enrol`, `/rules`, `/jobs`, `/alerts` and
 `/updates` sit beside `/org`, `/account` and `/accept-invitation`, each fed by
 its own route, with `routes/jobs.ts` and `routes/rules.ts` behind them and an
