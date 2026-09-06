@@ -44,6 +44,7 @@ class OverlaySession {
   final _grants = <String, ({List<SessionGrant> grants, bool seenOpen})>{};
   final _preparing = <String>{};
   final _pendingReleases = <String>{};
+  int _generation = 0;
 
   String lastError = '';
   OverlayLinkType lastLink = OverlayLinkType.unknown;
@@ -63,11 +64,31 @@ class OverlaySession {
     }
     SessionGrant? grant;
     var prepared = false;
+    final generation = _generation;
+    bool cancelled() {
+      if (generation == _generation) return false;
+      lastError = 'Labnet connection cancelled.';
+      return true;
+    }
+
+    final elapsed = Stopwatch()..start();
+    Duration remaining() => readyTimeout - elapsed.elapsed;
     lastError = '';
     lastStatus = null;
     lastLink = OverlayLinkType.unknown;
     try {
-      grant = await broker.session(peerId);
+      var creationTimedOut = false;
+      final creating = broker.session(peerId).then((created) async {
+        // Creation changes server state. Retain ownership of a late answer
+        // so timing out the caller cannot abandon the returned grant.
+        if (creationTimedOut) await _endGrant(created.id);
+        return created;
+      });
+      grant = await creating.timeout(remaining(), onTimeout: () {
+        creationTimedOut = true;
+        throw TimeoutException('Labnet session creation timed out');
+      });
+      if (cancelled()) return false;
       if (grant.ticket.isEmpty ||
           grant.id.isEmpty ||
           grant.targetIdPk.isEmpty) {
@@ -76,17 +97,18 @@ class OverlaySession {
         return false;
       }
       final ip = bareIp(grant.targetAddr.split(':').first);
-      final elapsed = Stopwatch()..start();
-      Duration remaining() => readyTimeout - elapsed.elapsed;
       var ready = false;
       var ticketReady = false;
       for (var i = 0; i < readyTimeout.inSeconds; i++) {
         if (i > 0) {
           await _sleep(const Duration(seconds: 1)).timeout(remaining());
+          if (cancelled()) return false;
         }
         final status = lastStatus = await daemon.status().timeout(remaining());
+        if (cancelled()) return false;
         final peer = status.peerAt(ip);
         ticketReady = await broker.sessionReady(grant.id).timeout(remaining());
+        if (cancelled()) return false;
         if (status.isUp && (peer?.connected ?? false) && ticketReady) {
           lastLink = peer!.link;
           ready = true;
@@ -102,9 +124,13 @@ class OverlaySession {
         return false;
       }
       await setOption('$kOverlayAddrOption$peerId', grant.targetAddr);
+      if (cancelled()) return false;
       await setOption('$kOverlayPkOption$peerId', grant.targetIdPk);
+      if (cancelled()) return false;
       await setOption('$kOverlayTicketOption$peerId', grant.ticket);
+      if (cancelled()) return false;
       await setOption('$kOverlayRequiredOption$peerId', 'Y');
+      if (cancelled()) return false;
       final previous = _grants[peerId];
       _grants[peerId] = (
         grants: [...?previous?.grants, grant],
@@ -198,6 +224,7 @@ class OverlaySession {
   }
 
   Future<void> releaseAll() async {
+    _generation++;
     for (final peerId in _grants.keys.toList()) {
       await release(peerId);
     }

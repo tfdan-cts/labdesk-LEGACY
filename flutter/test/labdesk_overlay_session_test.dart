@@ -75,6 +75,91 @@ class _World {
 }
 
 void main() {
+  for (final stage in [
+    'broker',
+    'readiness',
+    'addr',
+    'pk',
+    'ticket',
+    'required'
+  ]) {
+    test('disable cancels preparation during $stage and releases its grant',
+        () async {
+      final w = _World();
+      final entered = Completer<void>();
+      final resume = Completer<void>();
+      final option = {
+        'addr': kOverlayAddrOption,
+        'pk': kOverlayPkOption,
+        'ticket': kOverlayTicketOption,
+        'required': kOverlayRequiredOption,
+      }[stage];
+      final session = OverlaySession(
+        broker: OverlayBroker(
+          baseUrl: 'https://lab-desk.net',
+          token: () => 't',
+          http: (method, url, headers, body) async {
+            if ((stage == 'broker' && method == 'POST') ||
+                (stage == 'readiness' && url.path.endsWith('/ready'))) {
+              entered.complete();
+              await resume.future;
+            }
+            return w.http(method, url, headers, body);
+          },
+        ),
+        daemon: OverlayDaemon(call: w.call),
+        setOption: (key, value) async {
+          if (option != null && key == '${option}1' && value.isNotEmpty) {
+            entered.complete();
+            await resume.future;
+          }
+          w.options[key] = value;
+        },
+      );
+      final preparing = session.prepare('1');
+      await entered.future;
+      await session.releaseAll();
+      resume.complete();
+      expect(await preparing, isFalse);
+      expect(w.options.values, everyElement(isEmpty));
+      expect(session.hasGrants, isFalse);
+      expect(w.log, contains('broker DELETE /console/overlay/session/s1'));
+    });
+  }
+
+  test('session creation times out and releases a late minted grant', () async {
+    final w = _World();
+    final minted = Completer<(int, String)>();
+    final released = Completer<void>();
+    final session = OverlaySession(
+      broker: OverlayBroker(
+        baseUrl: 'https://lab-desk.net',
+        token: () => 't',
+        http: (method, url, headers, body) async {
+          if (method == 'POST') return minted.future;
+          final answer = await w.http(method, url, headers, body);
+          if (method == 'DELETE') released.complete();
+          return answer;
+        },
+      ),
+      daemon: OverlayDaemon(call: w.call),
+      setOption: (key, value) async => w.options[key] = value,
+      readyTimeout: const Duration(milliseconds: 50),
+    );
+    expect(await session.prepare('1').timeout(const Duration(seconds: 1)),
+        isFalse);
+    expect(session.lastError, contains('timed out'));
+    minted.complete((
+      200,
+      '{"id":"late","targetAddr":"100.64.0.9:21118","targetIdPk":"pk",'
+          '"ticket":{"secret":"secret"}}'
+    ));
+    await released.future.timeout(const Duration(seconds: 1));
+    expect(session.hasGrants, isFalse);
+    expect(w.options.values, everyElement(isEmpty));
+    expect(w.log, contains('broker DELETE /console/overlay/session/late'));
+  });
+
   test('a hung target readiness read obeys the wall-clock readiness budget',
       () async {
     final w = _World()..waitingReady = Completer<(int, String)>();

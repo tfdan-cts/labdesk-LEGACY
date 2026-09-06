@@ -117,6 +117,8 @@ class _LabDeskConsolePageState extends State<LabDeskConsolePage> {
   late final OverlaySession _overlay;
   var _labnet = LabnetCardState.off;
   bool _preparingConnection = false;
+  int _connectionGeneration = 0;
+  bool _disablingLabnet = false;
   final _windowPeerIds = <int, List<String>>{};
   var _inbox = LabnetInbox.empty;
 
@@ -1595,19 +1597,27 @@ class _LabDeskConsolePageState extends State<LabDeskConsolePage> {
   }
 
   Future<void> _disableLabnet() async {
-    if (_labnet.phase == LabnetPhase.working) return;
-    await _enrolment.disable();
-    await _overlay.releaseAll();
-    // Every per-peer hint the session service wrote goes with the labnet, or
-    // the next connect to each of those peers dials a dead address first.
-    final opts = jsonDecode(bind.mainGetOptionsSync()) as Map<String, dynamic>;
-    for (final k in opts.keys) {
-      if (k.startsWith(kOverlayAddrOption) || k.startsWith(kOverlayPkOption) ||
-          k.startsWith(kOverlayTicketOption) || k.startsWith(kOverlayRequiredOption)) {
-        await bind.mainSetOption(key: k, value: '');
+    if (_labnet.phase == LabnetPhase.working || _disablingLabnet) return;
+    _disablingLabnet = true;
+    _connectionGeneration++;
+    try {
+      // Invalidate preparation before the first shutdown await.
+      await Future.wait([_overlay.releaseAll(), _enrolment.disable()]);
+      // Every per-peer hint the session service wrote goes with the labnet, or
+      // the next connect to each of those peers dials a dead address first.
+      final opts = jsonDecode(bind.mainGetOptionsSync()) as Map<String, dynamic>;
+      for (final k in opts.keys) {
+        if (k.startsWith(kOverlayAddrOption) ||
+            k.startsWith(kOverlayPkOption) ||
+            k.startsWith(kOverlayTicketOption) ||
+            k.startsWith(kOverlayRequiredOption)) {
+          await bind.mainSetOption(key: k, value: '');
+        }
       }
+      await _pollInbox();
+    } finally {
+      _disablingLabnet = false;
     }
-    await _pollInbox();
   }
 
   /// Every way the console opens a session goes through here. With the direct
@@ -1615,16 +1625,22 @@ class _LabDeskConsolePageState extends State<LabDeskConsolePage> {
   /// before the client dials; without it, or if anything short of that
   /// happens, the session goes the way it always has.
   Future<String?> _prepareManagedLink(String id) async {
+    final generation = _connectionGeneration;
+    const cancelled = 'Labnet connection cancelled.';
+    if (_disablingLabnet) return cancelled;
     if (_labnet.phase == LabnetPhase.off && !_orgByPeer.containsKey(id)) {
       return null;
     }
     final state = await _enrolment.refresh();
+    if (generation != _connectionGeneration || !mounted) return cancelled;
     if (state.phase != LabnetPhase.on) {
       return state.detail.isNotEmpty
           ? state.detail
           : 'Turn on Labnet on this machine to use its managed tools.';
     }
-    return await _overlay.prepare(id) ? null : _overlay.lastError;
+    final ready = await _overlay.prepare(id);
+    if (generation != _connectionGeneration || !mounted) return cancelled;
+    return ready ? null : _overlay.lastError;
   }
 
   Future<void> _connectVia(
@@ -1635,13 +1651,15 @@ class _LabDeskConsolePageState extends State<LabDeskConsolePage> {
     bool isTcpTunneling = false,
     bool isRDP = false,
   }) async {
-    if (_preparingConnection) return;
+    if (_preparingConnection || _disablingLabnet) return;
+    final generation = _connectionGeneration;
     _preparingConnection = true;
     try {
       if (_labnet.phase != LabnetPhase.off || _orgByPeer.containsKey(id)) {
         final state = await _enrolment.refresh();
+        if (generation != _connectionGeneration || !mounted) return;
         final ready = state.phase == LabnetPhase.on && await _overlay.prepare(id);
-        if (!mounted) return;
+        if (generation != _connectionGeneration || !mounted) return;
         if (!ready) {
           final detail = state.phase == LabnetPhase.on
               ? _overlay.lastError
@@ -1653,11 +1671,13 @@ class _LabDeskConsolePageState extends State<LabDeskConsolePage> {
             context: context,
             builder: (_) => LabnetConnectionFailure(detail: detail),
           );
-          if (fallback != true) return;
+          if (fallback != true ||
+              generation != _connectionGeneration ||
+              !mounted) return;
           await _overlay.useRustDesk(id);
         }
       }
-      if (!mounted) return;
+      if (generation != _connectionGeneration || !mounted) return;
       await connect(
         context,
         id,
