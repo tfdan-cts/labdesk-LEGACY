@@ -1,0 +1,38 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE policyconfig PUBLIC
+ "-//freedesktop//DTD polkit Policy Configuration 1.0//EN"
+ "http://www.freedesktop.org/software/polkit/policyconfig-1.dtd">
+
+<!--
+  The one privileged action LabDesk asks for on Linux: installing an update.
+
+  pkexec authorises through org.freedesktop.policykit.exec and reads the action
+  id out of the annotation on the program it is about to launch, so this file
+  only means anything because the program it names is labdesk-helper. Naming
+  dpkg or rpm here would change nothing at all, and running them under pkexec
+  directly is authorised as dpkg or rpm, under their annotations, with whatever
+  package the caller supplies. labdesk-helper accepts only a package whose
+  bytes are the ones lab-desk.net publishes for a release it has made public.
+
+  auth_admin rather than yes: an update replaces the binary of a service that
+  runs as root, so it is an administrator's decision even when the machine's
+  own user asks for it. The unattended path does not come through here at all;
+  the root service runs the same helper directly.
+-->
+<policyconfig>
+  <vendor>LabDesk</vendor>
+  <vendor_url>https://lab-desk.net</vendor_url>
+
+  <action id="net.lab-desk.LabDesk.install-update">
+    <description>Install a LabDesk update</description>
+    <message>Authentication is required to install a LabDesk update</message>
+    <icon_name>rustdesk</icon_name>
+    <defaults>
+      <allow_any>auth_admin</allow_any>
+      <allow_inactive>auth_admin</allow_inactive>
+      <allow_active>auth_admin_keep</allow_active>
+    </defaults>
+    <annotate key="org.freedesktop.policykit.exec.path">/usr/share/rustdesk/labdesk-helper</annotate>
+    <annotate key="org.freedesktop.policykit.exec.allow_gui">true</annotate>
+  </action>
+</policyconfig>

@@ -91,6 +91,8 @@ async fn start_hbbs_sync_async() {
     let mut last_sent: Option<Instant> = None;
     let mut info_uploaded = InfoUploaded::default();
     let mut sysinfo_ver = "".to_owned();
+    let mut warned_no_token = false;
+    let mut last_api_error = "".to_owned();
     loop {
         tokio::select! {
             _ = interval.tick() => {
@@ -102,6 +104,21 @@ async fn start_hbbs_sync_async() {
                 }
                 if config::option2bool("stop-service", &Config::get_option("stop-service")) {
                     continue;
+                }
+                // Read the token from the file, not from LOCAL_CONFIG: this loop can run in
+                // the service process, which loaded that cache at boot and never writes to
+                // it, so a sign in that happens later would never be picked up.
+                // Known gap: on Windows and macOS the service runs under another profile, so
+                // the file it reads is not the one the ui process writes and this stays empty.
+                // Carrying the token across that boundary needs src/ipc.rs.
+                let header = api_auth_header(&LocalConfig::get_option_from_file("access_token"));
+                if header.is_empty() {
+                    if !warned_no_token {
+                        log::error!("no usable access_token in this process, every post to {} will be rejected", url);
+                        warned_no_token = true;
+                    }
+                } else {
+                    warned_no_token = false;
                 }
                 let conns = Connection::alive_conns();
                 if info_uploaded.uploaded && (url != info_uploaded.url || id != info_uploaded.id) {
@@ -189,7 +206,7 @@ async fn start_hbbs_sync_async() {
                         let ver = config::Status::get("sysinfo_ver"); // sysinfo_ver is the version of sysinfo on server's side
                         if hash == old_hash {
                             // When the api doesn't exist, Ok("") will be returned in test.
-                            let samever = match crate::post_request(url.replace("heartbeat", "sysinfo_ver"), "".to_owned(), "").await {
+                            let samever = match crate::post_request(url.replace("heartbeat", "sysinfo_ver"), "".to_owned(), &header).await {
                                 Ok(x)  => {
                                     sysinfo_ver = x.clone();
                                     *PRO.lock().unwrap() = true;
@@ -207,7 +224,7 @@ async fn start_hbbs_sync_async() {
                             }
                         }
                     }
-                    match crate::post_request(url.replace("heartbeat", "sysinfo"), v, "").await {
+                    match crate::post_request(url.replace("heartbeat", "sysinfo"), v, &header).await {
                         Ok(x)  => {
                             if x == "SYSINFO_UPDATED" {
                                 info_uploaded = InfoUploaded::uploaded(url.clone(), id.clone(), sys_username);
@@ -220,6 +237,7 @@ async fn start_hbbs_sync_async() {
                             } else if x == "ID_NOT_FOUND" {
                                 info_uploaded.last_uploaded = None; // next heartbeat will upload sysinfo again
                             } else {
+                                log_api_error("sysinfo", &x, &mut last_api_error);
                                 info_uploaded.last_uploaded = Some(Instant::now());
                             }
                         }
@@ -236,12 +254,16 @@ async fn start_hbbs_sync_async() {
                 v["id"] = json!(id);
                 v["uuid"] = json!(crate::encode64(hbb_common::get_uuid()));
                 v["ver"] = json!(hbb_common::get_version_number(crate::VERSION));
+                // labnet: the id public key, so a direct session to this machine
+                // can run the same key exchange the rendezvous path does.
+                v["pk"] = json!(crate::encode64(Config::get_key_pair().1));
                 if !conns.is_empty() {
                     v["conns"] = json!(conns);
                 }
                 let modified_at = LocalConfig::get_option("strategy_timestamp").parse::<i64>().unwrap_or(0);
                 v["modified_at"] = json!(modified_at);
-                if let Ok(s) = crate::post_request(url.clone(), v.to_string(), "").await {
+                if let Ok(s) = crate::post_request(url.clone(), v.to_string(), &header).await {
+                    log_api_error("heartbeat", &s, &mut last_api_error);
                     if let Ok(mut rsp) = serde_json::from_str::<HashMap::<&str, Value>>(&s) {
                         if rsp.remove("sysinfo").is_some() {
                             info_uploaded.uploaded = false;
@@ -284,12 +306,90 @@ fn heartbeat_url() -> String {
     format!("{}/api/heartbeat", url)
 }
 
+// The account bearer the client already holds. Every post in the loop above
+// goes to our own api server, which rejects an unauthenticated device.
+// post_request_http drops the whole header unless it splits into exactly two
+// parts on ": ", so a token carrying that sequence would post unauthenticated
+// without saying so. Return nothing instead and let the caller log it.
+fn api_auth_header(access_token: &str) -> String {
+    if access_token.is_empty() || access_token.contains(": ") {
+        return "".to_owned();
+    }
+    "Authorization: Bearer ".to_owned() + access_token
+}
+
+// post_request hands a rejected post back as Ok(body), so an api error is
+// invisible unless it is logged here. Only a change is logged, otherwise a
+// machine with no token would repeat the same line every tick forever.
+fn log_api_error(what: &str, body: &str, last: &mut String) {
+    let err = serde_json::from_str::<Value>(body)
+        .ok()
+        .and_then(|v| v["error"].as_str().map(|x| x.to_owned()))
+        .unwrap_or_default();
+    if err.is_empty() {
+        last.clear();
+        return;
+    }
+    let msg = format!("{} rejected by the api server: {}", what, err);
+    if *last != msg {
+        log::error!("{}", msg);
+        *last = msg;
+    }
+}
+
+// The heartbeat reply carries a strategy the server can push onto this machine,
+// so the reply is a server-to-client config channel. Only the keys below may be
+// written that way. Everything else stays out on purpose, in particular the keys
+// that decide where this machine listens and what address it dials
+// (`direct-server`, `labdesk-direct-bind`, every `labdesk-overlay-` key), the
+// server and crypto keys (`api-server`, `custom-rendezvous-server`,
+// `relay-server`, `ice-servers`, `key`), the peer authentication keys
+// (`verification-method`, `approve-mode`, `whitelist`, `id-whitelist`) and
+// anything that delivers code (`allow-auto-update`).
+const SERVER_SETTABLE_OPTIONS: &[&str] = &[
+    keys::OPTION_ENABLE_KEYBOARD,
+    keys::OPTION_ENABLE_CLIPBOARD,
+    keys::OPTION_ENABLE_FILE_TRANSFER,
+    keys::OPTION_ENABLE_CAMERA,
+    keys::OPTION_ENABLE_TERMINAL,
+    keys::OPTION_TERMINAL_PERSISTENT,
+    keys::OPTION_ENABLE_AUDIO,
+    keys::OPTION_ENABLE_TUNNEL,
+    keys::OPTION_ENABLE_REMOTE_RESTART,
+    keys::OPTION_ENABLE_RECORD_SESSION,
+    keys::OPTION_ENABLE_BLOCK_INPUT,
+    keys::OPTION_ENABLE_PRIVACY_MODE,
+    keys::OPTION_ENABLE_REMOTE_PRINTER,
+    keys::OPTION_ENABLE_LAN_DISCOVERY,
+    keys::OPTION_ALLOW_AUTO_DISCONNECT,
+    keys::OPTION_AUTO_DISCONNECT_TIMEOUT,
+    keys::OPTION_ALLOW_ONLY_CONN_WINDOW_OPEN,
+    keys::OPTION_ALLOW_REMOVE_WALLPAPER,
+];
+
+fn is_server_settable(key: &str) -> bool {
+    SERVER_SETTABLE_OPTIONS.contains(&key)
+}
+
 fn handle_config_options(config_options: HashMap<String, String>) {
     let mut options = Config::get_options();
     let default_settings = config::DEFAULT_SETTINGS.read().unwrap().clone();
+    apply_config_options(&mut options, &config_options, &default_settings);
+    Config::set_options(options);
+}
+
+fn apply_config_options(
+    options: &mut HashMap<String, String>,
+    config_options: &HashMap<String, String>,
+    default_settings: &HashMap<String, String>,
+) {
     config_options
         .iter()
         .map(|(k, v)| {
+            if !is_server_settable(k) {
+                log::warn!("ignore config option not settable by the server: {}", k);
+                return;
+            }
             // Priority: user config > default advanced options.
             // Only when default advanced options are also empty, remove user option (fallback to built-in default);
             // otherwise insert an empty value so user config remains present.
@@ -300,7 +400,6 @@ fn handle_config_options(config_options: HashMap<String, String>) {
             }
         })
         .count();
-    Config::set_options(options);
 }
 
 #[allow(unused)]
@@ -438,5 +537,94 @@ mod tests {
         ]
         .concat();
         assert_eq!(switch_grant_signed_msg("id1", "c1", "1700000000"), expected);
+    }
+}
+
+#[cfg(test)]
+mod config_option_tests {
+    use super::{
+        api_auth_header, apply_config_options, is_server_settable, log_api_error,
+        SERVER_SETTABLE_OPTIONS,
+    };
+    use std::collections::HashMap;
+
+    #[test]
+    fn test_api_auth_header() {
+        assert_eq!(api_auth_header(""), "");
+        assert_eq!(api_auth_header("tok1"), "Authorization: Bearer tok1");
+        // post_request_http keeps the header only when it splits into exactly
+        // two parts on ": ", so a token holding that sequence has to be refused
+        // rather than silently dropped on the way out.
+        assert_eq!(api_auth_header("to: k1"), "");
+        let header = api_auth_header("tok1");
+        let parts: Vec<&str> = header.split(": ").collect();
+        assert_eq!(parts, vec!["Authorization", "Bearer tok1"]);
+    }
+
+    #[test]
+    fn test_log_api_error_reports_a_change_and_clears_on_success() {
+        let mut last = "".to_owned();
+        log_api_error("heartbeat", "{\"error\":\"Unauthorized\"}", &mut last);
+        assert_eq!(last, "heartbeat rejected by the api server: Unauthorized");
+        log_api_error("heartbeat", "{\"error\":\"Unauthorized\"}", &mut last);
+        assert_eq!(last, "heartbeat rejected by the api server: Unauthorized");
+        log_api_error("heartbeat", "{\"modified_at\":1}", &mut last);
+        assert_eq!(last, "");
+        log_api_error("sysinfo", "SYSINFO_UPDATED", &mut last);
+        assert_eq!(last, "");
+    }
+
+    #[test]
+    fn test_network_keys_are_not_server_settable() {
+        for key in [
+            "direct-server",
+            "labdesk-direct-bind",
+            "labdesk-overlay-addr-123456789",
+            "labdesk-overlay-pk-123456789",
+            "api-server",
+            "custom-rendezvous-server",
+            "relay-server",
+            "key",
+            "verification-method",
+            "allow-auto-update",
+        ] {
+            assert!(!is_server_settable(key), "{} must not be settable", key);
+        }
+        for key in SERVER_SETTABLE_OPTIONS {
+            assert!(!key.starts_with("labdesk-overlay-"), "{}", key);
+        }
+        assert!(is_server_settable("enable-keyboard"));
+    }
+
+    #[test]
+    fn test_apply_config_options_ignores_keys_outside_the_whitelist() {
+        let mut options: HashMap<String, String> = HashMap::new();
+        options.insert("labdesk-direct-bind".to_owned(), "127.0.0.1:21118".to_owned());
+        let mut config_options: HashMap<String, String> = HashMap::new();
+        config_options.insert("labdesk-direct-bind".to_owned(), "0.0.0.0:21118".to_owned());
+        config_options.insert(
+            "labdesk-overlay-addr-123456789".to_owned(),
+            "10.0.0.1:21118".to_owned(),
+        );
+        config_options.insert("direct-server".to_owned(), "Y".to_owned());
+        config_options.insert("enable-keyboard".to_owned(), "N".to_owned());
+        apply_config_options(&mut options, &config_options, &HashMap::new());
+        assert_eq!(
+            options.get("labdesk-direct-bind").map(|x| x.as_str()),
+            Some("127.0.0.1:21118")
+        );
+        assert_eq!(options.get("labdesk-overlay-addr-123456789"), None);
+        assert_eq!(options.get("direct-server"), None);
+        assert_eq!(options.get("enable-keyboard").map(|x| x.as_str()), Some("N"));
+    }
+
+    #[test]
+    fn test_apply_config_options_removes_a_whitelisted_key_with_no_default() {
+        let mut options: HashMap<String, String> = HashMap::new();
+        options.insert("enable-keyboard".to_owned(), "N".to_owned());
+        let mut config_options: HashMap<String, String> = HashMap::new();
+        config_options.insert("enable-keyboard".to_owned(), "".to_owned());
+        apply_config_options(&mut options, &config_options, &HashMap::new());
+        assert_eq!(options.get("enable-keyboard"), None);
     }
 }

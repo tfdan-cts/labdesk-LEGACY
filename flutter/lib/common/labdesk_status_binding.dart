@@ -1,3 +1,5 @@
+import 'package:get/get.dart';
+
 import 'labdesk_peer_status.dart';
 import '../labdesk/models/reach_sample.dart';
 
@@ -16,6 +18,11 @@ class LabDeskStatusBinding {
   /// interval is a readable strip that covers the recent past without
   /// pretending to be a time series.
   static const historyLength = 12;
+
+  /// Bumped whenever a fold changes what a widget would draw. Widgets read it
+  /// inside an Obx so a per machine state, which the store holds in a plain
+  /// map, still repaints when an answer lands. Nothing else reads it.
+  final RxInt revision = 0.obs;
 
   final Map<String, List<bool>> _history = {};
   final List<ReachSample> _samples = [];
@@ -63,6 +70,7 @@ class LabDeskStatusBinding {
   void beginQuery(Iterable<String> ids, {DateTime? at}) {
     _lastQueryAt = at ?? DateTime.now();
     store.beginQuery(ids);
+    revision.value++;
   }
 
   /// A query that errored or never came back.
@@ -70,7 +78,10 @@ class LabDeskStatusBinding {
   /// Clears the in-flight marker and nothing else. The Rust side reports a
   /// failure rather than an empty online list, so there is no result to apply
   /// and every machine keeps the state it already had.
-  void onQueryFailedOrTimedOut() => store.endQuery();
+  void onQueryFailedOrTimedOut() {
+    store.endQuery();
+    revision.value++;
+  }
 
   /// Fold one online-state event into the store.
   ///
@@ -86,6 +97,7 @@ class LabDeskStatusBinding {
     final down = _split(offlines);
     if (up.isEmpty && down.isEmpty) {
       store.endQuery();
+      revision.value++;
       return;
     }
 
@@ -105,11 +117,13 @@ class LabDeskStatusBinding {
     }
 
     store.endQuery();
+    revision.value++;
   }
 
   void forget(String id) {
     _history.remove(id);
     store.forget(id);
+    revision.value++;
   }
 
   void clear() {

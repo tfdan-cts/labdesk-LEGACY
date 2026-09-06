@@ -17,6 +17,17 @@ on:
       - "appimage/**"
       - "flatpak/**"
 
+# One run per branch. Every push used to start a whole new Full Flutter CI while
+# the previous one was still building macOS, so a branch raced itself for the
+# scarcest runners in the pool and an iOS job could sit behind two of its own
+# superseded builds. The dispatch workflow has carried a concurrency group since
+# two overlapping dispatches cost a release its assets on 2026-09-04; this is the
+# same treatment, and here the older run is cancelled, because a superseded
+# result is not worth a runner.
+concurrency:
+  group: flutter-ci-${{ github.ref }}
+  cancel-in-progress: true
+
 # Read-only on purpose. Nothing here publishes: run-ci passes
 # upload-artifact: false, so the release steps in flutter-build.yml skip
 # themselves. Granting contents: write to a workflow that builds pull request

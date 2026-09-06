@@ -659,6 +659,48 @@ pub fn core_main() -> Option<Vec<String>> {
                 println!("Installation and administrative privileges required!");
             }
             return None;
+        } else if args[0] == "--enrol" {
+            if crate::platform::is_installed() && is_root() {
+                let max = args.len() - 1;
+                let pos = args.iter().position(|x| x == "--token").unwrap_or(max);
+                if pos < max {
+                    match crate::labdesk::identity::enrol(&args[pos + 1], &crate::ipc::get_id()) {
+                        Err(err) => println!("{}", err),
+                        Ok(machine_id) => println!("Enrolled as {}", machine_id),
+                    }
+                } else {
+                    println!("--token is required!");
+                }
+            } else {
+                println!("Installation and administrative privileges required!");
+            }
+            return None;
+        } else if args[0] == "--labdesk-tool" {
+            // One `active_user` catalog entry, run in this session and as this
+            // user (src/labdesk/tools.rs, `run_here`). The daemon launches it
+            // through `run_as_user` for a job whose entry says `active_user`.
+            let code = args
+                .get(1)
+                .map(|id| crate::labdesk::tools::run_here(id))
+                .unwrap_or(2);
+            std::process::exit(code);
+        } else if args[0] == "--disk-health" {
+            // The disk read path against this machine's drives, printed as the
+            // daemon's `disks` member: the field check for src/labdesk/disk/.
+            if is_root() {
+                let disks: Vec<serde_json::Value> = crate::labdesk::disk::gather()
+                    .iter()
+                    .map(crate::labdesk::collector::disk_member)
+                    .collect();
+                println!(
+                    "{}",
+                    serde_json::to_string_pretty(&serde_json::json!({ "disks": disks }))
+                        .unwrap_or_default()
+                );
+            } else {
+                println!("Administrative privileges required!");
+            }
+            return None;
         } else if args[0] == "--deploy" {
             if config::Config::no_register_device() {
                 println!("Cannot deploy an unregistrable device!");
@@ -941,6 +983,7 @@ fn is_user_main_ipc_scope_cli_command(args: &[String]) -> bool {
             | Some("--option")
             | Some("--assign")
             | Some("--deploy")
+            | Some("--enrol")
     )
 }
 
@@ -988,6 +1031,7 @@ mod tests {
             "--option",
             "--assign",
             "--deploy",
+            "--enrol",
         ] {
             assert!(is_user_main_ipc_scope_cli_command(&args(&[command])));
         }

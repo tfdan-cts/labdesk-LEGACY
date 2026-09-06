@@ -17,6 +17,13 @@ on:
 permissions:
   contents: write
 
+# One build at a time. Two dispatches overlapped on 2026-09-04 and every publish
+# step of the older run failed with "Resource not accessible by integration"
+# once the newer one started, leaving a release with one asset.
+concurrency:
+  group: labdesk-dispatch
+  cancel-in-progress: false
+
 jobs:
   run:
     uses: ./.github/workflows/flutter-build.yml

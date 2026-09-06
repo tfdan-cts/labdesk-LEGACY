@@ -22,25 +22,34 @@ typedef ConsolePeer = ({
 /// stores that overlap, so the same machine arrives more than once and is
 /// folded here rather than rendered twice.
 ///
-/// Status is read from the store and never inferred. A machine no response has
-/// named is unknown, which is a different thing from being down, and it carries
-/// no timestamps at all rather than a zero that would read as "just now".
+/// Status is read and never inferred. For a machine the organization has
+/// enrolled it comes from lab-desk.net, which knows when the machine last sent
+/// an uplink; for every other peer it is the client's own rendezvous poll. A
+/// machine no answer has named is unknown, which is a different thing from
+/// being down, and it carries no timestamps at all rather than a zero that
+/// would read as "just now".
 List<MachineRow> buildMachineRows({
   required Iterable<ConsolePeer> peers,
   required LabDeskPeerStatusStore store,
   required List<bool?> Function(String id) historyOf,
   String? Function(String id)? groupOf,
+  LabDeskPeerStatus? Function(String id)? serverStatusOf,
 }) {
   final rows = <String, MachineRow>{};
   for (final p in peers) {
     if (p.id.isEmpty) continue;
     if (rows.containsKey(p.id)) continue;
     final state = store.stateOf(p.id);
+    // A machine the organization has enrolled is reachable or not by the one
+    // rule every console uses: two flushes since its last uplink. The local
+    // rendezvous poll answers for the peers lab-desk.net has never been told
+    // about, which is what it was ever able to speak for.
+    final status = serverStatusOf?.call(p.id) ?? state.status;
     rows[p.id] = MachineRow(
       id: p.id,
       hostname: p.hostname,
       platform: p.platform,
-      status: state.status,
+      status: status,
       alias: p.alias.isEmpty ? null : p.alias,
       username: p.username.isEmpty ? null : p.username,
       group: groupOf?.call(p.id),

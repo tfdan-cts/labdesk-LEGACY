@@ -1,3 +1,5 @@
+import 'machine_state.dart';
+
 /// What LabDesk can actually report about a machine, and how it got it.
 ///
 /// The distinction matters more than the numbers. Some of this is known for
@@ -12,8 +14,10 @@ enum MetricSource {
   /// Measured on the live connection: round trip, throughput, codec.
   session,
 
-  /// Read from the remote machine over the terminal channel while connected.
-  remote,
+  /// Read from the machine's own collector, through lab-desk.net. The agent
+  /// takes these readings on its own flush whether or not anybody is looking,
+  /// so they exist for a machine nobody has a session to.
+  collector,
 
   /// Not available. Rendered as such, never as zero.
   unavailable,
@@ -59,6 +63,7 @@ class MachineHealth {
     this.identity = const [],
     this.session = const [],
     this.remote = const [],
+    this.state,
     this.history,
   });
 
@@ -72,8 +77,13 @@ class MachineHealth {
   final List<Metric> session;
   final List<Metric> remote;
 
-  /// What the console has read of this machine over time this session, when
-  /// monitoring is on. Null when there is no history to draw.
+  /// The hot row lab-desk.net holds, when the machine is one it knows. Null for
+  /// a peer the server has never been told about, which is what the screens
+  /// say rather than drawing an unenrolled machine as one with no readings.
+  final MachineState? state;
+
+  /// What lab-desk.net has stored of this machine over time, plus whatever the
+  /// fleet poll has added since. Null when there is no history to draw.
   final MetricHistory? history;
 
   static const empty = MachineHealth(machineId: '', connected: false);
@@ -119,8 +129,9 @@ class MetricPoint {
   final double value;
 }
 
-/// One probe's proportions, stamped with when it came back. Absent readings
-/// stay absent; a probe that failed produces no sample at all.
+/// One uplink's proportions, stamped with when the machine took them. Absent
+/// readings stay absent; an uplink that carried none produces no sample at all
+/// (`MachineState.sampleAt`).
 class MetricSample {
   const MetricSample({required this.at, this.cpu, this.memory, this.disk});
 
@@ -129,23 +140,6 @@ class MetricSample {
   final double? memory;
   final double? disk;
 
-  static MetricSample? fromProbe(Map<String, dynamic>? probe, {required DateTime at}) {
-    final metrics = probe?['metrics'];
-    if (metrics is! List) return null;
-    double? ratioOf(String label) {
-      for (final m in metrics) {
-        if (m is Map && m['label'] == label && m['ratio'] is num) {
-          return (m['ratio'] as num).toDouble();
-        }
-      }
-      return null;
-    }
-
-    final s = MetricSample(
-        at: at, cpu: ratioOf('CPU'), memory: ratioOf('Memory'), disk: ratioOf('Disk'));
-    return s.cpu == null && s.memory == null && s.disk == null ? null : s;
-  }
-
   double? of(MetricKind k) => switch (k) {
         MetricKind.cpu => cpu,
         MetricKind.memory => memory,
@@ -153,11 +147,12 @@ class MetricSample {
       };
 }
 
-/// A bounded run of samples for one machine, kept in memory for the session.
+/// A bounded run of samples for one machine.
 ///
-/// The console has no server retaining anything, so this is honestly all the
-/// history there is: what this console saw while monitoring was on. The cap
-/// at a 30 s cadence is two hours.
+/// Filled from `GET /console/org/machines/:id/metrics`, which is the history
+/// lab-desk.net kept while nobody was looking, and extended by each reading the
+/// fleet poll brings back. The cap holds a day of hourly rows with room for the
+/// raw windows over the last few hours.
 class MetricHistory {
   MetricHistory({this.cap = 240});
 

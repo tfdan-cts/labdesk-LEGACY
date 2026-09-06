@@ -2,6 +2,8 @@ import 'package:bot_toast/bot_toast.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:flutter_hbb/common/labdesk_profiles.dart';
+import 'package:flutter_hbb/common/labdesk_peer_status.dart';
+import 'package:flutter_hbb/common/labdesk_status_binding.dart';
 import 'package:flutter_hbb/common/widgets/dialog.dart';
 import 'package:flutter_hbb/common/widgets/labdesk_groups.dart';
 import 'package:flutter_hbb/consts.dart';
@@ -184,7 +186,7 @@ class _PeerCardState extends State<_PeerCard>
                   child: Column(
                     children: [
                       Row(children: [
-                        getOnline(isPortrait ? 4 : 8, peer.online),
+                        getOnline(isPortrait ? 4 : 8, peer.online, peerId: peer.id),
                         Expanded(
                             child: Text(
                           peer.alias.isEmpty ? formatID(peer.id) : peer.alias,
@@ -365,7 +367,7 @@ class _PeerCardState extends State<_PeerCard>
                     children: [
                       Expanded(
                           child: Row(children: [
-                        getOnline(8, peer.online),
+                        getOnline(8, peer.online, peerId: peer.id),
                         Expanded(
                             child: Text(
                           peer.alias.isEmpty ? formatID(peer.id) : peer.alias,
@@ -1504,20 +1506,45 @@ void _rdpDialog(String id) async {
   });
 }
 
-Widget getOnline(double rightPadding, bool online) {
+/// The status dot beside a machine.
+///
+/// Three states, never two: a machine nobody has asked about is unknown, and
+/// unknown draws as a hollow ring, not as red. Drawing it red tells an
+/// operator a healthy machine is down, which is the whole reason
+/// [LabDeskPeerStatusStore] exists. [peerId] is optional so the inherited call
+/// sites that have no id keep working on the boolean alone.
+Widget getOnline(double rightPadding, bool online, {String? peerId}) {
   return Obx(() {
-    final checking = labdeskStatusChecking.value;
+    labdeskStatus.revision.value;
+    final dot = labdeskDotFor(
+      checking: labdeskStatusChecking.value,
+      status: peerId == null ? null : labdeskStatus.store.stateOf(peerId).status,
+      fallbackOnline: online,
+    );
+    final message = dot == LabDeskDot.online
+        ? 'Online'
+        : dot == LabDeskDot.offline
+            ? 'Offline'
+            : 'Checking';
     return Tooltip(
-        message: translate(
-            checking ? 'Checking' : (online ? 'Online' : 'Offline')),
+        message: translate(message),
         waitDuration: const Duration(seconds: 1),
         child: Padding(
             padding: EdgeInsets.fromLTRB(0, 4, rightPadding, 4),
-            child: CircleAvatar(
-                radius: 3,
-                backgroundColor: checking
-                    ? Colors.amber
-                    : (online ? Colors.green : Colors.redAccent))));
+            child: dot == LabDeskDot.unknown
+                ? Container(
+                    width: 6,
+                    height: 6,
+                    decoration: BoxDecoration(
+                        shape: BoxShape.circle,
+                        border: Border.all(color: Colors.grey, width: 1)))
+                : CircleAvatar(
+                    radius: 3,
+                    backgroundColor: dot == LabDeskDot.checking
+                        ? Colors.amber
+                        : (dot == LabDeskDot.online
+                            ? Colors.green
+                            : Colors.redAccent))));
   });
 }
 

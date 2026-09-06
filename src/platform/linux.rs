@@ -890,6 +890,18 @@ pub fn start_os_service() {
     stop_subprocess();
     start_uinput_service();
 
+    // Telemetry: this process is root (`res/rustdesk.service` sets `User=root`), while
+    // `--server` below is launched through `run_as_user` as the desktop user. The
+    // collector runs here for that reason.
+    crate::labdesk::collector::start();
+    crate::labdesk::selfheal::start();
+
+    // Unattended updates, for the same reason: installing a package is root's
+    // work, and `--server` is the desktop user's process. Until this call
+    // existed src/updater.rs had a windows arm and a macos arm and nothing
+    // else, so a Linux machine received no update at all.
+    crate::updater::start_auto_update_linux();
+
     std::thread::spawn(|| {
         allow_err!(crate::ipc::start(crate::POSTFIX_SERVICE));
     });
@@ -1575,22 +1587,40 @@ pub fn installed_package_kind() -> Option<&'static str> {
     None
 }
 
+/// The program the LabDesk polkit action names, installed by the package into
+/// the bundle directory. Both install paths go through it: the desktop one
+/// under `pkexec`, the unattended one under `systemd-run` as root.
+pub const UPDATE_HELPER: &str = "/usr/share/rustdesk/labdesk-helper";
+
 /// Installs a downloaded LabDesk package with one root prompt (pkexec), then
 /// relaunches the interface. The package's own scripts restart the service.
-pub fn update_to(file: &str) -> ResultType<()> {
+///
+/// This used to be `pkexec dpkg -i <file>`, which authorized as dpkg: pkexec
+/// takes the action id from the polkit annotation on the program it launches,
+/// so that call asked for "run the package manager as root" and, once granted,
+/// installed whatever package it was pointed at. It now launches the helper the
+/// package installs, whose action is `net.lab-desk.LabDesk.install-update` and
+/// which installs only bytes lab-desk.net publishes for a release it has made
+/// public.
+///
+/// `expected_sha256` is the digest the release published for this file. The
+/// helper hashes the copy it makes for itself, which is the check that counts,
+/// because this one runs in a process the caller controls. It is still made:
+/// a download that is already wrong should fail here rather than after an
+/// administrator has been asked for a password.
+pub fn update_to(file: &str, expected_sha256: &str) -> ResultType<()> {
     let path = std::path::Path::new(file);
     if !path.is_file() {
         bail!("update file does not exist: {file}");
     }
-    let kind = match path.extension().and_then(|e| e.to_str()) {
-        Some("deb") => "deb",
-        Some("rpm") => "rpm",
+    match path.extension().and_then(|e| e.to_str()) {
+        Some("deb") | Some("rpm") => {}
         other => bail!("unsupported update package: {:?}", other),
-    };
-    let status = match kind {
-        "deb" => Command::new("pkexec").args(["dpkg", "-i", file]).status()?,
-        _ => Command::new("pkexec").args(["rpm", "-Uvh", "--replacepkgs", file]).status()?,
-    };
+    }
+    crate::updater::verify_downloaded_file(path, expected_sha256)?;
+    let status = Command::new("pkexec")
+        .args([UPDATE_HELPER, "install-update", file])
+        .status()?;
     if !status.success() {
         bail!("package install exited with {status}");
     }
@@ -1602,6 +1632,42 @@ pub fn update_to(file: &str) -> ResultType<()> {
         std::thread::sleep(std::time::Duration::from_millis(800));
         std::process::exit(0);
     });
+    Ok(())
+}
+
+/// Installs a verified package as root with no prompt at all. polkit exists so
+/// a user who is not root can ask for this; the service already is root, so it
+/// runs the same helper directly.
+///
+/// The install cannot be a child of this process. `res/DEBIAN/preinst` stops
+/// rustdesk.service on an upgrade and the unit's `KillMode=mixed` then kills
+/// whatever is left in its cgroup, which would be dpkg part way through
+/// unpacking a package. `systemd-run` puts the helper in a transient unit of
+/// its own, outside this cgroup, so the install outlives the service it is
+/// replacing; `res/DEBIAN/postinst` starts the service again on the new binary.
+///
+/// This returns once the transient unit has been started, so success here means
+/// the install was handed over, not that it finished. How it finished is in the
+/// journal under `labdesk-install-update`, and the installed version is the
+/// answer that matters.
+pub fn install_update_as_root(file: &str) -> ResultType<()> {
+    if !std::path::Path::new(UPDATE_HELPER).is_file() {
+        bail!("no update helper at {UPDATE_HELPER}: this package was built without one, so it cannot install an update");
+    }
+    let status = Command::new("systemd-run")
+        .args([
+            "--collect",
+            "--unit=labdesk-install-update",
+            "--description=LabDesk unattended update",
+            "--",
+            UPDATE_HELPER,
+            "install-update",
+            file,
+        ])
+        .status()?;
+    if !status.success() {
+        bail!("systemd-run refused to start the update helper: {status}");
+    }
     Ok(())
 }
 

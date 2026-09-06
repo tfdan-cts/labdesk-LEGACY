@@ -15,7 +15,13 @@ env:
   # for arm64 linux because official Dart SDK does not work
   FLUTTER_ELINUX_VERSION: "3.16.9"
   TAG_NAME: "nightly"
-  VCPKG_BINARY_SOURCES: "clear;x-gha,readwrite"
+  # vcpkg binary caching: the 'x-gha' backend was removed from vcpkg, so the old
+  # "clear;x-gha,readwrite" expression was rejected at runtime and every port rebuilt from
+  # source on every run. Use vcpkg's files provider pointed at a directory that actions/cache
+  # saves and restores per job (see the "Cache vcpkg binary packages" steps). The triplet is
+  # part of every cache key so one platform's archives can never restore into another
+  # platform's job.
+  VCPKG_BINARY_SOURCES: "clear;files,${{ github.workspace }}/vcpkg-binary-cache,readwrite"
   VCPKG_COMMIT_ID: "120deac3062162151622ca4860575a33844ba10b"
   VERSION: "1.4.9"
   NDK_VERSION: "r26d"
@@ -154,6 +160,15 @@ jobs:
           # pushd flutter/lib; find . -name "*.dart" | xargs -I{} sed -i '' 's/textScaler: TextScaler.linear(\(.*\)),/textScaleFactor: \1,/g' {}; popd;
           pushd flutter && flutter pub get && popd
           ~/.cargo/bin/flutter_rust_bridge_codegen --rust-input ./src/flutter_ffi.rs --dart-output ./flutter/lib/generated_bridge.dart --c-output ./flutter/macos/Runner/bridge_generated.h
+
+      - name: Cache vcpkg binary packages
+        uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+        with:
+          path: ${{ github.workspace }}/vcpkg-binary-cache
+          key: vcpkg-${{ runner.os }}-x64-osx-${{ env.VCPKG_COMMIT_ID }}-${{ hashFiles('vcpkg.json') }}
+          restore-keys: |
+            vcpkg-${{ runner.os }}-x64-osx-${{ env.VCPKG_COMMIT_ID }}-
+            vcpkg-${{ runner.os }}-x64-osx-
 
       - name: Setup vcpkg with Github Actions binary cache
         uses: lukka/run-vcpkg@b1a0dd252f06b9e25b3c022a9a03bd7a427fb6a2 # v11
@@ -315,6 +330,15 @@ jobs:
         with:
           ndk-version: ${{ env.NDK_VERSION }}
           add-to-path: true
+
+      - name: Cache vcpkg binary packages
+        uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+        with:
+          path: ${{ github.workspace }}/vcpkg-binary-cache
+          key: vcpkg-${{ runner.os }}-arm64-android-${{ env.VCPKG_COMMIT_ID }}-${{ hashFiles('vcpkg.json') }}
+          restore-keys: |
+            vcpkg-${{ runner.os }}-arm64-android-${{ env.VCPKG_COMMIT_ID }}-
+            vcpkg-${{ runner.os }}-arm64-android-
 
       - name: Setup vcpkg with Github Actions binary cache
         uses: lukka/run-vcpkg@b1a0dd252f06b9e25b3c022a9a03bd7a427fb6a2 # v11

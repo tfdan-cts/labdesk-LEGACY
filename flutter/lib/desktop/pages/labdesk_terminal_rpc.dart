@@ -2,8 +2,6 @@ import 'dart:async';
 import 'dart:convert';
 
 import 'package:flutter_hbb/desktop/widgets/tabbar_widget.dart';
-import 'package:flutter_hbb/labdesk/services/metrics_collector.dart';
-import 'package:flutter_hbb/labdesk/services/probe_reader.dart';
 import 'package:flutter_hbb/labdesk/services/terminal_text.dart';
 import 'package:flutter_hbb/models/model.dart' show FFI;
 import 'package:flutter_hbb/models/terminal_model.dart';
@@ -21,19 +19,15 @@ import 'terminal_connection_manager.dart';
 class LabDeskTerminalRpc {
   LabDeskTerminalRpc._();
 
-  /// Health probe. Opened and closed per call, because a probe is a one-shot.
-  static const _probeTerminalId = 1000;
-
   /// Command runs. Kept open between calls so a working directory and any
   /// shell state the user built up survive from one command to the next.
   static const _runTerminalId = 1001;
 
-  /// Wide enough that a long line of probe output is not wrapped by the PTY,
-  /// which would split a tagged field across two lines and lose it.
+  /// Wide enough that a long line of command output is not wrapped by the PTY,
+  /// which would split a value across two lines and lose it.
   static const _rows = 24;
   static const _cols = 200;
 
-  static final Set<String> _probing = {};
   static final Map<String, _RunSession> _runSessions = {};
 
   /// The distinct peers the terminal window currently has tabs for.
@@ -46,106 +40,6 @@ class LabDeskTerminalRpc {
       if (!ids.contains(id)) ids.add(id);
     }
     return ids.join(',');
-  }
-
-  /// Read the peer's own CPU, memory, disk and uptime, over the terminal
-  /// window's connection to it.
-  static Future<Map<String, dynamic>> probe(
-      String peerId, String platform) async {
-    final ffi = TerminalConnectionManager.getExistingConnection(peerId);
-    if (ffi == null || ffi.closed) {
-      return _probeFailed('no terminal session');
-    }
-    return probeOn(ffi, peerId, platform);
-  }
-
-  /// The same probe over any connection to the peer, so the console's own
-  /// headless link can ask without a terminal window being open.
-  static Future<Map<String, dynamic>> probeOn(
-      FFI ffi, String peerId, String platform) async {
-    if (ffi.closed) return _probeFailed('connection closed');
-    final metricsProbe = MetricsCollector.probeFor(platform);
-    if (metricsProbe == null) {
-      return _probeFailed('unsupported platform');
-    }
-    if (!_probing.add(peerId)) {
-      return _probeFailed('busy');
-    }
-
-    final reader = ProbeReader();
-    final opened = Completer<bool>();
-    final done = Completer<void>();
-    ffi.setRawTerminalListener(_probeTerminalId, (evt) {
-      switch (evt['type']) {
-        case 'opened':
-          if (!opened.isCompleted) {
-            opened.complete(TerminalModel.getSuccessFromEvt(evt));
-          }
-          break;
-        case 'data':
-          reader.feed(_decodeData(evt['data']));
-          if (reader.isFinished && !done.isCompleted) done.complete();
-          break;
-        case 'closed':
-        case 'error':
-          if (!opened.isCompleted) opened.complete(false);
-          if (!done.isCompleted) done.complete();
-          break;
-      }
-    });
-
-    try {
-      await bind.sessionOpenTerminal(
-        sessionId: ffi.sessionId,
-        terminalId: _probeTerminalId,
-        rows: _rows,
-        cols: _cols,
-      );
-      final ok = await opened.future
-          .timeout(const Duration(seconds: 5), onTimeout: () => false);
-      if (!ok) {
-        reader.timedOut();
-      } else {
-        await bind.sessionSendTerminalInput(
-          sessionId: ffi.sessionId,
-          terminalId: _probeTerminalId,
-          data: '${MetricsCollector.framed(metricsProbe)}\r',
-        );
-        await done.future.timeout(
-          const Duration(seconds: 15),
-          onTimeout: () => reader.timedOut(),
-        );
-      }
-    } catch (e) {
-      ffi.setRawTerminalListener(_probeTerminalId, null);
-      _probing.remove(peerId);
-      return _probeFailed('$e');
-    }
-
-    ffi.setRawTerminalListener(_probeTerminalId, null);
-    try {
-      await bind.sessionCloseTerminal(
-        sessionId: ffi.sessionId,
-        terminalId: _probeTerminalId,
-      );
-    } catch (_) {}
-    _probing.remove(peerId);
-
-    final outcome = reader.outcome;
-    return {
-      'state': outcome.state == ProbeState.complete ? 'complete' : 'failed',
-      'exitCode': outcome.exitCode,
-      'timedOut': outcome.timedOut,
-      'metrics': outcome.metrics
-          .map((m) => {
-                'label': m.label,
-                'value': m.value,
-                'unit': m.unit,
-                'ratio': m.ratio,
-                'source': m.source.name,
-              })
-          .toList(),
-    };
   }
 
   /// Run one command on the peer and read back what it printed, over the
@@ -213,14 +107,6 @@ class LabDeskTerminalRpc {
     }
   }
 
-  static Map<String, dynamic> _probeFailed(String reason) => {
-        'state': 'failed',
-        'reason': reason,
-        'exitCode': null,
-        'timedOut': false,
-        'metrics': <Map<String, dynamic>>[],
-      };
-
   static Map<String, dynamic> _runFailed(String reason) => {
         'lines': <String>[],
         'exitCode': null,
@@ -247,8 +133,7 @@ class LabDeskTerminalRpc {
 
 /// Only a marker followed by a number is the shell reporting a status; the
 /// PTY's echo of the command carries the marker text but no number yet.
-final _endMarker =
-    RegExp('${RegExp.escape(MetricsCollector.endMarker)}=-?\\d+');
+final _endMarker = RegExp('${RegExp.escape(kLabDeskEndMarker)}=-?\\d+');
 
 /// The persistent command terminal for one peer.
 class _RunSession {

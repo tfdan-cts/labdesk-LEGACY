@@ -79,7 +79,6 @@ const String kWindowEventRemoteWindowCoords = "remote_window_coords";
 const String kWindowEventSetFullscreen = "set_fullscreen";
 
 const String kWindowEventLabDeskTerminalList = "labdesk_terminal_list";
-const String kWindowEventLabDeskProbe = "labdesk_probe";
 const String kWindowEventLabDeskTermRun = "labdesk_term_run";
 
 const String kWindowEventMoveTabToNewWindow = "move_tab_to_new_window";

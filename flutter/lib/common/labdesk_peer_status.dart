@@ -118,3 +118,31 @@ class LabDeskPeerStatusStore {
   int countOf(LabDeskPeerStatus status) =>
       _states.values.where((s) => s.status == status).length;
 }
+
+/// What the dot beside a machine should draw.
+///
+/// Three states, never two. A machine nobody has asked about is [unknown] and
+/// must not draw as [offline]: drawing it red tells an operator a healthy
+/// machine is down, which is the whole reason this store keeps an unknown
+/// state at all.
+enum LabDeskDot { checking, online, offline, unknown }
+
+/// [status] is null where a call site has no machine id, and there the
+/// caller's own boolean is all there is to go on.
+LabDeskDot labdeskDotFor({
+  required bool checking,
+  required LabDeskPeerStatus? status,
+  required bool fallbackOnline,
+}) {
+  if (checking) return LabDeskDot.checking;
+  switch (status) {
+    case LabDeskPeerStatus.online:
+      return LabDeskDot.online;
+    case LabDeskPeerStatus.offline:
+      return LabDeskDot.offline;
+    case LabDeskPeerStatus.unknown:
+      return LabDeskDot.unknown;
+    case null:
+      return fallbackOnline ? LabDeskDot.online : LabDeskDot.offline;
+  }
+}

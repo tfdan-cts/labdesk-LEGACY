@@ -1,0 +1,3 @@
+# Byte fixtures: git must not touch these, a line-ending conversion would
+# corrupt the buffers the parsers are tested against.
+*.bin -text -diff

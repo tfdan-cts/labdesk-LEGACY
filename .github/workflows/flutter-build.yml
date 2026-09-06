@@ -42,7 +42,13 @@ env:
   # A tag starting with "v" is a version and publishes as a full release;
   # anything else (nightly, manual, a preview build) stays a pre-release.
   TAG_NAME: "${{ inputs.upload-tag }}"
-  VCPKG_BINARY_SOURCES: "clear;x-gha,readwrite"
+  # vcpkg binary caching: the 'x-gha' backend was removed from vcpkg, so the old
+  # "clear;x-gha,readwrite" expression was rejected at runtime and every port rebuilt from
+  # source on every run. Use vcpkg's files provider pointed at a directory that actions/cache
+  # saves and restores per job (see the "Cache vcpkg binary packages" steps). The triplet is
+  # part of every cache key so one platform's archives can never restore into another
+  # platform's job.
+  VCPKG_BINARY_SOURCES: "clear;files,${{ github.workspace }}/vcpkg-binary-cache,readwrite"
   # vcpkg version: 2025.08.27
   # If we change the `VCPKG COMMIT_ID`, please remember:
   # 1. Call `$VCPKG_ROOT/vcpkg x-update-baseline` to update the baseline in `vcpkg.json`.
@@ -51,7 +57,7 @@ env:
   # 2. Update the `VCPKG_COMMIT_ID` in `ci.yml` and `playground.yml`.
   VCPKG_COMMIT_ID: "120deac3062162151622ca4860575a33844ba10b"
   ARMV7_VCPKG_COMMIT_ID: "6f29f12e82a8293156836ad81cc9bf5af41fe836" # 2025.01.13, got "/opt/artifacts/vcpkg/vcpkg: No such file or directory" with latest version
-  VERSION: "1.2.2"
+  VERSION: "1.2.6"
   NDK_VERSION: "r28c"
   #signing keys env variable checks
   ANDROID_SIGNING_KEY: "${{ secrets.ANDROID_SIGNING_KEY }}"
@@ -90,7 +96,7 @@ jobs:
         uses: softprops/action-gh-release@de2c0eb89ae2a093876385947365aca7b0e5f844 # v1
         if: env.UPLOAD_ARTIFACT == 'true'
         with:
-          prerelease: ${{ !startsWith(env.TAG_NAME, 'v') }}
+          prerelease: ${{ !startsWith(env.TAG_NAME, 'v') || contains(env.TAG_NAME, '-') }}
           tag_name: ${{ env.TAG_NAME }}
           target_commitish: ${{ github.sha }}
           files: |
@@ -262,6 +268,15 @@ jobs:
         with:
           prefix-key: ${{ matrix.job.os }}
 
+      - name: Cache vcpkg binary packages
+        uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+        with:
+          path: ${{ github.workspace }}/vcpkg-binary-cache
+          key: vcpkg-${{ runner.os }}-${{ matrix.job.vcpkg-triplet }}-${{ env.VCPKG_COMMIT_ID }}-${{ hashFiles('vcpkg.json') }}
+          restore-keys: |
+            vcpkg-${{ runner.os }}-${{ matrix.job.vcpkg-triplet }}-${{ env.VCPKG_COMMIT_ID }}-
+            vcpkg-${{ runner.os }}-${{ matrix.job.vcpkg-triplet }}-
+
       - name: Setup vcpkg with Github Actions binary cache
         uses: lukka/run-vcpkg@b1a0dd252f06b9e25b3c022a9a03bd7a427fb6a2 # v11
         with:
@@ -302,6 +317,9 @@ jobs:
           # --hwcodec is shared by all Windows targets; per-target extras (e.g. --vram) come from the matrix
           python3 .\build.py --portable --flutter --skip-portable-pack --hwcodec ${{ matrix.job.build-args }}
           mv ./flutter/build/windows/${{ matrix.job.flutter-arch }}/runner/Release ./rustdesk
+
+          # labnet: the NetBird client and Wintun, pinned and checksummed (third_party/netbird)
+          python3 .\third_party\netbird\fetch.py windows ${{ matrix.job.arch }} .\rustdesk\netbird
 
           # Download usbmmidd_v2.zip and extract it to ./rustdesk
           Invoke-WebRequest -Uri https://github.com/rustdesk-org/rdev/releases/download/usbmmidd_v2/usbmmidd_v2.zip -OutFile usbmmidd_v2.zip
@@ -424,7 +442,7 @@ jobs:
         uses: softprops/action-gh-release@de2c0eb89ae2a093876385947365aca7b0e5f844 # v1
         if: env.UPLOAD_ARTIFACT == 'true'
         with:
-          prerelease: ${{ !startsWith(env.TAG_NAME, 'v') }}
+          prerelease: ${{ !startsWith(env.TAG_NAME, 'v') || contains(env.TAG_NAME, '-') }}
           tag_name: ${{ env.TAG_NAME }}
           target_commitish: ${{ github.sha }}
           files: |
@@ -479,6 +497,15 @@ jobs:
       - uses: Swatinem/rust-cache@e18b497796c12c097a38f9edb9d0641fb99eee32 # v2
         with:
           prefix-key: ${{ matrix.job.os }}-sciter
+
+      - name: Cache vcpkg binary packages
+        uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+        with:
+          path: ${{ github.workspace }}/vcpkg-binary-cache
+          key: vcpkg-${{ runner.os }}-${{ matrix.job.vcpkg-triplet }}-${{ env.VCPKG_COMMIT_ID }}-${{ hashFiles('vcpkg.json') }}
+          restore-keys: |
+            vcpkg-${{ runner.os }}-${{ matrix.job.vcpkg-triplet }}-${{ env.VCPKG_COMMIT_ID }}-
+            vcpkg-${{ runner.os }}-${{ matrix.job.vcpkg-triplet }}-
 
       - name: Setup vcpkg with Github Actions binary cache
         uses: lukka/run-vcpkg@b1a0dd252f06b9e25b3c022a9a03bd7a427fb6a2 # v11
@@ -579,7 +606,7 @@ jobs:
         uses: softprops/action-gh-release@de2c0eb89ae2a093876385947365aca7b0e5f844 # v1
         if: env.UPLOAD_ARTIFACT == 'true'
         with:
-          prerelease: ${{ !startsWith(env.TAG_NAME, 'v') }}
+          prerelease: ${{ !startsWith(env.TAG_NAME, 'v') || contains(env.TAG_NAME, '-') }}
           tag_name: ${{ env.TAG_NAME }}
           target_commitish: ${{ github.sha }}
           files: |
@@ -628,6 +655,15 @@ jobs:
           if [[ "3.24.5" == ${{env.FLUTTER_VERSION}} ]]; then
             git apply ${{ github.workspace }}/.github/patches/flutter_3.24.4_dropdown_menu_enableFilter.diff
           fi
+
+      - name: Cache vcpkg binary packages
+        uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+        with:
+          path: ${{ github.workspace }}/vcpkg-binary-cache
+          key: vcpkg-${{ runner.os }}-${{ matrix.job.vcpkg-triplet }}-${{ env.VCPKG_COMMIT_ID }}-${{ hashFiles('vcpkg.json') }}
+          restore-keys: |
+            vcpkg-${{ runner.os }}-${{ matrix.job.vcpkg-triplet }}-${{ env.VCPKG_COMMIT_ID }}-
+            vcpkg-${{ runner.os }}-${{ matrix.job.vcpkg-triplet }}-
 
       - name: Setup vcpkg with Github Actions binary cache
         uses: lukka/run-vcpkg@b1a0dd252f06b9e25b3c022a9a03bd7a427fb6a2 # v11
@@ -835,6 +871,15 @@ jobs:
           name: bridge-artifact
           path: ./
 
+      - name: Cache vcpkg binary packages
+        uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+        with:
+          path: ${{ github.workspace }}/vcpkg-binary-cache
+          key: vcpkg-${{ runner.os }}-${{ matrix.job.vcpkg-triplet }}-${{ env.VCPKG_COMMIT_ID }}-${{ hashFiles('vcpkg.json') }}
+          restore-keys: |
+            vcpkg-${{ runner.os }}-${{ matrix.job.vcpkg-triplet }}-${{ env.VCPKG_COMMIT_ID }}-
+            vcpkg-${{ runner.os }}-${{ matrix.job.vcpkg-triplet }}-
+
       - name: Setup vcpkg with Github Actions binary cache
         uses: lukka/run-vcpkg@b1a0dd252f06b9e25b3c022a9a03bd7a427fb6a2 # v11
         with:
@@ -922,7 +967,7 @@ jobs:
         if: env.UPLOAD_ARTIFACT == 'true'
         uses: softprops/action-gh-release@de2c0eb89ae2a093876385947365aca7b0e5f844 # v1
         with:
-          prerelease: ${{ !startsWith(env.TAG_NAME, 'v') }}
+          prerelease: ${{ !startsWith(env.TAG_NAME, 'v') || contains(env.TAG_NAME, '-') }}
           tag_name: ${{ env.TAG_NAME }}
           target_commitish: ${{ github.sha }}
           files: |
@@ -967,7 +1012,7 @@ jobs:
       - name: Publish unsigned app
         uses: softprops/action-gh-release@de2c0eb89ae2a093876385947365aca7b0e5f844 # v1
         with:
-          prerelease: ${{ !startsWith(env.TAG_NAME, 'v') }}
+          prerelease: ${{ !startsWith(env.TAG_NAME, 'v') || contains(env.TAG_NAME, '-') }}
           tag_name: ${{ env.TAG_NAME }}
           target_commitish: ${{ github.sha }}
           files: labdesk-${{ env.VERSION }}-unsigned.tar.gz
@@ -983,6 +1028,7 @@ jobs:
           - {
               arch: aarch64,
               target: aarch64-linux-android,
+              vcpkg-triplet: arm64-android,
               os: ubuntu-24.04,
               reltype: release,
               suffix: "",
@@ -990,6 +1036,7 @@ jobs:
           - {
               arch: armv7,
               target: armv7-linux-androideabi,
+              vcpkg-triplet: arm-neon-android,
               os: ubuntu-24.04,
               reltype: release,
               suffix: "",
@@ -997,6 +1044,7 @@ jobs:
           - {
               arch: x86_64,
               target: x86_64-linux-android,
+              vcpkg-triplet: x64-android,
               os: ubuntu-24.04,
               reltype: release,
               suffix: "",
@@ -1078,6 +1126,15 @@ jobs:
         with:
           ndk-version: ${{ env.NDK_VERSION }}
           add-to-path: true
+
+      - name: Cache vcpkg binary packages
+        uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+        with:
+          path: ${{ github.workspace }}/vcpkg-binary-cache
+          key: vcpkg-${{ runner.os }}-${{ matrix.job.vcpkg-triplet }}-${{ env.VCPKG_COMMIT_ID }}-${{ hashFiles('vcpkg.json') }}
+          restore-keys: |
+            vcpkg-${{ runner.os }}-${{ matrix.job.vcpkg-triplet }}-${{ env.VCPKG_COMMIT_ID }}-
+            vcpkg-${{ runner.os }}-${{ matrix.job.vcpkg-triplet }}-
 
       - name: Setup vcpkg with Github Actions binary cache
         uses: lukka/run-vcpkg@b1a0dd252f06b9e25b3c022a9a03bd7a427fb6a2 # v11
@@ -1252,7 +1309,7 @@ jobs:
         if: env.ANDROID_SIGNING_KEY != null && env.UPLOAD_ARTIFACT == 'true'
         uses: softprops/action-gh-release@de2c0eb89ae2a093876385947365aca7b0e5f844 # v1
         with:
-          prerelease: ${{ !startsWith(env.TAG_NAME, 'v') }}
+          prerelease: ${{ !startsWith(env.TAG_NAME, 'v') || contains(env.TAG_NAME, '-') }}
           tag_name: ${{ env.TAG_NAME }}
           target_commitish: ${{ github.sha }}
           files: |
@@ -1262,7 +1319,7 @@ jobs:
         if: env.ANDROID_SIGNING_KEY == null && env.UPLOAD_ARTIFACT == 'true'
         uses: softprops/action-gh-release@de2c0eb89ae2a093876385947365aca7b0e5f844 # v1
         with:
-          prerelease: ${{ !startsWith(env.TAG_NAME, 'v') }}
+          prerelease: ${{ !startsWith(env.TAG_NAME, 'v') || contains(env.TAG_NAME, '-') }}
           tag_name: ${{ env.TAG_NAME }}
           target_commitish: ${{ github.sha }}
           files: |
@@ -1440,7 +1497,7 @@ jobs:
         if: env.ANDROID_SIGNING_KEY != null && env.UPLOAD_ARTIFACT == 'true'
         uses: softprops/action-gh-release@de2c0eb89ae2a093876385947365aca7b0e5f844 # v1
         with:
-          prerelease: ${{ !startsWith(env.TAG_NAME, 'v') }}
+          prerelease: ${{ !startsWith(env.TAG_NAME, 'v') || contains(env.TAG_NAME, '-') }}
           tag_name: ${{ env.TAG_NAME }}
           target_commitish: ${{ github.sha }}
           files: |
@@ -1450,7 +1507,7 @@ jobs:
         if: env.ANDROID_SIGNING_KEY == null && env.UPLOAD_ARTIFACT == 'true'
         uses: softprops/action-gh-release@de2c0eb89ae2a093876385947365aca7b0e5f844 # v1
         with:
-          prerelease: ${{ !startsWith(env.TAG_NAME, 'v') }}
+          prerelease: ${{ !startsWith(env.TAG_NAME, 'v') || contains(env.TAG_NAME, '-') }}
           tag_name: ${{ env.TAG_NAME }}
           target_commitish: ${{ github.sha }}
           files: |
@@ -1540,6 +1597,16 @@ jobs:
         with:
           name: bridge-artifact
           path: ./
+
+      - name: Cache vcpkg binary packages
+        if: matrix.job.arch == 'x86_64' || env.UPLOAD_ARTIFACT == 'true'
+        uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+        with:
+          path: ${{ github.workspace }}/vcpkg-binary-cache
+          key: vcpkg-${{ runner.os }}-${{ matrix.job.vcpkg-triplet }}-${{ env.VCPKG_COMMIT_ID }}-${{ hashFiles('vcpkg.json') }}
+          restore-keys: |
+            vcpkg-${{ runner.os }}-${{ matrix.job.vcpkg-triplet }}-${{ env.VCPKG_COMMIT_ID }}-
+            vcpkg-${{ runner.os }}-${{ matrix.job.vcpkg-triplet }}-
 
       - name: Setup vcpkg with Github Actions binary cache
         if: matrix.job.arch == 'x86_64' || env.UPLOAD_ARTIFACT == 'true'
@@ -1715,6 +1782,8 @@ jobs:
             pushd /workspace
             export CARGO_INCREMENTAL=0
             export DEB_ARCH=${{ matrix.job.deb_arch }}
+            # labnet: the NetBird client, pinned and checksummed (third_party/netbird)
+            python3 ./third_party/netbird/fetch.py linux ${{ matrix.job.arch }} ./netbird-dist
             python3 ./build.py --flutter --skip-cargo
             for name in labdesk*??.deb; do
               mv "$name" "${name%%.deb}-${{ matrix.job.arch }}.deb"
@@ -1752,7 +1821,7 @@ jobs:
         if: env.UPLOAD_ARTIFACT == 'true'
         uses: softprops/action-gh-release@de2c0eb89ae2a093876385947365aca7b0e5f844 # v1
         with:
-          prerelease: ${{ !startsWith(env.TAG_NAME, 'v') }}
+          prerelease: ${{ !startsWith(env.TAG_NAME, 'v') || contains(env.TAG_NAME, '-') }}
           tag_name: ${{ env.TAG_NAME }}
           target_commitish: ${{ github.sha }}
           files: |
@@ -1789,7 +1858,7 @@ jobs:
         if: matrix.job.arch == 'x86_64' && env.UPLOAD_ARTIFACT == 'true'
         uses: softprops/action-gh-release@de2c0eb89ae2a093876385947365aca7b0e5f844 # v1
         with:
-          prerelease: ${{ !startsWith(env.TAG_NAME, 'v') }}
+          prerelease: ${{ !startsWith(env.TAG_NAME, 'v') || contains(env.TAG_NAME, '-') }}
           tag_name: ${{ env.TAG_NAME }}
           target_commitish: ${{ github.sha }}
           files: |
@@ -1858,6 +1927,15 @@ jobs:
         with:
           name: bridge-artifact
           path: ./
+
+      - name: Cache vcpkg binary packages
+        uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+        with:
+          path: ${{ github.workspace }}/vcpkg-binary-cache
+          key: vcpkg-${{ runner.os }}-x64-linux-${{ env.VCPKG_COMMIT_ID }}-${{ hashFiles('vcpkg.json') }}
+          restore-keys: |
+            vcpkg-${{ runner.os }}-x64-linux-${{ env.VCPKG_COMMIT_ID }}-
+            vcpkg-${{ runner.os }}-x64-linux-
 
       - name: Setup vcpkg with Github Actions binary cache
         uses: lukka/run-vcpkg@b1a0dd252f06b9e25b3c022a9a03bd7a427fb6a2 # v11
@@ -2011,7 +2089,7 @@ jobs:
             export CARGO_INCREMENTAL=0
             export DEB_ARCH=amd64
             python3 ./build.py --flutter --drm --hwcodec --unix-file-copy-paste --skip-cargo
-            for name in rustdesk*??.deb; do
+            for name in labdesk*??.deb; do
               mv "$name" "${name%%.deb}-x86_64.deb"
             done
 
@@ -2051,7 +2129,7 @@ jobs:
         if: env.UPLOAD_ARTIFACT == 'true'
         uses: softprops/action-gh-release@de2c0eb89ae2a093876385947365aca7b0e5f844 # v1
         with:
-          prerelease: ${{ !startsWith(env.TAG_NAME, 'v') }}
+          prerelease: ${{ !startsWith(env.TAG_NAME, 'v') || contains(env.TAG_NAME, '-') }}
           tag_name: ${{ env.TAG_NAME }}
           target_commitish: ${{ github.sha }}
           files: |
@@ -2133,6 +2211,9 @@ jobs:
           RUST_TOOLCHAIN_VERSION=$(cargo --version | awk '{print $2}')
           echo "RUST_TOOLCHAIN_VERSION=$RUST_TOOLCHAIN_VERSION" >> $GITHUB_ENV
 
+      # No vcpkg binary cache here: this job clones and bootstraps vcpkg inside a qemu
+      # run-on-arch container that only mounts the workspace, so neither VCPKG_BINARY_SOURCES
+      # nor a host cache directory reaches the vcpkg run below.
       - uses: rustdesk-org/run-on-arch-action@d3fcfbb632b84cf7f6bc772bfaaa2c2f4f8789a8 # no release tag; commit 2026-05-26
         name: Build rustdesk sciter binary for ${{ matrix.job.arch }}
         id: vcpkg
@@ -2281,7 +2362,7 @@ jobs:
         if: env.UPLOAD_ARTIFACT == 'true'
         uses: softprops/action-gh-release@de2c0eb89ae2a093876385947365aca7b0e5f844 # v1
         with:
-          prerelease: ${{ !startsWith(env.TAG_NAME, 'v') }}
+          prerelease: ${{ !startsWith(env.TAG_NAME, 'v') || contains(env.TAG_NAME, '-') }}
           tag_name: ${{ env.TAG_NAME }}
           target_commitish: ${{ github.sha }}
           files: |
@@ -2340,7 +2421,7 @@ jobs:
         if: env.UPLOAD_ARTIFACT == 'true'
         uses: softprops/action-gh-release@de2c0eb89ae2a093876385947365aca7b0e5f844 # v1
         with:
-          prerelease: ${{ !startsWith(env.TAG_NAME, 'v') }}
+          prerelease: ${{ !startsWith(env.TAG_NAME, 'v') || contains(env.TAG_NAME, '-') }}
           tag_name: ${{ env.TAG_NAME }}
           target_commitish: ${{ github.sha }}
           files: |
@@ -2426,11 +2507,72 @@ jobs:
       - name: Publish flatpak package
         uses: softprops/action-gh-release@de2c0eb89ae2a093876385947365aca7b0e5f844 # v1
         with:
-          prerelease: ${{ !startsWith(env.TAG_NAME, 'v') }}
+          prerelease: ${{ !startsWith(env.TAG_NAME, 'v') || contains(env.TAG_NAME, '-') }}
           tag_name: ${{ env.TAG_NAME }}
           target_commitish: ${{ github.sha }}
           files: |
             flatpak/labdesk-${{ env.VERSION }}-${{ matrix.job.arch }}${{ matrix.job.suffix }}.flatpak
+
+  # The manifest the updater reads. It has to run after every build job that
+  # publishes an asset, because it hashes the release's assets as they finally
+  # stand, and it has to live in THIS workflow rather than in a workflow_run
+  # companion: GitHub only runs a workflow_run workflow from the default branch,
+  # so a companion never fires for a build dispatched from a feature branch, and
+  # a client that cannot fetch a manifest installs no update at all.
+  #
+  # `always()` is deliberate. A build where one platform failed still published
+  # assets for the platforms that succeeded, and those have to be checksummable
+  # or the platforms that did build are locked out of updating too.
+  release-manifest:
+    # After every job that publishes an asset, or the manifest misses what the
+    # late ones upload. No permissions block: see generate-sbom above.
+    needs:
+      - build-for-windows-flutter
+      - build-for-windows-sciter
+      - build-for-macOS
+      - build-rustdesk-linux
+      - build-rustdesk-linux-drm
+      - build-rustdesk-linux-sciter
+      - build-rustdesk-android
+      - build-rustdesk-android-universal
+      - build-appimage
+      - build-flatpak
+    if: always() && inputs.upload-artifact
+    runs-on: ubuntu-latest
+    steps:
+      - name: Compute and publish SHA256SUMS
+        env:
+          GH_TOKEN: ${{ github.token }}
+          TAG: ${{ inputs.upload-tag }}
+        run: |
+          set -euo pipefail
+          if ! gh release view "$TAG" --repo "$GITHUB_REPOSITORY" >/dev/null 2>&1; then
+            echo "No release for '$TAG': every publish step failed, so there is nothing to checksum." >&2
+            exit 1
+          fi
+          mkdir assets
+          cd assets
+          gh release download "$TAG" --repo "$GITHUB_REPOSITORY"
+          # Never hash a manifest, or a signature over one, from an earlier run
+          # into the new one.
+          rm -f SHA256SUMS SHA256SUMS.sig
+          # nullglob so an empty directory does not hash the literal "*";
+          # dotglob so a dotfile asset is not silently missing from the
+          # manifest, which the client reads as "this asset has no digest".
+          shopt -s nullglob dotglob
+          files=(*)
+          if [ ${#files[@]} -eq 0 ]; then
+            echo "The release for '$TAG' publishes no assets to checksum." >&2
+            exit 1
+          fi
+          sha256sum -- "${files[@]}" > ../SHA256SUMS
+          cd ..
+          cat SHA256SUMS
+          gh release upload "$TAG" SHA256SUMS --repo "$GITHUB_REPOSITORY" --clobber
+          # A signature from an earlier run would be over the old manifest, and
+          # a key-pinned client refuses a release whose signature does not
+          # verify, so it must not outlive the manifest it signed.
+          gh release delete-asset "$TAG" SHA256SUMS.sig --repo "$GITHUB_REPOSITORY" --yes 2>/dev/null || true
 
   build-rustdesk-web:
     if: False
@@ -2511,7 +2653,7 @@ jobs:
         if: env.UPLOAD_ARTIFACT == 'true'
         uses: softprops/action-gh-release@de2c0eb89ae2a093876385947365aca7b0e5f844 # v1
         with:
-          prerelease: ${{ !startsWith(env.TAG_NAME, 'v') }}
+          prerelease: ${{ !startsWith(env.TAG_NAME, 'v') || contains(env.TAG_NAME, '-') }}
           tag_name: ${{ env.TAG_NAME }}
           target_commitish: ${{ github.sha }}
           files: |

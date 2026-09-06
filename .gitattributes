@@ -3,3 +3,7 @@
 # Shell scripts must keep LF endings or they fail to run on Linux and macOS.
 .githooks/* text eol=lf
 *.sh text eol=lf
+
+# The tool catalog is compared byte for byte with the Worker's copy (docs/plans/2026-09-05-002-phase1-contracts.md section 1).
+src/labdesk/tools.json text eol=lf
+res/labdesk-helper text eol=lf

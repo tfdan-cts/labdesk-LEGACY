@@ -3,7 +3,13 @@ name: CI
 env:
 #   MIN_SUPPORTED_RUST_VERSION: "1.46.0"
 #   CICD_INTERMEDIATES_DIR: "_cicd-intermediates"
-  VCPKG_BINARY_SOURCES: "clear;x-gha,readwrite"
+  # vcpkg binary caching: the 'x-gha' backend was removed from vcpkg, so the old
+  # "clear;x-gha,readwrite" expression was rejected at runtime and every port rebuilt from
+  # source on every run. Use vcpkg's files provider pointed at a directory that actions/cache
+  # saves and restores per job (see the "Cache vcpkg binary packages" steps). The triplet is
+  # part of every cache key so one platform's archives can never restore into another
+  # platform's job.
+  VCPKG_BINARY_SOURCES: "clear;files,${{ github.workspace }}/vcpkg-binary-cache,readwrite"
   # for multiarch gcc compatibility
   VCPKG_COMMIT_ID: "120deac3062162151622ca4860575a33844ba10b"
 
@@ -145,6 +151,15 @@ jobs:
           # aarch64-unknown-linux-gnu) sudo apt-get -y update ; sudo apt-get -y install gcc-aarch64-linux-gnu ;;
         esac
 
+    - name: Cache vcpkg binary packages
+      uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+      with:
+        path: ${{ github.workspace }}/vcpkg-binary-cache
+        key: vcpkg-${{ runner.os }}-x64-linux-${{ env.VCPKG_COMMIT_ID }}-${{ hashFiles('vcpkg.json') }}
+        restore-keys: |
+          vcpkg-${{ runner.os }}-x64-linux-${{ env.VCPKG_COMMIT_ID }}-
+          vcpkg-${{ runner.os }}-x64-linux-
+
     - name: Setup vcpkg with Github Actions binary cache
       uses: lukka/run-vcpkg@b1a0dd252f06b9e25b3c022a9a03bd7a427fb6a2 # v11
       with:
@@ -181,6 +196,26 @@ jobs:
         use-cross: ${{ matrix.job.use-cross }}
         command: build
         args: --locked --target=${{ matrix.job.target }}
+
+    # The binary the field checks run. A Linux machine the program may not
+    # install anything on still has to prove the disk read path against its
+    # real drives (`labdesk --disk-health`), and this is where that binary
+    # comes from: `gh run download <run id> -n labdesk-x86_64-unknown-linux-gnu`.
+    # Stripped because the build above is a debug build.
+    - name: Strip the Linux binary for field checks
+      if: matrix.job.target == 'x86_64-unknown-linux-gnu'
+      shell: bash
+      run: |
+        strip target/${{ matrix.job.target }}/debug/rustdesk
+        ls -l target/${{ matrix.job.target }}/debug/rustdesk
+
+    - name: Upload the Linux binary for field checks
+      if: matrix.job.target == 'x86_64-unknown-linux-gnu'
+      uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+      with:
+        name: labdesk-${{ matrix.job.target }}
+        path: target/${{ matrix.job.target }}/debug/rustdesk
+        retention-days: 5
 
     - name: clean
       shell: bash
@@ -249,3 +284,117 @@ jobs:
         use-cross: ${{ matrix.job.use-cross }}
         command: test
         args: --locked --target=${{ matrix.job.target }} ${{ steps.test-options.outputs.CARGO_TEST_OPTIONS}}
+
+  drm_tests:
+    name: drm feature tests (ubuntu-24.04)
+    runs-on: ubuntu-24.04
+    # A from scratch workspace build, so it is bounded well under the six hour
+    # default, and a newer push supersedes an older one. Both are scoped to
+    # this job so the build job above keeps the behaviour it has always had.
+    timeout-minutes: 90
+    concurrency:
+      group: drm-tests-${{ github.ref }}
+      cancel-in-progress: true
+    # The build job above compiles and tests the default feature set, so nothing
+    # behind `drm` or `drm-wake` runs there: the DRM/KMS capture backend, the
+    # SCM_RIGHTS ipc channel that hands its dmabuf across, and the display wake
+    # that injects a synthetic pointer event from the root service. The shipped
+    # Linux package is built with both (build.py --drm), and the wake is the one
+    # place in the capture path that writes rather than reads, so those tests are
+    # worth their own job. `drm` costs nothing extra to set up: libdrmtap is
+    # dlopened at runtime and never linked, so this needs exactly the same
+    # prerequisites the build job installs.
+    permissions:
+      contents: read
+    steps:
+    - name: Free Disk Space (Ubuntu)
+      uses: jlumbroso/free-disk-space@54081f138730dfa15788a46383842cd2f914a1be # v1.3.1
+      with:
+        tool-cache: false
+        android: true
+        dotnet: true
+        haskell: true
+        large-packages: false
+        docker-images: true
+        swap-storage: false
+
+    - name: Export GitHub Actions cache environment variables
+      uses: actions/github-script@d7906e4ad0b1822421a7e6a35d5ca353c962f410 # v6
+      with:
+        script: |
+          core.exportVariable('ACTIONS_CACHE_URL', process.env.ACTIONS_CACHE_URL || '');
+          core.exportVariable('ACTIONS_RUNTIME_TOKEN', process.env.ACTIONS_RUNTIME_TOKEN || '');
+
+    - name: Checkout source code
+      uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4
+      with:
+        submodules: recursive
+
+    - name: Install prerequisites
+      shell: bash
+      run: |
+        sudo apt-get -y update
+        sudo apt-get install -y \
+           clang \
+           cmake \
+           curl \
+           gcc \
+           git \
+           g++ \
+           libpam0g-dev \
+           libasound2-dev \
+           libunwind-dev \
+           libgstreamer1.0-dev \
+           libgstreamer-plugins-base1.0-dev \
+           libgtk-3-dev \
+           libpulse-dev \
+           libva-dev \
+           libvdpau-dev \
+           libxcb-randr0-dev \
+           libxcb-shape0-dev \
+           libxcb-xfixes0-dev \
+           libxdo-dev \
+           libxfixes-dev \
+           nasm \
+           wget
+
+    - name: Cache vcpkg binary packages
+      uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+      with:
+        path: ${{ github.workspace }}/vcpkg-binary-cache
+        key: vcpkg-${{ runner.os }}-x64-linux-${{ env.VCPKG_COMMIT_ID }}-${{ hashFiles('vcpkg.json') }}
+        restore-keys: |
+          vcpkg-${{ runner.os }}-x64-linux-${{ env.VCPKG_COMMIT_ID }}-
+          vcpkg-${{ runner.os }}-x64-linux-
+
+    - name: Setup vcpkg with Github Actions binary cache
+      uses: lukka/run-vcpkg@b1a0dd252f06b9e25b3c022a9a03bd7a427fb6a2 # v11
+      with:
+        vcpkgDirectory: /opt/artifacts/vcpkg
+        vcpkgGitCommitId: ${{ env.VCPKG_COMMIT_ID }}
+
+    - name: Install vcpkg dependencies
+      run: |
+        $VCPKG_ROOT/vcpkg install --x-install-root="$VCPKG_ROOT/installed"
+      shell: bash
+
+    - name: Install Rust toolchain
+      uses: dtolnay/rust-toolchain@e97e2d8cc328f1b50210efc529dca0028893a2d9 # v1
+      with:
+        toolchain: stable
+        targets: x86_64-unknown-linux-gnu
+        components: ''
+
+    - uses: Swatinem/rust-cache@e18b497796c12c097a38f9edb9d0641fb99eee32 # v2
+
+    # Plain `run` rather than actions-rs/cargo: that action was archived in 2021
+    # and the runner already reports it as being forced onto a Node it was not
+    # written for. The features are written package-qualified because more than
+    # one package is selected here. Enabling rustdesk/drm pulls scrap/drm in
+    # through the dependency, so the runtime loader tests in scrap run too.
+    - name: Run tests with the drm features
+      shell: bash
+      run: |
+        cargo test --locked --target=x86_64-unknown-linux-gnu --workspace --no-fail-fast \
+          --features rustdesk/drm,rustdesk/drm-wake \
+          -- --skip test_get_cursor_pos --skip test_get_key_state

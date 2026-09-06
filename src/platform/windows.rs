@@ -690,6 +690,14 @@ async fn run_service(_arguments: Vec<OsString>) -> ResultType<()> {
     // Tell the system that the service is running now
     status_handle.set_service_status(next_status)?;
 
+    // Telemetry: this process is LocalSystem, which is the only account on any platform
+    // that can read disk health, so the collector runs here rather than in `--server`.
+    crate::labdesk::collector::start();
+    // Network self-healing runs here too: the service is the only part that
+    // keeps running with nobody logged in, which is exactly when a machine
+    // has to heal its own connectivity. Off unless the option is set.
+    crate::labdesk::selfheal::start();
+
     let mut session_id = unsafe { get_current_session(share_rdp()) };
     log::info!("session id {}", session_id);
     let mut h_process = launch_server(session_id, true).await.unwrap_or(NULL);
@@ -3730,7 +3738,11 @@ pub fn handle_custom_client_staging_dir_before_update(
 }
 
 // Used for auto update and manual update in the main window.
-pub fn update_to(file: &str) -> ResultType<()> {
+// `expected_sha256` is the digest the release published for this file. It is
+// checked here rather than at the call site so the check is the last act
+// before the elevated launch, after the staging work, and the file is not
+// touched again between the two.
+pub fn update_to(file: &str, expected_sha256: &str) -> ResultType<()> {
     if file.ends_with(".exe") {
         let custom_client_staging_dir = get_custom_client_staging_dir();
         if crate::is_custom_client() {
@@ -3739,6 +3751,7 @@ pub fn update_to(file: &str) -> ResultType<()> {
             // Clean up any residual staging directory from previous custom client
             allow_err!(remove_custom_client_staging_dir(&custom_client_staging_dir));
         }
+        crate::updater::verify_downloaded_file(std::path::Path::new(file), expected_sha256)?;
         if !run_uac(file, "--update")? {
             bail!(
                 "Failed to run the update exe with UAC, error: {:?}",
@@ -3746,6 +3759,7 @@ pub fn update_to(file: &str) -> ResultType<()> {
             );
         }
     } else if file.ends_with(".msi") {
+        crate::updater::verify_downloaded_file(std::path::Path::new(file), expected_sha256)?;
         if let Err(e) = update_me_msi(file, false) {
             bail!("Failed to run the update msi: {}", e);
         }
@@ -3840,10 +3854,14 @@ pub fn try_remove_temp_update_files() {
         if let Ok(entry) = entry {
             let path = entry.path();
             if let Some(file_name) = path.file_name().and_then(|n| n.to_str()) {
+                // The per-update directories the unattended path downloads into.
+                let update_dir = path.is_dir()
+                    && file_name.starts_with(crate::updater::UPDATE_DIR_PREFIX);
                 // Match staged installers: labdesk-*.msi or labdesk-*.exe, and the
                 // rustdesk-* names releases up to 1.2.1 were downloaded under.
-                if (file_name.starts_with("labdesk-") || file_name.starts_with("rustdesk-"))
-                    && (file_name.ends_with(".msi") || file_name.ends_with(".exe"))
+                if update_dir
+                    || ((file_name.starts_with("labdesk-") || file_name.starts_with("rustdesk-"))
+                        && (file_name.ends_with(".msi") || file_name.ends_with(".exe")))
                 {
                     // Skip files modified within the last hour to avoid deleting files being downloaded
                     if let Ok(metadata) = std::fs::metadata(&path) {
@@ -3855,7 +3873,12 @@ pub fn try_remove_temp_update_files() {
                             }
                         }
                     }
-                    if let Err(e) = std::fs::remove_file(&path) {
+                    let removed = if update_dir {
+                        std::fs::remove_dir_all(&path)
+                    } else {
+                        std::fs::remove_file(&path)
+                    };
+                    if let Err(e) = removed {
                         log::debug!("Failed to remove temp update file {:?}: {}", path, e);
                     } else {
                         log::info!("Removed temp update file: {:?}", path);

@@ -23,6 +23,7 @@ enum ConsoleSection {
   tools,
   automation,
   actions,
+  network,
   thisMachine,
   settings,
 }
@@ -42,6 +43,7 @@ extension ConsoleSectionInfo on ConsoleSection {
         ConsoleSection.tools => 'Tools',
         ConsoleSection.automation => 'Automation',
         ConsoleSection.actions => 'Actions',
+        ConsoleSection.network => 'Network',
         ConsoleSection.settings => 'Settings',
       };
 
@@ -54,6 +56,7 @@ extension ConsoleSectionInfo on ConsoleSection {
         ConsoleSection.automation => LdIcons.refresh,
         ConsoleSection.terminal => LdIcons.terminal,
         ConsoleSection.actions => LdIcons.actions,
+        ConsoleSection.network => LdIcons.group,
         ConsoleSection.settings => LdIcons.settings,
       };
 
@@ -66,6 +69,7 @@ extension ConsoleSectionInfo on ConsoleSection {
         ConsoleSection.sessions ||
         ConsoleSection.tools ||
         ConsoleSection.automation ||
+        ConsoleSection.network ||
         ConsoleSection.settings =>
           false,
         _ => true,
@@ -113,6 +117,7 @@ class ConsoleShell extends StatefulWidget {
   const ConsoleShell({
     super.key,
     required this.machines,
+    this.healthMachines,
     this.samples = const [],
     this.profiles = const [],
     this.profileName = 'Default',
@@ -123,9 +128,6 @@ class ConsoleShell extends StatefulWidget {
     this.onRefresh,
     this.now,
     this.healthFor,
-    this.monitoredIds = const {},
-    this.probingIds = const {},
-    this.onToggleMonitor,
     this.terminalLines = const [],
     this.terminalLinesFor,
     this.connectedIds = const {},
@@ -142,6 +144,16 @@ class ConsoleShell extends StatefulWidget {
   });
 
   final List<MachineRow> machines;
+
+  /// What the Health tab accounts for, when that is not the same list.
+  ///
+  /// [machines] is the technician's own peer list, which is what the Machines
+  /// tab is. The organization's fleet is a different set: on a console that has
+  /// never connected to anything the peer list is empty while lab-desk.net is
+  /// answering with the whole fleet, and the board said "No machines yet." over
+  /// a fleet that was reporting figures (homebox-devserver, 2026-09-05). Null
+  /// falls back to [machines], so the design harness is unaffected.
+  final List<MachineRow>? healthMachines;
   final List<ReachSample> samples;
   final List<ProfileRow> profiles;
   final String profileName;
@@ -158,12 +170,6 @@ class ConsoleShell extends StatefulWidget {
 
   /// Health for a machine, resolved lazily so the shell holds no state.
   final MachineHealth Function(String machineId)? healthFor;
-
-  /// Machines the client is monitoring over its own connection, and the ones
-  /// it is asking right now. The Health tab shows both and offers the toggle.
-  final Set<String> monitoredIds;
-  final Set<String> probingIds;
-  final ValueChanged<String>? onToggleMonitor;
 
   final List<TerminalLine> terminalLines;
 
@@ -357,12 +363,9 @@ class _ConsoleShellState extends State<ConsoleShell> {
                     embedded: true,
                   ),
                 FleetTab.health => HealthBoard(
-                    machines: widget.machines,
+                    machines: widget.healthMachines ?? widget.machines,
                     healthFor: (id) =>
                         widget.healthFor?.call(id) ?? MachineHealth.empty,
-                    monitoredIds: widget.monitoredIds,
-                    probingIds: widget.probingIds,
-                    onToggleMonitor: widget.onToggleMonitor,
                     now: widget.now,
                   ),
               },
@@ -404,6 +407,7 @@ class _ConsoleShellState extends State<ConsoleShell> {
       case ConsoleSection.sessions:
       case ConsoleSection.tools:
       case ConsoleSection.automation:
+      case ConsoleSection.network:
         // Supplied by the client through [hosted] once built; until then the
         // section says so rather than showing an empty frame.
         return _HostedElsewhere(section: _section);

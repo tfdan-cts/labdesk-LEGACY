@@ -1,5 +1,5 @@
 Name:       rustdesk
-Version:    1.2.2
+Version:    1.2.6
 Release:    0
 Summary:    LabDesk remote administration client
 License:    GPL-3.0

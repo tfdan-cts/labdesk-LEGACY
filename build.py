@@ -715,6 +715,9 @@ def build_flutter_deb(version, features):
     system2('rm tmpdeb/usr/bin/rustdesk || true')
     system2(
         f'cp -r {flutter_build_dir}/* tmpdeb/usr/share/rustdesk/')
+    # labnet: the NetBird client fetched by third_party/netbird/fetch.py, when present.
+    if os.path.isdir('../netbird-dist'):
+        system2('mkdir -p tmpdeb/usr/share/rustdesk/netbird && cp -r ../netbird-dist/* tmpdeb/usr/share/rustdesk/netbird/')
     system2(
         'cp ../res/rustdesk.service tmpdeb/usr/share/rustdesk/files/systemd/')
     system2(
@@ -733,6 +736,15 @@ def build_flutter_deb(version, features):
         'cp ../res/pam.d/rustdesk.debian tmpdeb/etc/pam.d/rustdesk')
     system2(
         "echo \"#!/bin/sh\" >> tmpdeb/usr/share/rustdesk/files/polkit && chmod a+x tmpdeb/usr/share/rustdesk/files/polkit")
+    # The update helper and the polkit action that names it. pkexec reads the action id from the
+    # annotation on the program it launches, so the action only means "install a LabDesk update"
+    # because it names this helper; dpkg run under pkexec directly is authorised as dpkg, with
+    # whatever package the caller supplies. Nothing else in the package produces either file, and
+    # src/updater.rs's Linux arm calls the helper by this absolute path, so a deb built without
+    # these two lines can never install an update.
+    system2('install -m 755 ../res/labdesk-helper tmpdeb/usr/share/rustdesk/labdesk-helper')
+    system2('install -m 644 ../res/polkit/net.lab-desk.LabDesk.policy '
+            'tmpdeb/usr/share/polkit-1/actions/net.lab-desk.LabDesk.policy')
     # Bundle libdrmtap.so only when this build actually enabled the `drm` feature, so stock packages
     # stay exactly what they were. The root service dlopens it in-process by absolute path.
     # `features` is the comma-joined string, so split it: a bare substring test would also match any
@@ -841,6 +853,15 @@ def build_deb_from_folder(version, binary_folder, want_drm=False):
         'cp ../res/rustdesk-link.desktop tmpdeb/usr/share/applications/rustdesk-link.desktop')
     system2(
         "echo \"#!/bin/sh\" >> tmpdeb/usr/share/rustdesk/files/polkit && chmod a+x tmpdeb/usr/share/rustdesk/files/polkit")
+    # The update helper and the polkit action that names it. pkexec reads the action id from the
+    # annotation on the program it launches, so the action only means "install a LabDesk update"
+    # because it names this helper; dpkg run under pkexec directly is authorised as dpkg, with
+    # whatever package the caller supplies. Nothing else in the package produces either file, and
+    # src/updater.rs's Linux arm calls the helper by this absolute path, so a deb built without
+    # these two lines can never install an update.
+    system2('install -m 755 ../res/labdesk-helper tmpdeb/usr/share/rustdesk/labdesk-helper')
+    system2('install -m 644 ../res/polkit/net.lab-desk.LabDesk.policy '
+            'tmpdeb/usr/share/polkit-1/actions/net.lab-desk.LabDesk.policy')
     # Where the capture library comes from for a `--package <folder> --drm` build. Two shapes are
     # supported, because two exist in practice: a bundle that already carries libdrmtap.so.0.*
     # (someone staged it, e.g. a CI artifact), and a plain bundle, which is what every build path

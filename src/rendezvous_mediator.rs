@@ -1,5 +1,5 @@
 use std::{
-    net::SocketAddr,
+    net::{IpAddr, SocketAddr},
     sync::{
         atomic::{AtomicBool, Ordering},
         Arc, RwLock,
@@ -844,18 +844,107 @@ fn get_direct_port() -> i32 {
     port
 }
 
+/// labnet: how many times a literal bind is retried, one attempt a second, so
+/// about a minute, before the wait goes quiet. The overlay interface can take a
+/// moment to appear after a restart and the bind is tried again while it does.
+/// A failure that outlives that is not the interface, it is the port already
+/// being held, and retrying that forever would only fill the log, so the wait
+/// then holds for an option to change instead.
+const DIRECT_BIND_RETRIES: u32 = 60;
+
+/// labnet: the direct listener serves this machine's overlay address alone, so
+/// the option is taken only as a literal IPv4 address out of 100.64.0.0/10, the
+/// range NetBird allocates overlay addresses from and the only range the console
+/// ever writes here. A name would be resolved at bind time, and any other
+/// address, including the IPv6 forms of one and mapped IPv4 above all, would
+/// open the listener wider than the overlay while the console still reads on,
+/// which is the thing binding to one address is there to prevent.
+fn direct_bind_ip(bind: &str) -> Option<IpAddr> {
+    let IpAddr::V4(ip) = bind.parse::<IpAddr>().ok()? else {
+        return None;
+    };
+    let octets = ip.octets();
+    if octets[0] != 100 || !(64..=127).contains(&octets[1]) {
+        return None;
+    }
+    Some(IpAddr::V4(ip))
+}
+
+#[cfg(test)]
+mod direct_bind_tests {
+    use super::direct_bind_ip;
+
+    #[test]
+    fn only_a_literal_overlay_address_is_bound() {
+        assert_eq!(
+            direct_bind_ip("100.72.0.4").map(|ip| ip.to_string()),
+            Some("100.72.0.4".to_owned())
+        );
+        assert_eq!(
+            direct_bind_ip("100.64.0.3").map(|ip| ip.to_string()),
+            Some("100.64.0.3".to_owned())
+        );
+        assert_eq!(
+            direct_bind_ip("100.127.255.255").map(|ip| ip.to_string()),
+            Some("100.127.255.255".to_owned())
+        );
+        assert_eq!(direct_bind_ip(""), None);
+        assert_eq!(direct_bind_ip("this-machine.example.com"), None);
+        assert_eq!(direct_bind_ip("100.72.0.4/16"), None);
+        assert_eq!(direct_bind_ip("100.72.0.4:21118"), None);
+        assert_eq!(direct_bind_ip("0.0.0.0"), None);
+        assert_eq!(direct_bind_ip("127.0.0.1"), None);
+        assert_eq!(direct_bind_ip("239.0.0.1"), None);
+        assert_eq!(direct_bind_ip("192.168.1.20"), None);
+        assert_eq!(direct_bind_ip("100.63.255.255"), None);
+        assert_eq!(direct_bind_ip("100.128.0.1"), None);
+        assert_eq!(direct_bind_ip("::"), None);
+        assert_eq!(direct_bind_ip("fd00::4"), None);
+        assert_eq!(direct_bind_ip("::ffff:0.0.0.0"), None);
+        assert_eq!(direct_bind_ip("::ffff:100.72.0.4"), None);
+        assert_eq!(direct_bind_ip("[::ffff:100.72.0.4]"), None);
+        assert_eq!(direct_bind_ip("::ffff:6448:4"), None);
+    }
+}
+
 async fn direct_server(server: ServerPtr) {
     let mut listener = None;
     let mut port = 0;
+    // labnet: when set, the listener serves this address only, never every interface.
+    let mut bind = String::new();
+    // labnet: binds that have failed since the port or the address last changed.
+    let mut failures = 0;
     loop {
         let disabled = !option2bool(
             OPTION_DIRECT_SERVER,
             &Config::get_option(OPTION_DIRECT_SERVER),
         ) || option2bool("stop-service", &Config::get_option("stop-service"));
         if !disabled && listener.is_none() {
-            port = get_direct_port();
-            match hbb_common::tcp::listen_any(port as _).await {
+            let next_port = get_direct_port();
+            let next_bind = Config::get_option("labdesk-direct-bind");
+            if next_port != port || next_bind != bind {
+                failures = 0;
+            }
+            port = next_port;
+            bind = next_bind;
+            // The reuse flag is what listen_any sets on this platform: reuseport
+            // and reuseaddr on unix, nothing on windows, where reuseaddr would
+            // let any other local process bind the same address and take the
+            // connections meant for this listener.
+            let bind_ip = direct_bind_ip(&bind);
+            let listen = match bind_ip {
+                Some(ip) => {
+                    hbb_common::tcp::new_listener(SocketAddr::new(ip, port as u16), cfg!(unix)).await
+                }
+                None if bind.is_empty() => hbb_common::tcp::listen_any(port as _).await,
+                None => Err(hbb_common::anyhow::anyhow!(
+                    "not an address to bind: {}",
+                    bind
+                )),
+            };
+            match listen {
                 Ok(l) => {
+                    failures = 0;
                     listener = Some(l);
                     log::info!(
                         "Direct server listening on: {:?}",
@@ -863,23 +952,37 @@ async fn direct_server(server: ServerPtr) {
                     );
                 }
                 Err(err) => {
-                    // to-do: pass to ui
-                    log::error!(
-                        "Failed to start direct server on port: {}, error: {}",
-                        port,
-                        err
-                    );
+                    failures += 1;
+                    if failures == 1 {
+                        // to-do: pass to ui
+                        log::error!(
+                            "Failed to start direct server on port: {}, error: {}",
+                            port,
+                            err
+                        );
+                    }
                     loop {
-                        if port != get_direct_port() {
+                        sleep(1.).await;
+                        // The address can arrive after the service starts, when
+                        // the overlay interface comes up, so a literal bind is
+                        // tried again for as long as that can take. Every other
+                        // failure needs an option to change before another
+                        // attempt could go differently.
+                        if (bind_ip.is_some() && failures <= DIRECT_BIND_RETRIES)
+                            || port != get_direct_port()
+                            || bind != Config::get_option("labdesk-direct-bind")
+                        {
                             break;
                         }
-                        sleep(1.).await;
                     }
                 }
             }
         }
         if let Some(l) = listener.as_mut() {
-            if disabled || port != get_direct_port() {
+            if disabled
+                || port != get_direct_port()
+                || bind != Config::get_option("labdesk-direct-bind")
+            {
                 log::info!("Exit direct access listen");
                 listener = None;
                 continue;
@@ -891,13 +994,19 @@ async fn direct_server(server: ServerPtr) {
                     .local_addr()
                     .unwrap_or(Config::get_any_listen_addr(true));
                 let server = server.clone();
+                // labnet: a listener bound to the overlay address signs its id
+                // first, which is what the overlay client waits for; an unsigned
+                // first message left every overlay connect falling back to the
+                // relay. The plain direct listener stays unsigned, as upstream's
+                // direct IP clients expect.
+                let secure = direct_bind_ip(&bind).is_some();
                 tokio::spawn(async move {
                     allow_err!(
                         crate::server::create_tcp_connection(
                             server,
                             hbb_common::Stream::from(stream, local_addr),
                             addr,
-                            false,
+                            secure,
                             ConnectionMeta::default(), // Direct connections don't have server-side user context.
                         )
                         .await

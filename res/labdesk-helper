@@ -1,0 +1,140 @@
+#!/bin/sh
+#
+# labdesk-helper -- installs a LabDesk update as root.
+#
+# This is the program the LabDesk polkit action names, and the only one it
+# names. pkexec authorises org.freedesktop.policykit.exec against the program
+# it is asked to launch and takes the action id from that program's own polkit
+# annotation, so "pkexec dpkg -i <file>" is authorised as dpkg, under dpkg's
+# annotation, and installs whatever package the caller points it at. Naming
+# this script instead is what makes the action mean "install a LabDesk update"
+# rather than "run the package manager as root".
+#
+# What it will install: a package whose bytes are exactly what lab-desk.net
+# publishes for an asset of a release the site has made public, and whose
+# version is newer than the one already installed. Nothing else. The digest is
+# fetched here, from the site, rather than taken from the caller, because a
+# digest the caller supplies proves only that the caller knows the hash of its
+# own file.
+#
+# The package is copied into a root-owned directory before anything is read
+# out of it. Everything after that copy -- the metadata, the digest and the
+# install -- reads bytes nobody else can replace, which is what keeps a caller
+# from passing a good file, waiting for the check, and swapping in another one.
+#
+# Called two ways:
+#   pkexec /usr/share/rustdesk/labdesk-helper install-update <package>
+#     from the desktop application, where an administrator authorises it.
+#   systemd-run ... /usr/share/rustdesk/labdesk-helper install-update <package>
+#     from the root service, unattended. It has to be a transient unit of its
+#     own: res/DEBIAN/preinst stops rustdesk.service, and KillMode=mixed then
+#     kills everything left in that unit's cgroup, which would be dpkg in the
+#     middle of unpacking.
+
+set -eu
+
+SITE="https://lab-desk.net"
+
+fail() {
+    echo "labdesk-helper: $1" >&2
+    exit "$2"
+}
+
+case "${1:-}" in
+    install-update) ;;
+    *) fail "usage: labdesk-helper install-update <package>" 64 ;;
+esac
+[ "$#" -eq 2 ] || fail "usage: labdesk-helper install-update <package>" 64
+
+given=$2
+case "$given" in
+    /*) ;;
+    *) fail "the package path must be absolute: $given" 64 ;;
+esac
+name=$(basename -- "$given")
+# The name is used to ask the site for a digest and is never used as a path,
+# but it still has to be a release asset's name rather than anything a shell
+# or a URL could read differently.
+case "$name" in
+    labdesk-[0-9]*.deb|labdesk-[0-9]*.rpm) ;;
+    *) fail "not a LabDesk release asset name: $name" 64 ;;
+esac
+case "$name" in
+    *[!A-Za-z0-9._+-]*) fail "not a LabDesk release asset name: $name" 64 ;;
+esac
+case "$name" in
+    *.deb) kind=deb ;;
+    *) kind=rpm ;;
+esac
+
+# Checked before the copy as well as after it. The check after the copy is the
+# one that decides; this one keeps the ordinary mistake, and the named pipe a
+# caller could leave in place of a package, from being read at all.
+[ -f "$given" ] || fail "not a regular file: $given" 66
+if [ -L "$given" ]; then fail "the package path is a symlink: $given" 66; fi
+
+work=$(mktemp -d /var/tmp/labdesk-helper-XXXXXX)
+chmod 700 "$work"
+trap 'rm -rf "$work"' EXIT INT TERM
+pkg="$work/$name"
+# --no-dereference is not enough on its own: the caller may still swap the path
+# for a symlink between this copy and any later read, which is exactly why
+# every later read is of the copy.
+cp --no-dereference -- "$given" "$pkg" 2>/dev/null ||
+    fail "cannot read the package: $given" 66
+[ -f "$pkg" ] || fail "not a regular file: $given" 66
+
+if [ "$kind" = deb ]; then
+    package=$(dpkg-deb -f "$pkg" Package) || fail "not a Debian package: $name" 65
+    version=$(dpkg-deb -f "$pkg" Version) || fail "not a Debian package: $name" 65
+    installed=$(dpkg-query -W -f='${Version}' "$package" 2>/dev/null || true)
+else
+    package=$(rpm -qp --nosignature --qf '%{NAME}' "$pkg") || fail "not an RPM package: $name" 65
+    version=$(rpm -qp --nosignature --qf '%{VERSION}' "$pkg") || fail "not an RPM package: $name" 65
+    installed=$(rpm -q --qf '%{VERSION}' "$package" 2>/dev/null || true)
+fi
+# The version comes out of the package, so it is whatever whoever built that
+# package put there, and it is about to become part of a URL path. A Debian
+# version is digits, letters and a few punctuation marks; anything else is
+# refused here rather than sent to the site.
+printf '%s' "$version" | grep -qE '^[0-9][0-9A-Za-z.+~-]*$' ||
+    fail "the package declares a version that is not a version: $version" 65
+
+# An old release is a published release, so a digest check alone would let one
+# be handed back to a machine that has already moved past it. Every install
+# this helper performs moves the version forward.
+if [ -n "$installed" ]; then
+    if [ "$kind" = deb ]; then
+        dpkg --compare-versions "$version" gt "$installed" ||
+            fail "$package $version is not newer than the installed $installed" 67
+    else
+        # Release versions here are plain dotted numbers, which is all sort -V
+        # is being asked to order.
+        [ "$version" != "$installed" ] &&
+            [ "$(printf '%s\n%s\n' "$version" "$installed" | sort -V | tail -n 1)" = "$version" ] ||
+            fail "$package $version is not newer than the installed $installed" 67
+    fi
+fi
+
+# The digest the site publishes for this asset of this release. A version with
+# no published channel row, or an asset that release never carried, answers 404
+# and stops here.
+url="$SITE/releases/checksums/$version/$name"
+published=$(curl --fail --silent --show-error --location --proto '=https' --tlsv1.2 \
+    --max-time 30 --max-filesize 128 "$url" 2>/dev/null) ||
+    fail "lab-desk.net publishes no digest for $name of $version" 68
+published=$(printf '%s' "$published" | tr -d '\r\n' | tr 'A-F' 'a-f')
+printf '%s' "$published" | grep -qE '^[0-9a-f]{64}$' ||
+    fail "what lab-desk.net published for $name is not a digest" 68
+
+actual=$(sha256sum -- "$pkg" | cut -d' ' -f1)
+[ "$actual" = "$published" ] ||
+    fail "$name does not hash to the digest lab-desk.net publishes for it" 69
+
+echo "labdesk-helper: installing $package $version over ${installed:-nothing} from $name"
+if [ "$kind" = deb ]; then
+    dpkg -i -- "$pkg"
+else
+    rpm -Uvh --replacepkgs -- "$pkg"
+fi
+echo "labdesk-helper: $package $version installed"

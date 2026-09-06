@@ -1,5 +1,5 @@
 Name:       rustdesk
-Version:    1.2.2
+Version:    1.2.6
 Release:    0
 Summary:    LabDesk remote administration client
 License:    GPL-3.0
@@ -25,18 +25,25 @@ Remote administration client for the machines you look after. Based on RustDesk.
 %install
 
 mkdir -p "%{buildroot}/usr/share/rustdesk" && cp -r ${HBB}/flutter/build/linux/x64/release/bundle/* -t "%{buildroot}/usr/share/rustdesk"
+# labnet: the NetBird client fetched by third_party/netbird/fetch.py, when present.
+if [ -d "${HBB}/netbird-dist" ]; then mkdir -p "%{buildroot}/usr/share/rustdesk/netbird" && cp -r ${HBB}/netbird-dist/* -t "%{buildroot}/usr/share/rustdesk/netbird"; fi
 mkdir -p "%{buildroot}/usr/bin"
 install -Dm 644 $HBB/res/rustdesk.service -t "%{buildroot}/usr/share/rustdesk/files"
 install -Dm 644 $HBB/res/rustdesk.desktop -t "%{buildroot}/usr/share/rustdesk/files"
 install -Dm 644 $HBB/res/rustdesk-link.desktop -t "%{buildroot}/usr/share/rustdesk/files"
 install -Dm 644 $HBB/res/128x128@2x.png "%{buildroot}/usr/share/icons/hicolor/256x256/apps/rustdesk.png"
 install -Dm 644 $HBB/res/scalable.svg "%{buildroot}/usr/share/icons/hicolor/scalable/apps/rustdesk.svg"
+# The update helper and the polkit action that names it. src/updater.rs's Linux arm calls the
+# helper by this absolute path, so an rpm built without these two lines can never install an update.
+install -Dm 755 $HBB/res/labdesk-helper "%{buildroot}/usr/share/rustdesk/labdesk-helper"
+install -Dm 644 $HBB/res/polkit/net.lab-desk.LabDesk.policy "%{buildroot}/usr/share/polkit-1/actions/net.lab-desk.LabDesk.policy"
 
 %files
 /usr/share/rustdesk/*
 /usr/share/rustdesk/files/rustdesk.service
 /usr/share/icons/hicolor/256x256/apps/rustdesk.png
 /usr/share/icons/hicolor/scalable/apps/rustdesk.svg
+/usr/share/polkit-1/actions/net.lab-desk.LabDesk.policy
 /usr/share/rustdesk/files/rustdesk.desktop
 /usr/share/rustdesk/files/rustdesk-link.desktop
 

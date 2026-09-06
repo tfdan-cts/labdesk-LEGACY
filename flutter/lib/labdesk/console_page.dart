@@ -8,9 +8,12 @@ import 'package:flutter/services.dart';
 import 'package:flutter_hbb/common.dart';
 import 'package:flutter_hbb/common/widgets/dialog.dart';
 import 'package:flutter_hbb/consts.dart';
+import 'package:flutter_hbb/common/formatter/id_formatter.dart' show trimID;
+import 'package:flutter_hbb/common/labdesk_peer_status.dart';
 import 'package:flutter_hbb/common/labdesk_profiles.dart';
 import 'package:flutter_hbb/common/labdesk_status_binding.dart';
 import 'package:flutter_hbb/common/widgets/labdesk_groups.dart';
+import 'package:flutter_hbb/common/widgets/login.dart' show loginDialog;
 import 'package:flutter_hbb/common/widgets/peer_card.dart' show showRdpDialog;
 import 'package:flutter_hbb/desktop/pages/connection_page.dart' show OnlineStatusWidget;
 import 'package:flutter_hbb/desktop/pages/desktop_home_page.dart';
@@ -33,6 +36,8 @@ import 'models/chat_transcript.dart';
 import 'models/console_rpc.dart';
 import 'models/machine_metrics.dart';
 import 'models/machine_row.dart';
+import 'models/machine_state.dart';
+import 'models/net_view.dart';
 import 'models/tool_models.dart';
 import 'screens/actions_screen.dart';
 import 'screens/automation_screen.dart';
@@ -40,13 +45,22 @@ import 'screens/connect_screen.dart';
 import 'screens/console_shell.dart';
 import 'screens/sessions_screen.dart';
 import 'screens/settings_screen.dart';
+import 'models/labnet.dart';
+import 'screens/enrol_card.dart';
+import 'screens/labnet_card.dart';
+import 'screens/network_screen.dart';
+import 'screens/selfheal_card.dart';
+import 'services/overlay_broker.dart';
+import 'services/overlay_daemon.dart';
+import 'services/overlay_enrolment.dart';
+import 'services/overlay_session.dart';
+import 'theme/console_theme.dart';
 import 'screens/terminal_screen.dart';
 import 'screens/tools_screen.dart';
 import 'services/automation_engine.dart';
 import 'services/tool_catalog.dart';
 import 'services/tool_parsers.dart';
 import 'screens/this_machine_screen.dart';
-import 'theme/console_theme.dart';
 import 'theme/ld_icons.dart';
 
 /// The console, driven by the real client.
@@ -94,6 +108,62 @@ class _LabDeskConsolePageState extends State<LabDeskConsolePage> {
   /// saved password" against this.
   final _savedPasswords = <String>{};
 
+  // labnet: the encrypted direct path. The daemon, the broker and the two
+  // sequences are built once; the This machine card and the Network section
+  // render their state. Nothing reaches the daemon until the operator says so.
+  late final OverlayDaemon _daemon;
+  late final OverlayBroker _broker;
+  late final OverlayEnrolment _enrolment;
+  late final OverlaySession _overlay;
+  var _labnet = LabnetCardState.off;
+  var _inbox = LabnetInbox.empty;
+
+  /// The organization's machines as lab-desk.net holds them, read with the
+  /// inbox. The Network section is the one place the console names a machine
+  /// the way the server does rather than by its peer id, because that is what
+  /// every labnet route resolves against.
+  var _orgMachines = const <OrgMachine>[];
+
+  /// The same list keyed by peer id. Rebuilt when the list changes rather than
+  /// scanned: the fleet table and the rule tick both resolve every row through
+  /// it, once a second, and a linear scan per row is quadratic.
+  var _orgByPeer = const <String, OrgMachine>{};
+
+  /// The per-machine reads, keyed by `machine.id`: the fleet answer carries no
+  /// uptime and no signed-in user, so one machine a cycle is asked for its own
+  /// hot row rather than every machine every cycle (contract section 5, "not
+  /// the N+1").
+  final _detail = <String, MachineState>{};
+
+  /// Which machine the round-robin read is up to, and which have had their
+  /// stored history pulled once.
+  var _detailCursor = -1;
+  final _backfilled = <String>{};
+
+  /// What each machine reports about its own network, keyed by `machine.id`.
+  /// Read only for the machine a section is actually showing.
+  final _netViews = <String, MachineNetView>{};
+
+  /// The machine the Network section's adapter view is pointed at.
+  var _netMachineId = '';
+
+  /// The fleets this account may name, and whether it is narrowed to more than
+  /// one of them, which is the only case where creating a labnet has to say
+  /// which fleet it belongs to.
+  var _fleets = const <OrgFleet>[];
+  var _mustNameFleet = false;
+  var _fleetsRead = false;
+
+  /// The self-healing switch as it stands on this machine, and whether the
+  /// service has reported since it was last flipped.
+  var _selfHealOn = false;
+  var _selfHealWaiting = false;
+
+  var _labnetBusy = false;
+  var _labnetError = '';
+  Timer? _inboxTick;
+  static const _kConsentKey = 'labdesk-overlay-consent';
+
 
   void _goToSettings(SettingsTabKey tab) {
     // A page this build does not offer must not become reachable through the
@@ -139,12 +209,10 @@ class _LabDeskConsolePageState extends State<LabDeskConsolePage> {
     bind.mainLoadRecentPeers();
     bind.mainLoadFavPeers();
     bind.mainLoadLanPeers();
-    _monitored.addAll(bind
-        .mainGetLocalOption(key: _kMonitoredKey)
-        .split(',')
-        .where((s) => s.isNotEmpty));
     _automation.rules = decodeRules(bind.mainGetLocalOption(key: _kRulesKey));
+    _selfHealOn = bind.mainGetOptionSync(key: kSelfHealOption) == 'Y';
     _library = ScriptLibrary.decode(bind.mainGetLocalOption(key: _kScriptsKey));
+    _initLabnet();
     // Ask once on open so the fleet is not blank while waiting for the client's
     // own poll to come round.
     WidgetsBinding.instance.addPostFrameCallback((_) async {
@@ -157,6 +225,8 @@ class _LabDeskConsolePageState extends State<LabDeskConsolePage> {
   @override
   void dispose() {
     _tick?.cancel();
+    _inboxTick?.cancel();
+    _enrolment.dispose();
     _sectionRequest.dispose();
     LabDeskMachineLink.closeAll();
     super.dispose();
@@ -191,19 +261,17 @@ class _LabDeskConsolePageState extends State<LabDeskConsolePage> {
   var _askingWindows = false;
 
   /// What Health has learned, per machine: the session window's quality
-  /// figures, and a probe of the machine itself over the console's own link
-  /// (or a terminal window's connection, when one is open).
+  /// figures, and the readings the machine's own collector sent to
+  /// lab-desk.net. Nothing here is measured over a session any more; the agent
+  /// takes its own figures on its own flush (WP18).
   final _sessionStats = <String, Map<String, dynamic>>{};
-  final _probes = <String, Map<String, dynamic>>{};
-  final _probedAt = <String, DateTime>{};
-  final _history = <String, MetricHistory>{};
-  final _probing = <String>{};
 
-  /// Machines the operator asked to be monitored. Persisted, so the board
-  /// comes back the way it was left.
-  static const _kMonitoredKey = 'labdesk-monitored';
-  static const _probeEvery = Duration(seconds: 30);
-  final _monitored = <String>{};
+  /// Keyed by peer id, like everything else the console renders.
+  final _history = <String, MetricHistory>{};
+
+  /// The last uplink each machine's history has a sample for, so a fleet poll
+  /// that lands between two flushes does not record the same reading twice.
+  final _historyAt = <String, int>{};
 
   /// Rules that act on machines. Evaluated by this tick, so they run only
   /// while the console is open; the screen says so.
@@ -269,6 +337,8 @@ class _LabDeskConsolePageState extends State<LabDeskConsolePage> {
       _terminalWindowOf
         ..clear()
         ..addAll(terminal);
+      // A granted direct path is released once its session has come and gone.
+      await _overlay.noteOpenSessions({...remote.keys, ...terminal.keys});
 
       // Chat transcripts of the desktop sessions that are open.
       final chats = <String, SessionChat>{};
@@ -289,21 +359,12 @@ class _LabDeskConsolePageState extends State<LabDeskConsolePage> {
         ..clear()
         ..addAll(chats);
 
-      // Monitored machines: quality figures from an open desktop session, and
-      // a probe of the machine every half minute.
-      final now = DateTime.now();
-      for (final id in _monitored.toList()) {
-        final rw = remote[id];
-        if (rw != null) {
-          final s = await _ask(rw, kLabDeskRpcSessionStats, id);
-          if (s is String) {
-            _sessionStats[id] = jsonDecode(s) as Map<String, dynamic>;
-          }
-        }
-        final at = _probedAt[id];
-        if (!_probing.contains(id) &&
-            (at == null || now.difference(at) > _probeEvery)) {
-          _probe(id);
+      // Quality figures for the machines a desktop session is open to. The
+      // machine's own CPU, memory and disk no longer come from here.
+      for (final e in remote.entries) {
+        final s = await _ask(e.value, kLabDeskRpcSessionStats, e.key);
+        if (s is String) {
+          _sessionStats[e.key] = jsonDecode(s) as Map<String, dynamic>;
         }
       }
       if (mounted &&
@@ -318,44 +379,6 @@ class _LabDeskConsolePageState extends State<LabDeskConsolePage> {
     }
   }
 
-  /// Ask a machine about itself. A terminal window's connection is used when
-  /// one is open; otherwise the console opens a link of its own.
-  Future<void> _probe(String id) async {
-    _probing.add(id);
-    if (mounted) setState(() {});
-    try {
-      final platform = _rowOf(id)?.platform ?? '';
-      final tw = _terminalWindowOf[id];
-      dynamic r;
-      if (tw != null) {
-        r = await _ask(tw, kWindowEventLabDeskProbe,
-            jsonEncode({'id': id, 'platform': platform}));
-        if (r is String) r = jsonDecode(r);
-      } else {
-        final ffi = await LabDeskMachineLink.open(id);
-        r = ffi == null
-            ? {
-                'state': 'failed',
-                'reason': LabDeskMachineLink.reason(id),
-                'metrics': <Map<String, dynamic>>[],
-              }
-            : await LabDeskTerminalRpc.probeOn(ffi, id, platform);
-      }
-      final now = DateTime.now();
-      if (r is Map) {
-        _probes[id] = Map<String, dynamic>.from(r);
-        final sample = MetricSample.fromProbe(_probes[id], at: now);
-        if (sample != null) {
-          _history.putIfAbsent(id, MetricHistory.new).add(sample);
-        }
-      }
-      _probedAt[id] = now;
-    } finally {
-      _probing.remove(id);
-      if (mounted) setState(() {});
-    }
-  }
-
   void _runAutomation() {
     if (_automation.rules.isEmpty) return;
     final machines = _machines;
@@ -364,7 +387,10 @@ class _LabDeskConsolePageState extends State<LabDeskConsolePage> {
       status: {
         for (final m in machines) m.id: labdeskStatus.store.stateOf(m.id).status
       },
-      metrics: {for (final id in _monitored) id: _healthFor(id).remote},
+      metrics: {
+        for (final m in machines)
+          if (_stateOfPeer(m.id) case final s?) m.id: s.metrics()
+      },
       machines: {for (final m in machines) m.id},
     );
     for (final f in fired) {
@@ -402,11 +428,8 @@ class _LabDeskConsolePageState extends State<LabDeskConsolePage> {
       case WakeOnLan():
         await bind.mainWol(id: id);
         _automation.recordOutcome(f.id, true, 'magic packet sent');
-      case MonitorOn():
-        if (!_monitored.contains(id)) _toggleMonitor(id);
-        _automation.recordOutcome(f.id, true);
       case OpenSession():
-        if (mounted) connect(context, id);
+        if (mounted) _connectVia(id);
         _automation.recordOutcome(f.id, true);
     }
     if (mounted) setState(() {});
@@ -422,9 +445,13 @@ class _LabDeskConsolePageState extends State<LabDeskConsolePage> {
         rules: _automation.rules,
         log: _automation.log.entries,
         machines: _machines,
-        monitoredIds: _monitored,
         now: DateTime.now(),
         onSave: _saveRules,
+        onApplyPreset: (preset) => _saveRules([
+          ..._automation.rules,
+          preset.toRule(
+              'rule-${DateTime.now().microsecondsSinceEpoch.toRadixString(36)}'),
+        ]),
         onToggle: (id, on) => _saveRules([
           for (final r in _automation.rules)
             r.id == id ? r.copyWith(enabled: on) : r,
@@ -557,25 +584,36 @@ class _LabDeskConsolePageState extends State<LabDeskConsolePage> {
         onRunScript: _runScript,
       );
 
-  void _toggleMonitor(String id) {
-    if (_monitored.remove(id)) {
-      LabDeskMachineLink.close(id);
-      _probes.remove(id);
-      _probedAt.remove(id);
-      _history.remove(id);
-    } else {
-      _monitored.add(id);
-      _probe(id);
-    }
-    bind.mainSetLocalOption(key: _kMonitoredKey, value: _monitored.join(','));
-    setState(() {});
-  }
-
   MachineRow? _rowOf(String id) {
-    for (final m in _machines) {
+    for (final m in _fleetRows) {
       if (m.id == id) return m;
     }
     return null;
+  }
+
+  /// Every machine the fleet's health must account for: the technician's own
+  /// peer rows, plus each machine the organization holds that is not among
+  /// them.
+  ///
+  /// The peer list alone is not the fleet. On a console that has never
+  /// connected to anything that list is empty, and until 2026-09-05 the health
+  /// board rendered it: signed in on homebox-devserver the board read "No
+  /// machines yet." while lab-desk.net was answering the same console with four
+  /// machines, one of them that machine, online and carrying figures.
+  List<MachineRow> get _fleetRows {
+    final rows = _machines;
+    final known = {for (final r in rows) r.id};
+    return [
+      ...rows,
+      for (final m in _orgMachines)
+        if (!known.contains(m.peerId))
+          MachineRow(
+            id: m.peerId,
+            hostname: m.name,
+            platform: m.platform,
+            status: _serverStatusOf(m.peerId) ?? LabDeskPeerStatus.unknown,
+          ),
+    ];
   }
 
   MachineHealth _healthFor(String id) {
@@ -587,9 +625,22 @@ class _LabDeskConsolePageState extends State<LabDeskConsolePage> {
           _terminalWindowOf.containsKey(id) ||
           LabDeskMachineLink.isOpen(id),
       sessionStats: _sessionStats[id],
-      probe: _probes[id],
+      state: _stateOfPeer(id),
       history: _history[id],
     );
+  }
+
+  /// The organization's machine for a peer id, or null when lab-desk.net has
+  /// never been told about that peer.
+  OrgMachine? _orgOfPeer(String peerId) => _orgByPeer[peerId];
+
+  /// The hot row for a peer: the fleet answer, with what only the per-machine
+  /// read carries (uptime, the signed-in user) filled in from the last one.
+  MachineState? _stateOfPeer(String peerId) {
+    final m = _orgOfPeer(peerId);
+    if (m == null) return null;
+    final detail = _detail[m.id];
+    return detail == null ? m.state : detail.mergeDetail(m.state);
   }
 
   /// One command, run in the terminal window's hidden shell for this machine,
@@ -704,7 +755,20 @@ class _LabDeskConsolePageState extends State<LabDeskConsolePage> {
         store: labdeskStatus.store,
         historyOf: labdeskStatus.historyOf,
         groupOf: _groupOf,
+        serverStatusOf: _serverStatusOf,
       );
+
+  /// Reachability as lab-desk.net computed it, for a peer it holds a machine
+  /// for. Null for anything else, which leaves the client's own poll answering.
+  LabDeskPeerStatus? _serverStatusOf(String peerId) {
+    final m = _orgOfPeer(peerId);
+    if (m == null) return null;
+    return switch (m.state.status) {
+      'online' => LabDeskPeerStatus.online,
+      'offline' => LabDeskPeerStatus.offline,
+      _ => LabDeskPeerStatus.unknown,
+    };
+  }
 
   List<ProfileRow> get _profiles => [
         for (final p in ServerProfilesModel.profiles)
@@ -721,13 +785,13 @@ class _LabDeskConsolePageState extends State<LabDeskConsolePage> {
   void _runAction(String machineId, MachineAction action) {
     switch (action.id) {
       case 'connect':
-        connect(context, machineId);
+        _connectVia(machineId);
         break;
       case 'terminal':
-        connect(context, machineId, isTerminal: true);
+        _connectVia(machineId, isTerminal: true);
         break;
       case 'transfer':
-        connect(context, machineId, isFileTransfer: true);
+        _connectVia(machineId, isFileTransfer: true);
         break;
       case 'screenshot':
       case 'reboot':
@@ -1030,8 +1094,7 @@ class _LabDeskConsolePageState extends State<LabDeskConsolePage> {
           // with one environment variable set, which is how the peer card
           // asked for it too.
           if (mode == ConnectMode.terminalAdmin) setEnvTerminalAdmin();
-          connect(
-            context,
+          _connectVia(
             id,
             isFileTransfer: mode == ConnectMode.fileTransfer,
             isViewCamera: mode == ConnectMode.viewCamera,
@@ -1135,6 +1198,29 @@ class _LabDeskConsolePageState extends State<LabDeskConsolePage> {
               model.verificationMethod != kUsePermanentPassword,
           serviceRunning: model.isStart,
           profileSwitcher: const ServerProfileSwitcher(),
+          // Enrolment is the machine's own consent to be owned, so the token
+          // is pasted here, at the machine, and the privileged process spends
+          // it (src/labdesk/labnet.rs).
+          enrol: MachineEnrolCard(
+            enrol: (token) => bind.mainAgentEnrol(token: token),
+          ),
+          labnet: LabnetCard(
+            state: _labnet,
+            onEnable: _enableLabnet,
+            onDisable: _disableLabnet,
+          ),
+          selfHeal: SelfHealCard(
+            on: _selfHealOn,
+            reachability:
+                _netViews[_machineIdOfPeer(_thisPeerId)]?.reachability ??
+                    NetReachability.unknown,
+            // Only a machine that reports at all can be waited on. One that
+            // has never sent a network view is not "waiting for the service";
+            // it is a machine nobody is hearing from, and the card says that.
+            waiting: _selfHealWaiting &&
+                _netViews.containsKey(_machineIdOfPeer(_thisPeerId)),
+            onChanged: _setSelfHeal,
+          ),
           // Both of these existed on the old left rail and would have been lost
           // in the move. The catalogue of the old interface is what caught it.
           onRefreshPassword: () => bind.mainUpdateTemporaryPassword(),
@@ -1146,6 +1232,445 @@ class _LabDeskConsolePageState extends State<LabDeskConsolePage> {
       ),
     );
   }
+
+  /// The switch is one option. The daemon re-reads its own config file every
+  /// tick, so nothing else has to be told (`selfheal.rs::enabled`); what the
+  /// card shows beside the switch is the step the daemon reported, which is why
+  /// it says it is waiting until the machine's next uplink carries one.
+  Future<void> _setSelfHeal(bool on) async {
+    setState(() {
+      _selfHealOn = on;
+      _selfHealWaiting = true;
+    });
+    await bind.mainSetOption(key: kSelfHealOption, value: on ? 'Y' : '');
+    await _pollNetViews();
+  }
+
+  void _initLabnet() {
+    // The bundled netbird is driven by the privileged process, which knows
+    // where it is and owns its service, so nothing here needs a path or a
+    // prompt.
+    _daemon = OverlayDaemon(
+      call: (action, setupKey, managementUrl) => bind.mainOverlayDaemon(
+          action: action, setupKey: setupKey, managementUrl: managementUrl),
+    );
+    _broker = OverlayBroker(
+      baseUrl: 'https://lab-desk.net',
+      token: () => bind.mainGetLocalOption(key: 'access_token'),
+      // The machine plane's credential. The console cannot make it: the agent
+      // key is kept where an interactive user cannot read it
+      // (src/labdesk/identity.rs), so the privileged process signs over IPC
+      // and only the three headers come back.
+      sign: (method, path, body) async => MachineSignature.decode(
+          await bind.mainAgentSign(method: method, path: path, body: body)),
+      peerId: () => _thisPeerId,
+      machineIdOf: _machineIdOfPeer,
+    );
+    _enrolment = OverlayEnrolment(
+      daemon: _daemon,
+      broker: _broker,
+      setOption: (k, v) => bind.mainSetOption(key: k, value: v),
+      identity: () async =>
+          (await bind.mainGetIdPk(), await bind.mainGetDirectAccessPort()),
+    );
+    _enrolment.states.listen((s) {
+      if (mounted) setState(() => _labnet = s);
+    });
+    _overlay = OverlaySession(
+      broker: _broker,
+      daemon: _daemon,
+      setOption: (k, v) => bind.mainSetOption(key: k, value: v),
+    );
+    // What the daemon says now, so a machine enrolled last week opens as On.
+    _daemon.status().then((s) {
+      if (!mounted || !s.isUp) return;
+      setState(
+          () => _labnet = LabnetCardState(LabnetPhase.on, ip: bareIp(s.ip)));
+    });
+    _inboxTick =
+        Timer.periodic(const Duration(seconds: 15), (_) => _pollInbox());
+    WidgetsBinding.instance.addPostFrameCallback((_) => _pollInbox());
+  }
+
+  bool get _signedIn =>
+      bind.mainGetLocalOption(key: 'access_token').isNotEmpty;
+
+  /// This machine's own peer id, as the server holds it.
+  ///
+  /// `serverModel.serverId` is an `IDTextEditingController`, so its `text` is
+  /// what the box on screen shows: "1 180 573 903", spaces and all. Comparing
+  /// that with a `machine.peerId` matched nothing, so the console never
+  /// recognised itself -- the self-healing card could not report, the Network
+  /// section opened on somebody else's machine, and the labnet broker named
+  /// this machine to the server with the spaces in it (homebox-devserver,
+  /// 2026-09-05). `trimID` is the same function the connect box uses.
+  String get _thisPeerId => trimID(gFFI.serverModel.serverId.text);
+
+  /// The `machine.id` lab-desk.net names [peerId] by, or empty when the
+  /// organization's machine list holds no such peer. Empty rather than the peer
+  /// id itself: a machine the server cannot name is one it must refuse.
+  String _machineIdOfPeer(String peerId) {
+    for (final m in _orgMachines) {
+      if (m.peerId == peerId) return m.id;
+    }
+    return '';
+  }
+
+  /// The organization's machines, the invitations waiting on this machine and
+  /// the labnets the account manages, read every 15 s while signed in, like the
+  /// client's own heartbeat. The account is what both halves of the read are
+  /// scoped by, so a console with nobody signed in polls nothing.
+  Future<void> _pollInbox() async {
+    if (!mounted) return;
+    if (!_signedIn) {
+      _forgetAccountData();
+      return;
+    }
+    // THE TWO READS ARE SEPARATE, and that is the whole point of this shape.
+    // The machines are the organization's; the inbox is labnet's, and labnet is
+    // a subsystem a server need not have at all -- lab-desk.net answers
+    // `/agent/overlay/inbox` 503 "labnet is not set up on this server yet" when
+    // no NetBird is configured for it. Reading both inside one `try` meant that
+    // 503 threw past the assignment below, so the console lost the whole
+    // organization over a feature nobody had asked for: an empty health board,
+    // no adapters, no self-healing report and no machine picker, with one red
+    // line on the Network page as the only sign (homebox-devserver,
+    // 2026-09-05).
+    final List<OrgMachine> machines;
+    try {
+      // First, because it is the map every labnet call names a machine
+      // through and the inbox is rendered against it. `?state=1` rides the same
+      // answer, so the fleet's figures cost no extra request.
+      machines = await _broker.machines();
+    } on OverlayBrokerException catch (e) {
+      _reportBrokerFailure(e);
+      return;
+    } catch (_) {
+      return;
+    }
+    if (!mounted) return;
+    setState(() {
+      _orgMachines = machines;
+      _orgByPeer = {
+        for (final m in machines)
+          if (m.peerId.isNotEmpty) m.peerId: m
+      };
+      _recordHistory(machines, DateTime.now());
+      if (_netMachineId.isEmpty ||
+          !machines.any((m) => m.id == _netMachineId)) {
+        _netMachineId = _machineIdOfPeer(_thisPeerId);
+        if (_netMachineId.isEmpty && machines.isNotEmpty) {
+          _netMachineId = machines.first.id;
+        }
+      }
+    });
+    try {
+      final inbox = await _broker.inbox();
+      if (!mounted) return;
+      setState(() {
+        _inbox = inbox;
+        _labnetError = '';
+      });
+      await _maybeAskConsent(inbox);
+    } on OverlayBrokerException catch (e) {
+      _reportBrokerFailure(e);
+    } catch (_) {}
+    await _pollDetail();
+    await _pollNetViews();
+    if (!_fleetsRead) await _readFleets();
+  }
+
+  /// A sign-in that no longer holds is the account surface's to report, and the
+  /// previous account's machines must not stay on screen. Anything else is a
+  /// message for the labnet surface.
+  void _reportBrokerFailure(OverlayBrokerException e) {
+    if (e.signInAgain) {
+      _forgetAccountData();
+    } else if (mounted) {
+      setState(() => _labnetError = e.message);
+    }
+  }
+
+  /// One machine a cycle: its own hot row, and the first time round its stored
+  /// history. Bounded on purpose, so a fleet of two hundred machines costs one
+  /// extra request every fifteen seconds rather than two hundred.
+  Future<void> _pollDetail() async {
+    if (_orgMachines.isEmpty) return;
+    _detailCursor = (_detailCursor + 1) % _orgMachines.length;
+    final m = _orgMachines[_detailCursor];
+    try {
+      final state = await _broker.machineState(m.id);
+      if (!mounted) return;
+      setState(() => _detail[m.id] = state);
+    } catch (_) {}
+    if (_backfilled.contains(m.id) || m.peerId.isEmpty) return;
+    _backfilled.add(m.id);
+    try {
+      final now = DateTime.now().millisecondsSinceEpoch ~/ 1000;
+      final samples = await _broker.metrics(m.id,
+          from: now - const Duration(hours: 12).inSeconds, to: now);
+      if (!mounted || samples.isEmpty) return;
+      setState(() {
+        final history = MetricHistory();
+        for (final s in samples) {
+          history.add(s);
+        }
+        // Anything the live poll already recorded is newer than what the
+        // server stored, so it goes back on the end rather than being lost.
+        for (final s in _history[m.peerId]?.samples ?? const <MetricSample>[]) {
+          if (samples.isEmpty || s.at.isAfter(samples.last.at)) history.add(s);
+        }
+        _history[m.peerId] = history;
+      });
+    } catch (_) {}
+  }
+
+  /// The network view for the machine whichever section is open is showing,
+  /// and nothing else: the adapter list is read where it is rendered.
+  Future<void> _pollNetViews() async {
+    final wanted = <String>{
+      if (_section == ConsoleSection.network && _netMachineId.isNotEmpty)
+        _netMachineId,
+      if (_section == ConsoleSection.thisMachine) _machineIdOfPeer(_thisPeerId),
+    }..remove('');
+    for (final id in wanted) {
+      try {
+        final view = await _broker.netView(id);
+        if (!mounted) return;
+        setState(() {
+          _netViews[id] = view;
+          if (id == _machineIdOfPeer(_thisPeerId) &&
+              view.reachability.selfHealRunning == _selfHealOn) {
+            _selfHealWaiting = false;
+          }
+        });
+      } catch (_) {}
+    }
+  }
+
+  /// The fleets, read once per sign-in. Only a technician narrowed to more than
+  /// one fleet is ever asked which one a new labnet belongs to.
+  Future<void> _readFleets() async {
+    try {
+      final ids = await _broker.fleetIds();
+      final fleets = await _broker.fleets();
+      if (!mounted) return;
+      setState(() {
+        _fleets = fleets;
+        _mustNameFleet = ids != null && ids.length > 1;
+        // Read once per sign-in, not once per poll: an organization with no
+        // fleets would otherwise be asked twice every fifteen seconds for ever.
+        _fleetsRead = true;
+      });
+    } catch (_) {}
+  }
+
+  /// One reading per machine per uplink. The fleet poll runs every fifteen
+  /// seconds and a machine flushes every five minutes by default, so without
+  /// the stamp the same reading would be recorded twenty times over.
+  void _recordHistory(List<OrgMachine> machines, DateTime now) {
+    for (final m in machines) {
+      final seen = m.state.seenAt;
+      if (m.peerId.isEmpty || seen == null) continue;
+      if (_historyAt[m.id] == seen) continue;
+      final sample = m.state.sampleAt(
+          DateTime.fromMillisecondsSinceEpoch(seen * 1000, isUtc: true)
+              .toLocal());
+      if (sample == null) continue;
+      _historyAt[m.id] = seen;
+      _history.putIfAbsent(m.peerId, MetricHistory.new).add(sample);
+    }
+  }
+
+  /// Drops everything read under an account that no longer holds, so a
+  /// revoked session or a sign-out never leaves another account's labnets,
+  /// member addresses or machine names on screen or in the peer map.
+  void _forgetAccountData() {
+    if (!mounted) return;
+    if (_orgMachines.isEmpty && _inbox == LabnetInbox.empty) return;
+    setState(() {
+      _orgMachines = const <OrgMachine>[];
+      _orgByPeer = const <String, OrgMachine>{};
+      _inbox = LabnetInbox.empty;
+      _labnetError = '';
+      _detail.clear();
+      _netViews.clear();
+      _backfilled.clear();
+      _historyAt.clear();
+      _history.clear();
+      _fleets = const <OrgFleet>[];
+      _mustNameFleet = false;
+      _fleetsRead = false;
+    });
+  }
+
+  /// The one prompt: asked once per machine, only while signed in, never
+  /// again once answered or enrolled.
+  Future<void> _maybeAskConsent(LabnetInbox inbox) async {
+    final asked = bind.mainGetLocalOption(key: _kConsentKey) == 'asked';
+    if (!shouldAskLabnetConsent(
+        signedIn: _signedIn,
+        consentAsked: asked,
+        enrolled: inbox.enrolled || _labnet.phase == LabnetPhase.on)) {
+      return;
+    }
+    if (!mounted) return;
+    final yes = await showDialog<bool>(
+      context: context,
+      builder: (ctx) => AlertDialog(
+        backgroundColor: C.surface,
+        title: Text('Encrypted direct connections', style: C.h2()),
+        content: SizedBox(
+          width: 440,
+          child: Text(
+            'Machines on your account can open a direct encrypted path to '
+            'this one instead of going through an ID server. Nothing else can '
+            'reach it that way. You can turn this off under This machine at '
+            'any time.',
+            style: C.body(),
+          ),
+        ),
+        actions: [
+          _dialogAction('Not now', () => Navigator.of(ctx).pop(false)),
+          const SizedBox(width: 16),
+          _dialogAction('Turn on', () => Navigator.of(ctx).pop(true)),
+        ],
+      ),
+    );
+    // Recorded once the person has actually answered, so a console closed
+    // while the first poll was in flight does not spend the only prompt.
+    if (yes == null) return;
+    await bind.mainSetLocalOption(key: _kConsentKey, value: 'asked');
+    if (yes) _enableLabnet();
+  }
+
+  Widget _dialogAction(String label, VoidCallback onTap) => MouseRegion(
+        cursor: SystemMouseCursors.click,
+        child: GestureDetector(
+          onTap: onTap,
+          child: Padding(
+            padding: const EdgeInsets.symmetric(horizontal: 4, vertical: 8),
+            child: Text(
+              label,
+              style: C.small(color: C.textMuted).copyWith(
+                decoration: TextDecoration.underline,
+                decorationColor: C.textFaint,
+              ),
+            ),
+          ),
+        ),
+      );
+
+  Future<void> _enableLabnet() async {
+    if (_labnet.phase == LabnetPhase.working) return;
+    await _enrolment.enable();
+    await _pollInbox();
+  }
+
+  Future<void> _disableLabnet() async {
+    if (_labnet.phase == LabnetPhase.working) return;
+    await _enrolment.disable();
+    // Every per-peer hint the session service wrote goes with the labnet, or
+    // the next connect to each of those peers dials a dead address first.
+    final opts = jsonDecode(bind.mainGetOptionsSync()) as Map<String, dynamic>;
+    for (final k in opts.keys) {
+      if (k.startsWith(kOverlayAddrOption) || k.startsWith(kOverlayPkOption)) {
+        await bind.mainSetOption(key: k, value: '');
+      }
+    }
+    await _pollInbox();
+  }
+
+  /// Every way the console opens a session goes through here. With the direct
+  /// path on, lab-desk.net is asked for the grant and the target is waited for
+  /// before the client dials; without it, or if anything short of that
+  /// happens, the session goes the way it always has.
+  Future<void> _connectVia(
+    String id, {
+    bool isTerminal = false,
+    bool isFileTransfer = false,
+    bool isViewCamera = false,
+    bool isTcpTunneling = false,
+    bool isRDP = false,
+  }) async {
+    if (_labnet.phase == LabnetPhase.on) await _overlay.prepare(id);
+    if (!mounted) return;
+    connect(
+      context,
+      id,
+      isTerminal: isTerminal,
+      isFileTransfer: isFileTransfer,
+      isViewCamera: isViewCamera,
+      isTcpTunneling: isTcpTunneling,
+      isRDP: isRDP,
+    );
+  }
+
+  Future<void> _labnetDo(Future<void> Function() action) async {
+    setState(() {
+      _labnetBusy = true;
+      _labnetError = '';
+    });
+    try {
+      await action();
+    } on OverlayBrokerException catch (e) {
+      // Turning full access on, deleting a labnet and minting an enrolment
+      // token are refused on a console token older than five minutes, and the
+      // console's token is usually hours old. Signing in again mints a fresh
+      // one; the request is then the same request, so it is simply retried.
+      if (e.needsFreshSignIn && mounted && await loginDialog() == true) {
+        try {
+          await action();
+        } on OverlayBrokerException catch (e2) {
+          _labnetError = e2.message;
+        } catch (e2) {
+          _labnetError = '$e2';
+        }
+      } else {
+        _labnetError = e.message;
+      }
+    } catch (e) {
+      _labnetError = '$e';
+    }
+    if (mounted) setState(() => _labnetBusy = false);
+    await _pollInbox();
+  }
+
+  /// The Network section speaks `machine.id`: it is what the members of a
+  /// labnet come back as and what every route that names a machine resolves,
+  /// so the machines offered and this machine itself are named the same way
+  /// rather than by the peer id the rest of the console uses.
+  Widget _network(BuildContext context) => NetworkScreen(
+        inbox: _inbox,
+        thisMachineId: _machineIdOfPeer(_thisPeerId),
+        machines: [
+          for (final m in _orgMachines)
+            NetworkMachine(id: m.id, name: m.name),
+        ],
+        fleets: [
+          for (final f in _fleets) NetworkFleet(id: f.id, name: f.name),
+        ],
+        mustNameFleet: _mustNameFleet,
+        netView: _netViews[_netMachineId] ?? MachineNetView.empty,
+        netMachineId: _netMachineId,
+        netBusy: !_netViews.containsKey(_netMachineId),
+        onSelectNetMachine: (id) {
+          setState(() => _netMachineId = id);
+          _pollNetViews();
+        },
+        busy: _labnetBusy,
+        error: _labnetError,
+        onCreate: (name, fleetId) =>
+            _labnetDo(() => _broker.createLabnet(name, fleetId: fleetId)),
+        onRename: (id, name) => _labnetDo(() => _broker.renameLabnet(id, name)),
+        onApprove: (id) => _labnetDo(() => _broker.decide(id, approve: true)),
+        onDecline: (id) => _labnetDo(() => _broker.decide(id, approve: false)),
+        onInvite: (l, d) => _labnetDo(() => _broker.invite(l, d)),
+        onFullAccess: (l, on) => _labnetDo(() => _broker.setFullAccess(l, on)),
+        onLeave: (l) => _labnetDo(() => _broker.leave(l)),
+        onRemove: (l, d) => _labnetDo(() => _broker.removeMember(l, d)),
+        onDelete: (l) => _labnetDo(() => _broker.deleteLabnet(l)),
+      );
 
   @override
   Widget build(BuildContext context) {
@@ -1181,6 +1706,7 @@ class _LabDeskConsolePageState extends State<LabDeskConsolePage> {
             _updateBanner(),
             Expanded(child: ConsoleShell(
         machines: machines,
+        healthMachines: _fleetRows,
         samples: labdeskStatus.samples,
         profiles: _profiles,
         profileName: ServerProfilesModel.active.value,
@@ -1209,14 +1735,17 @@ class _LabDeskConsolePageState extends State<LabDeskConsolePage> {
           ..._savedPasswords,
         },
         healthFor: _healthFor,
-        monitoredIds: _monitored,
-        probingIds: _probing,
-        onToggleMonitor: _toggleMonitor,
         terminalLinesFor: (id) => _terminalLines[id] ?? const [],
         onTerminalSubmit: _terminalSubmit,
         onRunAction: _runAction,
         sectionRequest: _sectionRequest,
-        onSectionChanged: (s) => setState(() => _section = s),
+        onSectionChanged: (s) {
+          // The adapter list is read for whichever section is showing it, so
+          // the section that has just opened asks now rather than waiting out
+          // the fifteen second poll behind a card that says "Reading...".
+          setState(() => _section = s);
+          _pollNetViews();
+        },
         subItems: {
           ConsoleSection.settings: [
             for (final p in settingsPages())
@@ -1240,6 +1769,7 @@ class _LabDeskConsolePageState extends State<LabDeskConsolePage> {
               ConsoleSection.sessions: _sessions,
               ConsoleSection.automation: _automationScreen,
               ConsoleSection.tools: _toolsScreen,
+              ConsoleSection.network: _network,
             },
           )),
           ]),

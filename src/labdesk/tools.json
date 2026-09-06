@@ -1,0 +1,121 @@
+{
+  "version": 1,
+  "tools": [
+    {
+      "id": "service_start",
+      "label": "Start a service",
+      "runAs": "system",
+      "timeoutS": 60,
+      "params": {
+        "unit": { "type": "pattern", "pattern": "^[A-Za-z0-9._@:+-]{1,128}$" }
+      },
+      "platforms": {
+        "windows": { "steps": [["sc.exe", "start", "{unit}"]] },
+        "linux": { "steps": [["systemctl", "start", "{unit}"]] },
+        "macos": { "steps": [["launchctl", "start", "{unit}"]] }
+      }
+    },
+    {
+      "id": "service_stop",
+      "label": "Stop a service",
+      "runAs": "system",
+      "timeoutS": 60,
+      "params": {
+        "unit": { "type": "pattern", "pattern": "^[A-Za-z0-9._@:+-]{1,128}$" }
+      },
+      "platforms": {
+        "windows": { "steps": [["sc.exe", "stop", "{unit}"]] },
+        "linux": { "steps": [["systemctl", "stop", "{unit}"]] },
+        "macos": { "steps": [["launchctl", "stop", "{unit}"]] }
+      }
+    },
+    {
+      "id": "service_restart",
+      "label": "Restart a service",
+      "runAs": "system",
+      "timeoutS": 60,
+      "params": {
+        "unit": { "type": "pattern", "pattern": "^[A-Za-z0-9._@:+-]{1,128}$" }
+      },
+      "platforms": {
+        "windows": { "steps": [["sc.exe", "stop", "{unit}"], ["sc.exe", "start", "{unit}"]] },
+        "linux": { "steps": [["systemctl", "restart", "{unit}"]] },
+        "macos": { "steps": [["launchctl", "stop", "{unit}"], ["launchctl", "start", "{unit}"]] }
+      }
+    },
+    {
+      "id": "process_kill",
+      "label": "End a process",
+      "runAs": "system",
+      "timeoutS": 30,
+      "params": {
+        "pid": { "type": "int", "min": 1, "max": 4194304 }
+      },
+      "platforms": {
+        "windows": { "steps": [["taskkill.exe", "/PID", "{pid}", "/F"]] },
+        "linux": { "steps": [["kill", "-9", "{pid}"]] },
+        "macos": { "steps": [["kill", "-9", "{pid}"]] }
+      }
+    },
+    {
+      "id": "power_restart",
+      "label": "Restart the machine",
+      "runAs": "system",
+      "timeoutS": 30,
+      "params": {},
+      "platforms": {
+        "windows": { "steps": [["shutdown.exe", "/r", "/t", "0"]] },
+        "linux": { "steps": [["systemctl", "reboot"]] },
+        "macos": { "steps": [["osascript", "-e", "tell app \"System Events\" to restart"]] }
+      }
+    },
+    {
+      "id": "power_shutdown",
+      "label": "Shut the machine down",
+      "runAs": "system",
+      "timeoutS": 30,
+      "params": {},
+      "platforms": {
+        "windows": { "steps": [["shutdown.exe", "/s", "/t", "0"]] },
+        "linux": { "steps": [["systemctl", "poweroff"]] },
+        "macos": { "steps": [["osascript", "-e", "tell app \"System Events\" to shut down"]] }
+      }
+    },
+    {
+      "id": "power_logoff",
+      "label": "Log the user off",
+      "runAs": "active_user",
+      "timeoutS": 30,
+      "params": {},
+      "platforms": {
+        "windows": { "steps": [["shutdown.exe", "/l"]] },
+        "linux": { "steps": [["loginctl", "terminate-user"]] },
+        "macos": { "steps": [["osascript", "-e", "tell app \"System Events\" to log out"]] }
+      }
+    },
+    {
+      "id": "power_lock",
+      "label": "Lock the screen",
+      "runAs": "active_user",
+      "timeoutS": 30,
+      "params": {},
+      "platforms": {
+        "windows": { "steps": [["rundll32.exe", "user32.dll,LockWorkStation"]] },
+        "linux": { "steps": [["loginctl", "lock-sessions"]] },
+        "macos": { "steps": [["pmset", "displaysleepnow"]] }
+      }
+    },
+    {
+      "id": "flush_dns",
+      "label": "Flush the DNS cache",
+      "runAs": "system",
+      "timeoutS": 30,
+      "params": {},
+      "platforms": {
+        "windows": { "steps": [["ipconfig.exe", "/flushdns"]] },
+        "linux": { "steps": [["resolvectl", "flush-caches"]] },
+        "macos": { "steps": [["dscacheutil", "-flushcache"], ["killall", "-HUP", "mDNSResponder"]] }
+      }
+    }
+  ]
+}

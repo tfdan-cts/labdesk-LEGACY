@@ -4187,7 +4187,11 @@ void earlyAssert() {
 
 void checkUpdate() {
   if (!isWeb) {
-    if (!bind.isCustomClient()) {
+    // LabDesk counts as a custom client upstream and checks lab-desk.net for
+    // itself; the Rust side refuses every other custom client, so this gate
+    // only keeps upstream's behaviour for upstream's builds. Without the
+    // second clause the banner never rendered and no manual update existed.
+    if (!bind.isCustomClient() || bind.mainGetAppNameSync() == 'LabDesk') {
       platformFFI.registerEventHandler(
           kCheckSoftwareUpdateFinish, kCheckSoftwareUpdateFinish,
           (Map<String, dynamic> evt) async {

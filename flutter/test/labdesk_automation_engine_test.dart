@@ -30,24 +30,24 @@ List<Metric> _metrics({
             label: 'CPU',
             value: cpu.round().toString(),
             unit: '%',
-            source: MetricSource.remote,
+            source: MetricSource.collector,
             ratio: cpu / 100),
       if (memory != null)
         Metric(
             label: 'Memory',
             value: memory.round().toString(),
             unit: '%',
-            source: MetricSource.remote,
+            source: MetricSource.collector,
             ratio: memory / 100),
       if (disk != null)
         Metric(
             label: 'Disk',
             value: disk.round().toString(),
             unit: '%',
-            source: MetricSource.remote,
+            source: MetricSource.collector,
             ratio: disk / 100),
       if (uptime != null)
-        Metric(label: 'Uptime', value: uptime, source: MetricSource.remote),
+        Metric(label: 'Uptime', value: uptime, source: MetricSource.collector),
     ];
 
 Rule _rule(
@@ -517,7 +517,7 @@ void main() {
       final rules = <Rule>[
         _rule(const CameOnline(), id: '1', action: const WakeOnLan()),
         _rule(const WentOffline(forMinutes: 5),
-            id: '2', action: const MonitorOn()),
+            id: '2', action: const Notify(message: 'gone')),
         _rule(const WentOffline(), id: '3', action: const OpenSession()),
         _rule(
             const MetricAbove(
@@ -576,9 +576,9 @@ void main() {
       );
       expect(
         _rule(const CameOnline(), targets: const ['a', 'b'],
-                action: const MonitorOn())
+                action: const WakeOnLan())
             .sentence(nameOf),
-        'When workshop or nas comes online → turn monitoring on',
+        'When workshop or nas comes online → send Wake-on-LAN',
       );
       expect(
         _rule(const Schedule.atTime(hour: 7, minute: 5, weekdays: [1, 5]),

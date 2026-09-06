@@ -153,10 +153,10 @@ class WentOffline extends AutomationTrigger {
 
 /// A measured share over a threshold, held for a while.
 ///
-/// The figures come from the probe, so this only ever sees machines the
-/// operator turned monitoring on for. A rule pointed at an unmonitored machine
-/// has nothing to read and does not fire; the screen says which machines are
-/// monitored so that is visible rather than mysterious.
+/// The figures are the machine's own, reported to lab-desk.net by its collector
+/// and read back with the fleet, so every enrolled machine has them whether or
+/// not anyone is connected to it. A machine the organization has not enrolled
+/// reports nothing and a rule over it does not fire.
 class MetricAbove extends AutomationTrigger {
   const MetricAbove({
     required this.metric,
@@ -323,8 +323,6 @@ sealed class AutomationAction {
         return Notify(message: (j['message'] as String?) ?? '');
       case 'wakeOnLan':
         return const WakeOnLan();
-      case 'monitorOn':
-        return const MonitorOn();
       case 'openSession':
         return const OpenSession();
       default:
@@ -413,27 +411,6 @@ class WakeOnLan extends AutomationAction {
 
   @override
   int get hashCode => 'wakeOnLan'.hashCode;
-}
-
-/// Turn the console's own monitoring on for the machine, which is what gives
-/// every metric trigger something to read.
-class MonitorOn extends AutomationAction {
-  const MonitorOn();
-
-  @override
-  Map<String, dynamic> toJson() => {'kind': 'monitorOn'};
-
-  @override
-  String get sentence => 'turn monitoring on';
-
-  @override
-  String get kindLabel => 'Start monitoring';
-
-  @override
-  bool operator ==(Object other) => other is MonitorOn;
-
-  @override
-  int get hashCode => 'monitorOn'.hashCode;
 }
 
 /// Open a desktop session in its own window. Loud on purpose: a rule that

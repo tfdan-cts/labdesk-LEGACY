@@ -838,6 +838,11 @@ pub fn start_os_service() {
     log::info!("Username: {}", crate::username());
     // Silent auto-update — runs as root via LaunchDaemon, no osascript dialog needed
     crate::updater::start_auto_update_macos();
+    // Telemetry: this process is the root LaunchDaemon (`_service.plist` under
+    // /Library/LaunchDaemons, :190-195), while `--server` is the per-user LaunchAgent
+    // (`_server.plist` under /Library/LaunchAgents). The collector runs here for that.
+    crate::labdesk::collector::start();
+    crate::labdesk::selfheal::start();
     if let Err(err) = crate::ipc::start("_service") {
         log::error!("Failed to start ipc_service: {}", err);
     }
@@ -1014,10 +1019,17 @@ pub fn update_from_dmg(dmg_path: &str) -> ResultType<()> {
     Ok(())
 }
 
-pub fn update_to(_file: &str) -> ResultType<()> {
-    let update_temp_dir = get_update_temp_dir_string();
-    update_extracted(&update_temp_dir)?;
-    Ok(())
+/// Installs the disk image at `file`, whose published digest is
+/// `expected_sha256`.
+///
+/// The elevated install runs whatever sits in the temp update directory, and
+/// that directory lives in world-writable /tmp for as long as the update
+/// dialog stays open, so an earlier extraction is not something to trust. The
+/// image is hashed and extracted again here and the install runs on the bytes
+/// this call just wrote, which is the only way the digest covers what executes.
+pub fn update_to(file: &str, expected_sha256: &str) -> ResultType<()> {
+    crate::updater::verify_downloaded_file(Path::new(file), expected_sha256)?;
+    update_from_dmg(file)
 }
 
 fn backup_update_plist(source: &str, backup: &str) -> ResultType<()> {

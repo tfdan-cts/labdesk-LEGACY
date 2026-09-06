@@ -1,6 +1,6 @@
 [package]
 name = "rustdesk"
-version = "1.2.2"
+version = "1.2.6"
 authors = ["rustdesk <info@rustdesk.com>"]
 edition = "2021"
 build= "build.rs"
@@ -130,12 +130,33 @@ windows = { version = "0.61", features = [
     "Win32_Security",
     "Win32_Security_Authorization",
     "Win32_Storage_FileSystem",
+    # Both added for src/labdesk/disk/windows.rs: Ioctl carries the SMART and
+    # IOCTL_STORAGE_* constants and their structs, Nvme carries the log page
+    # identifiers. Neither pulls a new crate in; they widen the `windows` crate
+    # that is already here.
+    "Win32_Storage_Nvme",
+    # For src/labdesk/netview.rs: GetAdaptersAddresses, the per-adapter link
+    # state and addresses. Landed alone first, the way the two above were, so
+    # CI proves the feature string before code is written against it.
+    "Win32_NetworkManagement_IpHelper",
+    # The other two thirds of that call. In windows-0.61.1 both
+    # `GetAdaptersAddresses` and `IP_ADAPTER_ADDRESSES_LH` are written
+    # `#[cfg(all(feature = "Win32_NetworkManagement_Ndis", feature =
+    # "Win32_Networking_WinSock"))]` (IpHelper/mod.rs lines 286 and 1796), so
+    # the IpHelper feature alone compiles to nothing callable: Ndis carries
+    # IF_OPER_STATUS and NET_LUID_LH, WinSock carries SOCKET_ADDRESS and the
+    # two sockaddr shapes the addresses are read out of. Both are features of
+    # the `windows` crate that is already here and neither pulls a new package
+    # in, so Cargo.lock is unchanged.
+    "Win32_NetworkManagement_Ndis",
+    "Win32_Networking_WinSock",
     "Win32_System",
     "Win32_System_Com",
     "Win32_System_Diagnostics",
     "Win32_System_Diagnostics_ToolHelp",
     "Win32_System_Environment",
     "Win32_System_IO",
+    "Win32_System_Ioctl",
     "Win32_System_Memory",
     "Win32_System_Pipes",
     "Win32_System_Registry",

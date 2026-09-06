@@ -1,0 +1,249 @@
+name: Release checksums
+
+# The SHA-256 of every asset in a release, computed by the pipeline and
+# published back to the release as SHA256SUMS, together with a detached
+# signature over that file as SHA256SUMS.sig.
+#
+# This file is what makes an update verifiable. lab-desk.net serves one line of
+# it per asset from /releases/checksums/<version>/<asset>, and the installed
+# client (src/updater.rs) refuses to hand any downloaded file to an elevated
+# installer unless it hashes to that value. A release with no SHA256SUMS is a
+# release nobody can auto-update to, which is the safe direction to fail in but
+# is still a dead update channel, so the ordering below is not optional.
+#
+# A digest alone is not the whole story. SHA256SUMS and the asset it describes
+# come out of the same release and travel through the same site, so the digest
+# closes transport tampering, cache poisoning and a swapped or corrupted local
+# file, but whoever controls the site controls both halves and can serve a
+# matching pair. That is what SHA256SUMS.sig is for: a detached Ed25519
+# signature over the manifest, made with a private key that never reaches the
+# site. The client pins the public half at build time and checks the signature
+# before it believes any digest in the file.
+#
+# Be clear about the limit, because it decides where the key belongs. That key
+# is a secret in THIS repository, so anyone who can write to the repository and
+# dispatch this workflow can have the pipeline sign whatever is on the release.
+# The signature closes a compromised site and a release asset swapped without a
+# re-run; it does not close a compromised repository or maintainer account.
+# docs/SIGNING.md, "What this does not close", is the full list.
+#
+# ORDER OF OPERATIONS, once and for the whole product:
+#   1. Merge this file to the repository's default branch. GitHub only ever
+#      runs the default branch's copy of a workflow_run-triggered workflow, and
+#      only offers workflow_dispatch for workflows that exist on the default
+#      branch, so on a feature branch this file does nothing at all.
+#   2. Perform the key ceremony in docs/SIGNING.md and set the
+#      RELEASE_SIGNING_KEY repository secret. Until it is set, the digests are
+#      still computed and published but every run of this workflow ends red,
+#      which is the visible reminder that the ceremony is outstanding.
+#   3. Run it by hand (Actions -> Release checksums -> Run workflow) for every
+#      tag any release channel currently points at. Existing releases have
+#      neither SHA256SUMS nor SHA256SUMS.sig, so until this backfill runs, a
+#      client built with the verifying updater will refuse every update it is
+#      offered.
+#   4. Only then put the public key into src/updater.rs and ship a client that
+#      verifies. That constant is the switch: while it is empty the client does
+#      not enforce signatures at all, which is what makes steps 1 to 3 safe to
+#      land on their own.
+#
+# Re-running is safe and is the fix whenever assets arrive after the file was
+# written: the digests are recomputed from the release's current assets, the
+# signature is recomputed from those digests, and both uploads are replaced.
+
+on:
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: "Release tag to checksum"
+        required: true
+  workflow_run:
+    workflows: ["Flutter Tag Build"]
+    types: [completed]
+  # For the dry-run job only; the checksums job below skips this event. Scoped
+  # to the files whose correctness the dry run defends rather than to every
+  # pull request in the repository.
+  pull_request:
+    paths:
+      - ".github/workflows/release-checksums.yml"
+      - "src/updater.rs"
+      - "docs/SIGNING.md"
+
+# Uploading an asset to the release needs to write repository contents; the
+# default workflow token is read-only. Same declaration as flutter-tag.yml.
+permissions:
+  contents: write
+
+# Two runs for the same tag would race to upload SHA256SUMS, and the digests
+# are only correct if the last upload is the one computed from the release's
+# current assets.
+concurrency:
+  group: release-checksums-${{ inputs.tag || github.event.workflow_run.head_branch || github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  checksums:
+    # There is no release to checksum on a pull request; only the dry run below
+    # has anything to do there.
+    if: github.event_name != 'pull_request'
+    runs-on: ubuntu-latest
+    steps:
+      # Deliberately not gated on the build's conclusion. A build where one
+      # platform job failed still published assets for every platform that
+      # succeeded, and those have to be checksummable or the platforms that did
+      # build are locked out of updating too. A build that published nothing is
+      # handled below, by the release lookup.
+      - name: Compute and publish SHA256SUMS
+        env:
+          GH_TOKEN: ${{ github.token }}
+          TAG: ${{ inputs.tag || github.event.workflow_run.head_branch }}
+        run: |
+          set -euo pipefail
+          # head_branch is a tag for a tag push and a BRANCH name for a manually
+          # dispatched Flutter Tag Build, and a build that died before creating
+          # the release leaves nothing behind either way. Neither case is an
+          # error; there is simply nothing to checksum.
+          if ! gh release view "$TAG" --repo "$GITHUB_REPOSITORY" >/dev/null 2>&1; then
+            echo "No release for '$TAG'; nothing to checksum."
+            exit 0
+          fi
+          mkdir assets
+          cd assets
+          gh release download "$TAG" --repo "$GITHUB_REPOSITORY"
+          # Never hash a digest file, or a signature over one, from an earlier
+          # run into the new one.
+          rm -f SHA256SUMS SHA256SUMS.sig
+          # Without nullglob an empty directory would hash the literal "*" and
+          # without dotglob a dotfile asset would be missing from SHA256SUMS
+          # with no error at all, which the client reads as "this asset has no
+          # digest" and refuses to install.
+          shopt -s nullglob dotglob
+          files=(*)
+          if [ ${#files[@]} -eq 0 ]; then
+            echo "The release for '$TAG' publishes no assets to checksum." >&2
+            exit 1
+          fi
+          sha256sum -- "${files[@]}" > ../SHA256SUMS
+          cd ..
+          cat SHA256SUMS
+          gh release upload "$TAG" SHA256SUMS --repo "$GITHUB_REPOSITORY" --clobber
+
+      # Signing is a separate step, and deliberately runs after the manifest is
+      # already uploaded. A release whose signature could not be made must still
+      # publish its digests, because the clients already in the field rely on
+      # them; what it must not do is look like it succeeded. So this step fails
+      # the run when the key is missing, which leaves a red mark on the tag
+      # rather than a warning in a log nobody reads.
+      - name: Sign SHA256SUMS and publish SHA256SUMS.sig
+        env:
+          GH_TOKEN: ${{ github.token }}
+          TAG: ${{ inputs.tag || github.event.workflow_run.head_branch }}
+          # The Ed25519 private key, PKCS#8 PEM exactly as `openssl genpkey`
+          # writes it. docs/SIGNING.md is the ceremony that produces it.
+          RELEASE_SIGNING_KEY: ${{ secrets.RELEASE_SIGNING_KEY }}
+        run: |
+          set -euo pipefail
+          # The step above exits 0 without writing the file when the tag has no
+          # release at all. Nothing was published, so there is nothing to sign.
+          if [ ! -f SHA256SUMS ]; then
+            echo "No SHA256SUMS for '$TAG'; nothing to sign."
+            exit 0
+          fi
+          if [ -z "$RELEASE_SIGNING_KEY" ]; then
+            echo "::error::RELEASE_SIGNING_KEY is not set, so '$TAG' has digests but no SHA256SUMS.sig. A client that enforces signatures will refuse this release. See docs/SIGNING.md."
+            exit 1
+          fi
+          # 077 before the key ever touches the disk, and removed however this
+          # step ends, including on the failure paths below.
+          umask 077
+          trap 'rm -f signing-key.pem' EXIT
+          printf '%s\n' "$RELEASE_SIGNING_KEY" > signing-key.pem
+          # -rawin makes this a one-shot Ed25519 signature over the file itself
+          # rather than over a digest of it, which is the only form libsodium's
+          # crypto_sign_verify_detached, and so the client, accepts.
+          openssl pkeyutl -sign -rawin -inkey signing-key.pem -in SHA256SUMS -out SHA256SUMS.sig
+          # A detached Ed25519 signature is exactly 64 bytes. Anything else means
+          # the secret is not an Ed25519 key, and the client would reject the
+          # result, so it is caught here rather than in the field.
+          size=$(wc -c < SHA256SUMS.sig)
+          if [ "$size" -ne 64 ]; then
+            echo "::error::SHA256SUMS.sig is $size bytes, not the 64 an Ed25519 signature has. Is RELEASE_SIGNING_KEY an Ed25519 key?"
+            exit 1
+          fi
+          # Verify with the same key before publishing: a signature that does
+          # not verify freezes the update channel for the whole fleet.
+          openssl pkeyutl -verify -rawin -inkey signing-key.pem -in SHA256SUMS -sigfile SHA256SUMS.sig
+          gh release upload "$TAG" SHA256SUMS.sig --repo "$GITHUB_REPOSITORY" --clobber
+
+  # The plan's release dry run. It produces the two files a real release
+  # produces, from a fixture and a key that lives for the length of one job, so
+  # the commands the signing step depends on are exercised on a runner instead
+  # of first on a production tag. It publishes nothing and reads no secret.
+  #
+  # This is the only place `openssl pkeyutl -sign -rawin` runs before a release
+  # needs it, so it is what catches an openssl behaviour change on
+  # ubuntu-latest, a signature the client would refuse, and a public-key
+  # extraction in docs/SIGNING.md that has stopped producing the raw 32 bytes
+  # the client pins. Any of those would otherwise be found by a fleet that can
+  # no longer update.
+  #
+  # The commands below repeat the signing step on purpose: a workflow cannot
+  # share a run block between jobs, so the two sit in one file and have to be
+  # changed together.
+  release-dry-run:
+    runs-on: ubuntu-latest
+    # It checks nothing out, uploads nothing and reads no secret.
+    permissions: {}
+    steps:
+      - name: Sign and verify a fixture manifest the way a release is signed
+        run: |
+          set -euo pipefail
+          openssl version
+          mkdir dry-run
+          cd dry-run
+          # Stand-ins for release assets; only their names and digests matter.
+          mkdir assets
+          printf 'labdesk installer\n' > assets/labdesk-0.0.0-x86_64.exe
+          printf 'labdesk package\n' > assets/labdesk-0.0.0-x86_64.msi
+          (cd assets && shopt -s nullglob dotglob && sha256sum -- *) > SHA256SUMS
+          cat SHA256SUMS
+
+          umask 077
+          trap 'rm -f dry-run-key.pem' EXIT
+          openssl genpkey -algorithm ed25519 -out dry-run-key.pem
+          openssl pkeyutl -sign -rawin -inkey dry-run-key.pem \
+            -in SHA256SUMS -out SHA256SUMS.sig
+          size=$(wc -c < SHA256SUMS.sig)
+          if [ "$size" -ne 64 ]; then
+            echo "::error::A dry-run signature is $size bytes, not 64. openssl on this runner no longer makes a raw Ed25519 signature, and the signing step would publish something every client refuses."
+            exit 1
+          fi
+          openssl pkeyutl -verify -rawin -inkey dry-run-key.pem \
+            -in SHA256SUMS -sigfile SHA256SUMS.sig
+
+          # The client pins the raw 32 bytes, which docs/SIGNING.md extracts
+          # from the DER. A client pinning anything else refuses every update
+          # in the field, so the extraction is checked here too.
+          openssl pkey -in dry-run-key.pem -pubout -outform DER > pub.der
+          der=$(wc -c < pub.der)
+          if [ "$der" -ne 44 ]; then
+            echo "::error::An Ed25519 public key DER is $der bytes, not the 44 that the 'tail -c 32' in docs/SIGNING.md assumes."
+            exit 1
+          fi
+          echo "public key as the client would pin it: $(tail -c 32 pub.der | base64 -w0)"
+          openssl pkey -in dry-run-key.pem -pubout -out pub.pem
+          openssl pkeyutl -verify -rawin -pubin -inkey pub.pem \
+            -in SHA256SUMS -sigfile SHA256SUMS.sig
+
+          # A manifest edited after signing has to fail, or the check above is
+          # not a check.
+          sed 's/x86_64.exe/evil.exe/' SHA256SUMS > tampered
+          # Quiet, because the failure this step expects would otherwise put
+          # an openssl error into a healthy log and read as a broken run.
+          if openssl pkeyutl -verify -rawin -pubin -inkey pub.pem \
+            -in tampered -sigfile SHA256SUMS.sig >/dev/null 2>&1; then
+            echo "::error::A tampered manifest verified, so the signature is not covering the file."
+            exit 1
+          fi
+
+          ls -l SHA256SUMS SHA256SUMS.sig
+          echo "Dry run: SHA256SUMS and SHA256SUMS.sig made and verified, tampered manifest refused."

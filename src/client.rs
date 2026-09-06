@@ -17,7 +17,7 @@ use serde::{Deserialize, Serialize};
 use std::{
     collections::HashMap,
     ffi::c_void,
-    net::SocketAddr,
+    net::{IpAddr, SocketAddr},
     ops::Deref,
     str::FromStr,
     sync::{
@@ -176,6 +176,116 @@ lazy_static::lazy_static! {
 
 const PUBLIC_SERVER: &str = "public";
 
+// labnet: the whole overlay attempt, the connect and the key exchange
+// together, is bounded by this, so a hint that leads nowhere costs the
+// session no more than it before the rendezvous path takes over.
+const OVERLAY_TIMEOUT: u64 = 1_500;
+/// The least the handshake is given even when the connect ate the budget.
+const OVERLAY_HANDSHAKE_MIN: u64 = 500;
+
+/// labnet: an overlay address hint is written into the config by the console,
+/// which takes it from lab-desk.net, so it is only ever dialled as a literal
+/// IPv4 address out of 100.64.0.0/10 with a port. That is the range NetBird
+/// allocates overlay addresses from and the only range the broker records, so
+/// nothing real is refused, while a name, an address off the overlay, and any
+/// IPv6 form of one, mapped IPv4 included, are all refused. Each of those would
+/// otherwise aim the client at a machine that is not the peer.
+fn parse_overlay_hint(hint: &str) -> Option<SocketAddr> {
+    let addr = SocketAddr::from_str(hint).ok()?;
+    let IpAddr::V4(ip) = addr.ip() else {
+        return None;
+    };
+    let octets = ip.octets();
+    if addr.port() == 0 || octets[0] != 100 || !(64..=127).contains(&octets[1]) {
+        return None;
+    }
+    Some(addr)
+}
+
+/// labnet: a hint that led nowhere is cleared on both copies of the options.
+/// The client process holds one and the service holds the other, and a hint
+/// cleared only here comes back on the next option sync, so the clear goes
+/// over IPC. iOS has no `ipc` module (`src/lib.rs`) and no service to sync
+/// from, so there the local config is the whole story.
+#[cfg(not(target_os = "ios"))]
+async fn clear_overlay_hint(addr_key: &str, pk_key: &str) {
+    crate::ipc::set_option_async(addr_key, "").await;
+    crate::ipc::set_option_async(pk_key, "").await;
+}
+
+#[cfg(target_os = "ios")]
+async fn clear_overlay_hint(addr_key: &str, pk_key: &str) {
+    Config::set_option(addr_key.to_owned(), "".to_owned());
+    Config::set_option(pk_key.to_owned(), "".to_owned());
+}
+
+/// labnet: the one condition on the overlay path that names a machine rather
+/// than a route. `signed_other_id` comes back from the exchange only when the
+/// far end signed, under the very key the broker gave us for the peer, an id
+/// that is not the peer's: the peer's key on a machine answering as someone
+/// else. Every other way the exchange can end proves nothing about who holds
+/// the address and is a fallback condition, not an impersonation. That
+/// includes a signature the key does not verify, because a peer that
+/// reinstalled holds a new key and the broker's copy is stale until it
+/// enrols again; the rendezvous path proves the peer's identity on its own.
+fn overlay_is_impersonation(secured: bool, signed_other_id: bool) -> bool {
+    !secured && signed_other_id
+}
+
+#[cfg(test)]
+mod overlay_hint_tests {
+    use super::{overlay_is_impersonation, parse_overlay_hint};
+
+    #[test]
+    fn only_a_signed_other_id_is_an_impersonation() {
+        // The far end signed an identity that is not the peer's: the wrong
+        // machine answered on the peer's address.
+        assert!(overlay_is_impersonation(false, true));
+        // The far end offered no identity to check, which is what an unsecured
+        // direct listener does, so nothing was proved either way.
+        assert!(!overlay_is_impersonation(false, false));
+        // A secured stream is the peer, whatever else happened on the way.
+        assert!(!overlay_is_impersonation(true, true));
+        assert!(!overlay_is_impersonation(true, false));
+    }
+
+    #[test]
+    fn only_a_literal_overlay_address_is_a_hint() {
+        assert_eq!(
+            parse_overlay_hint("100.72.0.4:21118").map(|a| a.to_string()),
+            Some("100.72.0.4:21118".to_owned())
+        );
+        assert_eq!(
+            parse_overlay_hint("100.64.0.9:21118").map(|a| a.to_string()),
+            Some("100.64.0.9:21118".to_owned())
+        );
+        assert_eq!(
+            parse_overlay_hint("100.127.255.255:1").map(|a| a.to_string()),
+            Some("100.127.255.255:1".to_owned())
+        );
+        assert_eq!(parse_overlay_hint("peer.example.com:21118"), None);
+        assert_eq!(parse_overlay_hint("localhost:21118"), None);
+        assert_eq!(parse_overlay_hint("100.72.0.4"), None);
+        assert_eq!(parse_overlay_hint("100.72.0.4:0"), None);
+        assert_eq!(parse_overlay_hint("100.72.0.4:21118 "), None);
+        assert_eq!(parse_overlay_hint("127.0.0.1:21118"), None);
+        assert_eq!(parse_overlay_hint("0.0.0.0:21118"), None);
+        assert_eq!(parse_overlay_hint("239.0.0.1:21118"), None);
+        assert_eq!(parse_overlay_hint("203.0.113.7:25"), None);
+        assert_eq!(parse_overlay_hint("8.8.8.8:53"), None);
+        assert_eq!(parse_overlay_hint("100.63.255.255:21118"), None);
+        assert_eq!(parse_overlay_hint("100.128.0.1:21118"), None);
+        assert_eq!(parse_overlay_hint("[::1]:21118"), None);
+        assert_eq!(parse_overlay_hint("[::]:21118"), None);
+        assert_eq!(parse_overlay_hint("[fd00::4]:21118"), None);
+        assert_eq!(parse_overlay_hint("[::ffff:127.0.0.1]:21118"), None);
+        assert_eq!(parse_overlay_hint("[::ffff:100.72.0.4]:21118"), None);
+        assert_eq!(parse_overlay_hint("::ffff:100.72.0.4:21118"), None);
+        assert_eq!(parse_overlay_hint("[::ffff:6448:4]:21118"), None);
+        assert_eq!(parse_overlay_hint(""), None);
+    }
+}
+
 #[cfg(not(any(target_os = "android", target_os = "ios")))]
 pub fn get_key_state(key: enigo::Key) -> bool {
     use enigo::KeyboardControllable;
@@ -291,6 +401,123 @@ impl Client {
         } else {
             (peer, "", key, token)
         };
+        // labnet: the console may have written an overlay address for this
+        // peer, with the peer's own id public key beside it. Try that address
+        // before any server. An address that leads nowhere, or that answers
+        // without offering an identity, falls through to the path below
+        // unchanged; a machine that answers there and signs an identity that is
+        // not the peer's ends the connect instead.
+        if other_server.is_empty() {
+            let addr_key = format!("labdesk-overlay-addr-{}", peer);
+            let pk_key = format!("labdesk-overlay-pk-{}", peer);
+            let hint = Config::get_option(&addr_key);
+            if !hint.is_empty() {
+                match parse_overlay_hint(&hint) {
+                    None => {
+                        log::error!("labnet: discarding overlay address {} for {}", hint, peer);
+                        clear_overlay_hint(&addr_key, &pk_key).await;
+                    }
+                    Some(addr) => {
+                        let started = Instant::now();
+                        match connect_tcp_local(addr, None, OVERLAY_TIMEOUT).await {
+                            Ok(mut conn) => {
+                                let pk =
+                                    crate::decode64(Config::get_option(&pk_key)).unwrap_or_default();
+                                // A connect that used the whole budget must not
+                                // hand the handshake a zero timeout, which would
+                                // fail it before a byte is read.
+                                let left = OVERLAY_TIMEOUT
+                                    .saturating_sub(started.elapsed().as_millis() as u64)
+                                    .max(OVERLAY_HANDSHAKE_MIN);
+                                // Bound here so the borrow of the stream ends
+                                // before the stream is handed on.
+                                let res = timeout(
+                                    left,
+                                    Self::secure_connection_with_pk(peer, pk, &mut conn),
+                                )
+                                .await;
+                                let mut signed_other_id = false;
+                                let err = match res {
+                                    Ok(Ok((option_pk, signed_other))) => {
+                                        // secure_with_sign_pk also returns Ok on
+                                        // every identity failure: a wrong id, a
+                                        // key that does not verify, an
+                                        // unexpected message, no usable key at
+                                        // all. It calls set_key only once the
+                                        // peer has proved it holds the id key,
+                                        // so a stream that is not secured here
+                                        // did not prove it is the peer.
+                                        if conn.is_secured() {
+                                            log::info!(
+                                                "labnet: direct path to {} at {}",
+                                                peer,
+                                                addr
+                                            );
+                                            return Ok((
+                                                (conn, true, option_pk, None, "TCP"),
+                                                (0, "".to_owned()),
+                                                false,
+                                            ));
+                                        }
+                                        signed_other_id = signed_other;
+                                        if signed_other {
+                                            "signed another machine's id with the peer's key"
+                                                .to_owned()
+                                        } else {
+                                            // A signature the peer's key does
+                                            // not verify, a reinstalled peer
+                                            // above all, or no signed id at
+                                            // all, which is what an unsigned
+                                            // direct listener answers with.
+                                            "did not prove it holds the peer's key".to_owned()
+                                        }
+                                    }
+                                    Ok(Err(err)) => err.to_string(),
+                                    Err(err) => err.to_string(),
+                                };
+                                // Whatever happened, it happened at a named
+                                // address to a named peer, and the line that
+                                // says which is the only one an operator gets,
+                                // so it is written before anything ends here.
+                                log::info!(
+                                    "labnet: handshake with {} at {} failed: {}",
+                                    peer,
+                                    addr,
+                                    err
+                                );
+                                // A socket that answers but cannot prove it is
+                                // the peer gets no session. Drop the address and
+                                // the key together, so no later connect pays the
+                                // same cost again and the two cannot drift. Through
+                                // IPC, not `Config` alone: this is the client process,
+                                // and a hint cleared only here comes back from the
+                                // server copy on the next option sync.
+                                clear_overlay_hint(&addr_key, &pk_key).await;
+                                if overlay_is_impersonation(conn.is_secured(), signed_other_id) {
+                                    // Another machine answered on the peer's
+                                    // address under an identity of its own. Say
+                                    // so and stop: carrying the same id on to
+                                    // another route would hide that it happened
+                                    // at all.
+                                    bail!(
+                                        "labnet: the machine at {} did not sign as {}",
+                                        addr,
+                                        peer
+                                    );
+                                }
+                                // Nothing was proved about who holds the
+                                // address, only that it led nowhere, so fall
+                                // through to the path below.
+                            }
+                            Err(err) => {
+                                log::info!("labnet: {} not reachable at {}: {}", peer, addr, err)
+                            }
+                        }
+                    }
+                }
+            }
+        }
+
         let (rendezvous_server, servers, contained) = if other_server.is_empty() {
             crate::get_rendezvous_server(1_000).await
         } else {
@@ -786,14 +1013,59 @@ impl Client {
                 log::error!("Handshake failed: invalid public key from rendezvous server");
             }
         }
+        Ok(Self::secure_with_sign_pk(peer_id, sign_pk, option_pk, conn)
+            .await?
+            .0)
+    }
+
+    /// labnet: the peer's id public key arrived over lab-desk.net's
+    /// device-authenticated channel rather than signed by a rendezvous server,
+    /// so the exchange runs with it directly. A key that is not 32 bytes means
+    /// no key, and the session proceeds as an unsecured direct one would. The
+    /// flag beside the key is the one the overlay path reads: see
+    /// secure_with_sign_pk.
+    async fn secure_connection_with_pk(
+        peer_id: &str,
+        pk: Vec<u8>,
+        conn: &mut Stream,
+    ) -> ResultType<(Option<Vec<u8>>, bool)> {
+        let mut sign_pk = None;
+        let mut option_pk = None;
+        if pk.len() == 32 {
+            let mut key = [0u8; 32];
+            key.copy_from_slice(&pk);
+            sign_pk = Some(sign::PublicKey(key));
+            option_pk = Some(pk);
+        } else {
+            log::error!("labnet: no usable id public key for {}", peer_id);
+        }
+        Self::secure_with_sign_pk(peer_id, sign_pk, option_pk, conn).await
+    }
+
+    /// labnet: the flag returned beside the key says the far end signed, under
+    /// `sign_pk` itself, an id that is not `peer_id`. Every other way out of
+    /// here leaves it false: a signature `sign_pk` does not verify says only
+    /// that the far end does not hold that key, which is what a reinstalled
+    /// peer looks like until the broker learns its new key, and an unreadable
+    /// message or a first message that is not a signed id says the far end
+    /// never offered an identity. Only the overlay path reads the flag, where
+    /// the key came from the broker beside the address; the rendezvous path
+    /// drops it.
+    async fn secure_with_sign_pk(
+        peer_id: &str,
+        sign_pk: Option<sign::PublicKey>,
+        option_pk: Option<Vec<u8>>,
+        conn: &mut Stream,
+    ) -> ResultType<(Option<Vec<u8>>, bool)> {
         let sign_pk = match sign_pk {
             Some(v) => v,
             None => {
                 // send an empty message out in case server is setting up secure and waiting for first message
                 conn.send(&Message::new()).await?;
-                return Ok(option_pk);
+                return Ok((option_pk, false));
             }
         };
+        let mut signed_other_id = false;
         match timeout(READ_TIMEOUT, conn.next()).await? {
             Some(res) => {
                 let bytes = res?;
@@ -813,6 +1085,7 @@ impl Client {
                                 conn.set_key(key);
                             } else {
                                 log::error!("Handshake failed: sign failure");
+                                signed_other_id = true;
                                 conn.send(&Message::new()).await?;
                             }
                         } else {
@@ -835,7 +1108,7 @@ impl Client {
                 bail!("Reset by the peer");
             }
         }
-        Ok(option_pk)
+        Ok((option_pk, signed_other_id))
     }
 
     /// Request a relay connection to the server.
@@ -1705,6 +1978,9 @@ impl VideoHandler {
 enum PasswordSource {
     PersonalAb(Vec<u8>),
     SharedAb(String),
+    /// A connect ticket from lab-desk.net, spent on this connect
+    /// (src/labdesk/ticket.rs). Never saved as the peer's password.
+    Ticket,
     Undefined,
 }
 
@@ -1744,6 +2020,58 @@ impl PasswordSource {
         hasher.update(&hash.salt);
         let res = hasher.finalize();
         connected_password[..] == res[..]
+    }
+
+    // Whether the password may be written to the peer config or synced to the
+    // personal ab: a shared ab password and a spent connect ticket never are.
+    pub fn is_storable(&self, password: &[u8], hash: &Hash) -> bool {
+        !self.is_shared_ab(password, hash) && !matches!(self, PasswordSource::Ticket)
+    }
+}
+
+#[cfg(test)]
+mod password_source_tests {
+    use super::PasswordSource;
+    use hbb_common::{
+        message_proto::Hash,
+        sha2::{Digest, Sha256},
+    };
+
+    fn hashed(password: &str, hash: &Hash) -> Vec<u8> {
+        let mut hasher = Sha256::new();
+        hasher.update(password);
+        hasher.update(&hash.salt);
+        hasher.finalize()[..].into()
+    }
+
+    #[test]
+    fn a_ticket_password_is_never_stored() {
+        let hash = Hash {
+            salt: "salt".to_owned(),
+            ..Default::default()
+        };
+        let sent = hashed("ticket-secret-hash", &hash);
+        assert!(!PasswordSource::Ticket.is_storable(&sent, &hash));
+        assert!(!PasswordSource::Ticket.is_storable(b"", &hash));
+    }
+
+    #[test]
+    fn shared_ab_matching_the_sent_password_is_not_stored() {
+        let hash = Hash {
+            salt: "salt".to_owned(),
+            ..Default::default()
+        };
+        let sent = hashed("shared", &hash);
+        assert!(!PasswordSource::SharedAb("shared".to_owned()).is_storable(&sent, &hash));
+        assert!(PasswordSource::SharedAb("other".to_owned()).is_storable(&sent, &hash));
+    }
+
+    #[test]
+    fn typed_and_personal_ab_passwords_are_stored() {
+        let hash = Hash::default();
+        let sent = hashed("typed", &hash);
+        assert!(PasswordSource::Undefined.is_storable(&sent, &hash));
+        assert!(PasswordSource::PersonalAb(sent.clone()).is_storable(&sent, &hash));
     }
 }
 
@@ -2581,7 +2909,7 @@ impl LoginConfigHandler {
             // not sync shared password to recent
             if !password.is_empty()
                 && password != password0
-                && !self.password_source.is_shared_ab(&password, &hash)
+                && self.password_source.is_storable(&password, &hash)
             {
                 config.password = password.clone();
                 log::debug!("remember password of {}", self.id);
@@ -2612,7 +2940,7 @@ impl LoginConfigHandler {
         {
             // sync connected password to personal ab automatically if it is not shared password
             if !config.password.is_empty()
-                && !self.password_source.is_shared_ab(&password, &hash)
+                && self.password_source.is_storable(&password, &hash)
                 && !self.password_source.is_personal_ab(&password)
             {
                 let hash = base64::encode(config.password.clone(), base64::Variant::Original);
@@ -3588,6 +3916,27 @@ pub async fn handle_hash(
             msg.set_misc(misc);
             allow_err!(peer.send(&msg).await);
             return false;
+        }
+    }
+    // connect ticket (src/labdesk/ticket.rs): minted with the overlay session,
+    // stored by the console as `labdesk-ticket-<peer id>` beside the overlay
+    // address, spent here once. The target holds H = sha256Hex(secret) and
+    // checks sha256(H || salt), the way it checks a shared password.
+    #[cfg(not(any(target_os = "android", target_os = "ios")))]
+    {
+        let id = lc.read().unwrap().id.clone();
+        let key = format!("labdesk-ticket-{}", id);
+        let ticket = Config::get_option(&key);
+        if !ticket.is_empty() {
+            crate::ipc::set_option_async(&key, "").await;
+            let h = crate::labdesk::ticket::secret_hash(&ticket);
+            let mut hasher = Sha256::new();
+            hasher.update(h.as_bytes());
+            hasher.update(&hash.salt);
+            let res = hasher.finalize();
+            let mut lc = lc.write().unwrap();
+            lc.password = res[..].into();
+            lc.password_source = PasswordSource::Ticket;
         }
     }
     // last password

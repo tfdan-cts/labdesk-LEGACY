@@ -1779,6 +1779,110 @@ pub fn main_get_fingerprint() -> String {
     get_fingerprint()
 }
 
+/// This machine's own id public key, base64. `main_get_fingerprint` above is a
+/// hash of this key, so it cannot stand in for it where the key itself is
+/// needed.
+///
+/// Deliberately not `Config::get_key_pair()`. That accessor MINTS and persists
+/// a fresh keypair when the calling process holds none, and this runs in the
+/// interface process, whose config is a copy of the service's that arrives
+/// asynchronously and may not have arrived, or ever arrive. A getter that
+/// invents a credential would pin a key against this machine that no session
+/// can match, so nothing is reported until a confirmed key can actually be
+/// read: the same gate `get_fingerprint` puts in front of the same key, and an
+/// empty answer the enrolment already treats as "this machine has no key yet".
+pub fn main_get_id_pk() -> String {
+    if !config::Config::get_key_confirmed() {
+        return "".to_owned();
+    }
+    config::Config::get_existing_key_pair()
+        .map(|key_pair| crate::encode64(key_pair.1))
+        .unwrap_or_default()
+}
+
+/// Sign one `/agent/*` request with this machine's own agent key and answer the
+/// three headers the machine plane reads, as JSON `{"machine","ts","sig"}`
+/// (`signature_json`, src/labdesk/labnet.rs). The body is signed as the bytes
+/// of `body`, so the caller must send exactly the string it passed here and
+/// nothing re-encoded from it.
+///
+/// The console is not a process that may read the credential on any platform
+/// (src/labdesk/identity.rs), so this asks the privileged process over IPC
+/// unless it is that process itself. An empty answer means nobody could speak
+/// for the machine, which is not a failure to paper over.
+pub fn main_agent_sign(_method: String, _path: String, _body: String) -> String {
+    #[cfg(not(any(target_os = "android", target_os = "ios")))]
+    {
+        use crate::labdesk::labnet::{serve_here_or_over_ipc, LabnetRequest};
+        match serve_here_or_over_ipc(LabnetRequest::Sign {
+            method: _method,
+            path: _path,
+            body: _body,
+        }) {
+            Ok(json) => json,
+            Err(err) => {
+                log::warn!("labnet: cannot sign for this machine: {}", err);
+                "".to_owned()
+            }
+        }
+    }
+    #[cfg(any(target_os = "android", target_os = "ios"))]
+    "".to_owned()
+}
+
+/// Enrol this machine with an org-minted token (`labdesk::identity::enrol`),
+/// in the privileged process over IPC. Answers `{"machineId":...}` or
+/// `{"error":...}`.
+pub fn main_agent_enrol(_token: String) -> String {
+    #[cfg(not(any(target_os = "android", target_os = "ios")))]
+    {
+        use crate::labdesk::labnet::{serve_here_or_over_ipc, LabnetRequest};
+        match serve_here_or_over_ipc(LabnetRequest::Enrol { token: _token }) {
+            Ok(machine_id) => serde_json::json!({ "machineId": machine_id }).to_string(),
+            Err(error) => serde_json::json!({ "error": error }).to_string(),
+        }
+    }
+    #[cfg(any(target_os = "android", target_os = "ios"))]
+    serde_json::json!({ "error": "unsupported" }).to_string()
+}
+
+/// Drive the bundled labnet daemon in the privileged process over IPC:
+/// `action` is `install`, `start`, `up`, `down` or `status`; `setup_key` is
+/// read by `up`; `management_url` by `install` and `up`. Answers
+/// `{"output":...}`, the daemon's stdout (the status JSON for `status`), or
+/// `{"error":...}`, the daemon's own words.
+pub fn main_overlay_daemon(_action: String, _setup_key: String, _management_url: String) -> String {
+    #[cfg(not(any(target_os = "android", target_os = "ios")))]
+    {
+        use crate::labdesk::labnet::{serve_here_or_over_ipc, LabnetRequest};
+        match serve_here_or_over_ipc(LabnetRequest::Daemon {
+            action: _action,
+            setup_key: _setup_key,
+            management_url: _management_url,
+        }) {
+            Ok(output) => serde_json::json!({ "output": output }).to_string(),
+            Err(error) => serde_json::json!({ "error": error }).to_string(),
+        }
+    }
+    #[cfg(any(target_os = "android", target_os = "ios"))]
+    serde_json::json!({ "error": "unsupported" }).to_string()
+}
+
+/// The port the direct listener answers on.
+pub fn main_get_direct_access_port() -> i32 {
+    direct_access_port(&get_option(config::keys::OPTION_DIRECT_ACCESS_PORT))
+}
+
+/// The `direct-access-port` option read as a port: what it says when that is a
+/// usable port number, and otherwise the port the listener falls back to, which
+/// is the same reading `RendezvousMediator` makes before it binds.
+fn direct_access_port(option: &str) -> i32 {
+    match option.parse::<i32>() {
+        Ok(port) if port > 0 => port,
+        _ => config::RENDEZVOUS_PORT + 2,
+    }
+}
+
 pub fn cm_get_clients_state() -> String {
     crate::ui_cm_interface::get_clients_state()
 }
@@ -2978,18 +3082,36 @@ pub fn main_set_common(_key: String, _value: String) {
                     "New version file is downloaded, update begin, {:?}",
                     new_version_file.to_str()
                 );
-                if let Some(f) = new_version_file.to_str() {
-                    // 1.4.0 does not support "--update"
-                    // But we can assume that the new version supports it.
+                // The digest the release publishes for this asset. `update_to`
+                // hashes the file against it itself, as the last act before
+                // the elevated launch, so the file is not touched again
+                // between the check and the install; that is the ordering
+                // `updater::update_new_version` already documents and follows.
+                // An asset the release publishes no digest for, upstream
+                // GitHub included, gets no install at all.
+                match crate::updater::get_published_sha256(&_value) {
+                    Err(e) => {
+                        log::error!("Refusing to install the new version: {}", e);
+                    }
+                    Ok(expected_sha256) => {
+                        if let Some(f) = new_version_file.to_str() {
+                            // 1.4.0 does not support "--update"
+                            // But we can assume that the new version supports it.
 
-                    #[cfg(any(target_os = "windows", target_os = "macos", target_os = "linux"))]
-                    match crate::platform::update_to(f) {
-                        Ok(_) => {
-                            log::info!("Update process is launched successfully!");
-                        }
-                        Err(e) => {
-                            log::error!("Failed to update to new version, {}", e);
-                            fs::remove_file(f).ok();
+                            #[cfg(any(
+                                target_os = "windows",
+                                target_os = "macos",
+                                target_os = "linux"
+                            ))]
+                            match crate::platform::update_to(f, &expected_sha256) {
+                                Ok(_) => {
+                                    log::info!("Update process is launched successfully!");
+                                }
+                                Err(e) => {
+                                    log::error!("Failed to update to new version, {}", e);
+                                    fs::remove_file(f).ok();
+                                }
+                            }
                         }
                     }
                 }
@@ -2998,7 +3120,25 @@ pub fn main_set_common(_key: String, _value: String) {
             #[cfg(target_os = "macos")]
             {
                 if let Some(new_version_file) = get_download_file_from_url(&_value) {
-                    if let Some(f) = new_version_file.to_str() {
+                    // Extraction happens before the user is asked anything, so
+                    // it must not run on bytes the release did not vouch for.
+                    // The install does not trust this extraction: `update_to`
+                    // hashes the same image and extracts it again itself.
+                    if let Err(e) = crate::updater::verify_update_file(&_value, &new_version_file) {
+                        log::error!("Refusing to extract the new version: {}", e);
+                        // The dialog is on a spinner waiting for this event.
+                        // Refusing quietly would leave it spinning for good,
+                        // so the refusal is reported the same way a failed
+                        // extraction is, through `extract_update_dmg`'s event.
+                        let evt = HashMap::from([
+                            ("name", "extract-update-dmg".to_string()),
+                            ("err", e.to_string()),
+                        ]);
+                        let _res = flutter::push_global_event(
+                            flutter::APP_TYPE_MAIN,
+                            serde_json::ser::to_string(&evt).unwrap_or("".to_owned()),
+                        );
+                    } else if let Some(f) = new_version_file.to_str() {
                         crate::platform::macos::extract_update_dmg(f);
                     } else {
                         // unreachable!()
@@ -3190,5 +3330,23 @@ pub mod server_side {
         _class: JClass,
     ) -> jboolean {
         jboolean::from(crate::server::is_clipboard_service_ok())
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::direct_access_port;
+    use hbb_common::config::RENDEZVOUS_PORT;
+
+    #[test]
+    fn the_direct_port_is_the_option_and_falls_back_only_when_that_is_not_a_port() {
+        assert_eq!(direct_access_port("21119"), 21119);
+        assert_eq!(direct_access_port("1"), 1);
+        assert_eq!(direct_access_port("65535"), 65535);
+        // Unset, blank, non-numeric or non-positive all mean the listener's own
+        // default, never a port this machine does not answer on.
+        for option in ["", " ", "0", "-1", "abc", "21119abc"] {
+            assert_eq!(direct_access_port(option), RENDEZVOUS_PORT + 2, "{option}");
+        }
     }
 }
