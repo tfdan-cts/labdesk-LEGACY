@@ -557,6 +557,16 @@ known gaps gain the connect ticket's unproven claim leg. The one code change is 
 inside the single `db.batch()` in `agent-ingest.ts`, and the comment now says which route owns each
 and that a new write on that plane owes the same treatment.
 
-Verified: site `tsc --noEmit` clean and `npx vitest run --no-file-parallelism` green. No Rust or
-Dart source was touched, so neither gate was rerun.
+Verified: site `tsc --noEmit` clean. The Worker suite was NOT rerun, and this is the one open item
+the pass leaves. Free physical memory on the workstation read 2.3 GB when the pass started and 1.11
+GB after three minutes of waiting, under the 3 GB floor the program sets before launching a suite,
+and the 8.3 GB holder is the VS Code Dart language server, which only the owner restarts. The only
+source change in the pass is a comment block, and `tsc` passed over it; the suite is owed on the
+next round that has the memory for it. No Rust or Dart source was touched, so neither of those
+gates was rerun either.
+
+Site branch state at the end of the pass: `feat/wp17-console` is `f920d3e` on the remote, which is
+`dev` (`2a8d4ca`) plus the two console commits and this one. Client `feat/labnet` carries the
+smoothing commit `36548c6` and this note. Merging `feat/wp17-console` into `dev` is the next
+action and is the deploy.
 
