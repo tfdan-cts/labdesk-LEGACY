@@ -362,6 +362,12 @@ is never written to the peer's remembered password and never synced to the perso
 book, even when that peer already has a remembered password (`PasswordSource::is_storable`
 in `src/client.rs`, the same rule a shared address book password follows).
 
+Everything above the claim is proven and the claim itself is not. On 2026-09-05 a ticket was
+minted, delivered to a real machine inside its own signed uplink and marked delivered; no
+`connect_ticket` row anywhere has ever carried `claimed_at`. Claiming needs a controller and a
+target both signed in, which needs an enrolment token only the owner mints in production, so the
+one-time password's acceptance and the claim report are covered by tests and by nothing else.
+
 ## What the console does not show
 
 The console is a client-side interface. At HEAD the only things under `flutter/lib/` that speak
@@ -373,9 +379,12 @@ book routes. What the console has no surface for is managing the organization. C
 
 * **The organization is managed on lab-desk.net, not here.** Owner, technician and viewer roles,
   fleets as groups inside an organization, and enrolment tokens live in `src/worker/org.ts` and
-  on the web console of the `labdesk-site` repository, which since 2026-09-05 is eight pages:
-  `/fleet`, `/machine/:id`, `/people`, `/enrol`, `/rules`, `/jobs`, `/alerts` and `/updates`,
-  beside the `/org` page that creates the organization and its fleets. That is where a person is
+  on the web console of the `labdesk-site` repository, which since the evening of 2026-09-05 is
+  eight pages LIVE in production: `/fleet`, `/machine/:id`, `/people`, `/enrol`, `/rules`,
+  `/jobs`, `/alerts` and `/updates`, beside the `/org` page that creates the organization and its
+  fleets, and `/account` and `/accept-invitation`. The merge that brought them was `2960665` and
+  its build put version `6203a2e6` in production at 2026-09-06T00:18:03Z; every later commit to
+  `dev` deploys a newer one, so read the live version from the dashboard. That is where a person is
   invited, a role is changed, a job is approved and an alert is acknowledged. This client spends
   a token and lists the organization's machines; it has no page that creates a fleet or changes a
   role. The console's

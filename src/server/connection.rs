@@ -93,6 +93,14 @@ lazy_static::lazy_static! {
     static ref PENDING_TICKETS: Arc::<Mutex<Vec<PendingTicket>>> = Default::default();
 }
 
+#[cfg(all(test, not(any(target_os = "android", target_os = "ios"))))]
+lazy_static::lazy_static! {
+    static ref SPENT_TICKETS: Mutex<ResultType<crate::labdesk::ticket::SpentTickets>> = Mutex::new({
+        let path = std::env::temp_dir().join(format!("labdesk-spent-{}.json", uuid::Uuid::new_v4()));
+        crate::labdesk::ticket::SpentTickets::load(path)
+    });
+}
+
 #[cfg(feature = "flutter")]
 #[cfg(not(any(target_os = "android", target_os = "ios")))]
 const SWITCH_SIDES_UUID_TTL: Duration = Duration::from_secs(10);
@@ -6242,16 +6250,59 @@ pub fn insert_pending_ticket(
 /// Claim the first unclaimed, unexpired ticket issued to `controller_peer_id`
 /// whose `H` satisfies `matches` (the login's own password check). Never for
 /// another peer id, never twice.
+#[cfg(not(any(target_os = "android", target_os = "ios")))]
 pub fn claim_pending_ticket(controller_peer_id: &str, matches: impl Fn(&str) -> bool) -> bool {
     let mut tickets = PENDING_TICKETS.lock().unwrap();
     retain_live_tickets(&mut tickets);
     for t in tickets.iter_mut() {
         if t.controller_peer_id == controller_peer_id && !t.claimed && matches(&t.secret_hash) {
-            t.claimed = true;
-            return true;
+            #[cfg(test)]
+            return spend_pending_ticket(t, &mut SPENT_TICKETS.lock().unwrap());
+            #[cfg(not(test))]
+            {
+                let result = crate::labdesk::ticket::spend_on_machine(&t.id, t.expires_at);
+                return finish_pending_ticket(t, result);
+            }
         }
     }
     false
+}
+
+// Mobile has no privileged LabDesk service to authorize a durable spend.
+#[cfg(any(target_os = "android", target_os = "ios"))]
+pub fn claim_pending_ticket(_controller_peer_id: &str, _matches: impl Fn(&str) -> bool) -> bool {
+    false
+}
+
+/// Persistence is part of authentication, not the later best-effort HTTP
+/// claim report. A process restart must not make a redelivered ticket usable.
+#[cfg(all(test, not(any(target_os = "android", target_os = "ios"))))]
+fn spend_pending_ticket(
+    ticket: &mut PendingTicket,
+    ledger: &mut ResultType<crate::labdesk::ticket::SpentTickets>,
+) -> bool {
+    let result = match ledger {
+        Ok(ledger) => ledger.spend(&ticket.id, ticket.expires_at, hbb_common::get_time() / 1000),
+        Err(_) => {
+            log::error!("[ticket] Spent-ticket storage unavailable; refusing ticket authentication");
+            return false;
+        }
+    };
+    finish_pending_ticket(ticket, result)
+}
+
+fn finish_pending_ticket(ticket: &mut PendingTicket, result: ResultType<bool>) -> bool {
+    match result {
+        Ok(first_claim) => {
+            // A recovered spend should also be reported again to the Worker.
+            ticket.claimed = true;
+            first_claim
+        }
+        Err(err) => {
+            log::error!("[ticket] Cannot persist ticket claim; refusing authentication: {}", err);
+            false
+        }
+    }
 }
 
 /// The ids of tickets claimed since the last ask, marked reported as they are
@@ -7232,6 +7283,7 @@ mod test {
     /// `cargo test claim_once`: the ticket map behaves like the switch-sides
     /// map above, keyed by the controller's peer id.
     #[test]
+    #[cfg(not(any(target_os = "android", target_os = "ios")))]
     fn test_pending_ticket_claim_once_per_ticket_never_for_another_peer() {
         let peer = uuid::Uuid::new_v4().to_string();
         let tid = |n: u8| format!("{}-{}", peer, n);
@@ -7282,6 +7334,47 @@ mod test {
             mine(take_claimed_tickets()).is_empty(),
             "reported once"
         );
+    }
+
+    #[test]
+    #[cfg(any(target_os = "android", target_os = "ios"))]
+    fn test_mobile_cannot_authorize_a_managed_ticket() {
+        assert!(!claim_pending_ticket("controller", |_| {
+            panic!("mobile must refuse before checking a ticket secret")
+        }));
+    }
+
+    #[test]
+    #[cfg(not(any(target_os = "android", target_os = "ios")))]
+    fn test_ticket_auth_requires_a_durable_spend() {
+        let path = std::env::temp_dir().join(format!("labdesk-claim-{}", uuid::Uuid::new_v4())).join("spent.json");
+        let mut ticket = PendingTicket {
+            id: "ticket".into(), controller_peer_id: "controller".into(), secret_hash: "hash".into(),
+            expires_at: hbb_common::get_time() / 1000 + 120, claimed: false, reported: false,
+        };
+        let mut ledger = crate::labdesk::ticket::SpentTickets::load(path.clone());
+        assert!(!finish_pending_ticket(&mut ticket, Err(hbb_common::anyhow::anyhow!("service unavailable"))));
+        assert!(!ticket.claimed, "an unavailable machine service cannot authorize a login");
+        assert!(spend_pending_ticket(&mut ticket, &mut ledger));
+        // Simulate redelivery to a fresh --server after the claim HTTP failed.
+        ticket.claimed = false;
+        let mut restarted = crate::labdesk::ticket::SpentTickets::load(path.clone());
+        assert!(!spend_pending_ticket(&mut ticket, &mut restarted));
+        assert!(ticket.claimed, "a recovered spend is owed to the Worker again");
+        std::fs::remove_file(&path).unwrap();
+        std::fs::create_dir(&path).unwrap();
+        let mut unreadable = crate::labdesk::ticket::SpentTickets::load(path.clone());
+        ticket.claimed = false;
+        assert!(!spend_pending_ticket(&mut ticket, &mut unreadable));
+        assert!(!ticket.claimed);
+        std::fs::remove_dir(&path).unwrap();
+        let mut unwritable = crate::labdesk::ticket::SpentTickets::load(path.clone());
+        std::fs::create_dir(&path).unwrap();
+        assert!(!spend_pending_ticket(&mut ticket, &mut unwritable));
+        assert!(!ticket.claimed);
+        std::fs::remove_file(path.with_extension("tmp")).unwrap();
+        std::fs::remove_dir(&path).unwrap();
+        std::fs::remove_dir(path.parent().unwrap()).unwrap();
     }
 
     #[test]

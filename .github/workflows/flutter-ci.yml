@@ -40,15 +40,24 @@ jobs:
     uses: ./.github/workflows/flutter-build.yml
     with:
       upload-artifact: false
+      publish-release: false
 
-  # The Dart tests and the analyzer, which nothing else runs. Kept out of
-  # flutter-build.yml so it reports in minutes instead of waiting on a build
-  # that takes hours, and so a failure here names itself.
+  # The Dart tests import the native models and need this run's generated
+  # bridge. Reusable-workflow dependencies complete as a unit, so this gate
+  # waits for run-ci instead of testing against an absent or stale bridge.
   dart-checks:
     name: Dart tests and analysis
+    needs: run-ci
+    if: ${{ !cancelled() }}
     runs-on: ubuntu-22.04
     steps:
       - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4
+
+      - name: Download this run's generated bridge
+        uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
+        with:
+          name: bridge-artifact
+          path: .
 
       # Read the pin out of flutter-build.yml rather than repeating it, so this
       # job always analyses with the Flutter the release build compiles with.
@@ -86,13 +95,8 @@ jobs:
       # hundred upstream issues or turning the check off, and neither of those
       # protects LabDesk's own code.
       #
-      # Known gap: lib/generated_bridge.dart is produced by the bridge job and
-      # is not present here, so lib/models/{model,native_model,platform_model}
-      # report unresolved-symbol errors. Those are upstream files, so they are
-      # filtered out with the rest, but it also means a mistyped bind.* call in
-      # a LabDesk screen resolves against an invalid type and is not reported.
-      # Generating the bridge here would collide with the bridge artifact the
-      # run-ci job already uploads in this same run.
+      # The matching bridge above also lets the analyzer check bind.* calls
+      # against real generated signatures instead of unresolved types.
       - name: Analyze
         working-directory: flutter
         run: |

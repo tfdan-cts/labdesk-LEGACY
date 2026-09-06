@@ -108,8 +108,9 @@ class NetworkScreen extends StatelessWidget {
           if (!inbox.enrolled) ...[
             _Card(
               title: 'Not on labnet',
-              subtitle: 'Turn on encrypted direct connections under This '
-                  'machine first. Labnets are made of machines that have.',
+              subtitle: 'Add this machine to your organization under This '
+                  'machine, then turn on Labnet. Clearing RustDesk server '
+                  'settings does not enable labnet.',
               child: const SizedBox.shrink(),
             ),
             const SizedBox(height: 16),
@@ -121,7 +122,7 @@ class NetworkScreen extends StatelessWidget {
           for (final i in inbox.invitations) ...[
             _Card(
               title: '${i.invitedBy} wants to add this machine to ${i.name}',
-              subtitle: 'Machines in a labnet can reach each other directly. '
+              subtitle: 'Machines in a labnet can reach each other securely. '
                   'Nothing joins until you say so here.',
               child: Row(
                 children: [
@@ -155,9 +156,9 @@ class NetworkScreen extends StatelessWidget {
           Text(
             inbox.labnets.isEmpty
                 ? 'A labnet is a standing group of machines that reach each '
-                    'other directly. Machines join only after approving on '
+                    'other through NetBird. Machines join only after approving on '
                     'their own screen.'
-                : 'Machines in a labnet reach each other directly, on '
+                : 'Machines in a labnet reach each other through NetBird, on '
                     'LabDesk\'s port and ping unless full access is on.',
             style: C.small(),
           ),

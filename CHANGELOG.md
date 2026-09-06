@@ -81,11 +81,21 @@ past that release:
   cannot kill dpkg. The helper refuses a package that is not newer than the installed one and
   refuses any bytes whose digest lab-desk.net has not published, so the console's own button and
   the unattended loop install through one gate.
-- lab-desk.net gains the web console: fleet, one machine, people, enrolment, rules, jobs, alerts
-  and updates, each fed by its own route, with an owner able to invite a second person into the
-  organization and that invitation able to be accepted. The machine page shows a day of stored
-  history, every drive with its verdict and what read it, the jobs and the alerts for that
-  machine, and the labels beside the agent's own read-only attributes.
+- lab-desk.net gains the web console, live in production since the evening of 2026-09-05: fleet,
+  one machine, people, enrolment, rules, jobs, alerts and updates, each fed by its own route, with
+  an owner able to invite a second person into the organization and that invitation able to be
+  accepted. The machine page shows a day of stored history, every drive with its verdict and what
+  read it, the jobs and the alerts for that machine, and the labels beside the agent's own
+  read-only attributes.
+- A machine nobody has asked about is drawn as unknown rather than as down. The shared status dot
+  carried two states, so the absence of an answer looked the same as a report that a machine was
+  offline; it carries three now, and the health board groups the fleet by them and prints a last
+  sighting only where one exists.
+- Build only, but it costs every lane: the vcpkg binary cache had been caching nothing in every
+  workflow since GitHub removed the `x-gha` backend, so each job rebuilt its ports from source. A
+  files provider plus `actions/cache` replaces it, measured at 390 seconds down to 3 on a warm
+  Linux run. Full Flutter CI also gained a concurrency group, so a branch stops racing itself for
+  macOS runners.
 - The first end-to-end run on a real machine, 2026-09-05, found five defects no test could see,
   and they are fixed: a machine never reported its own platform, so no really enrolled machine
   could ever be given a job; an urgent job's result still waited a full cadence, because the

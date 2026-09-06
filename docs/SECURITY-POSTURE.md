@@ -7,7 +7,7 @@ this page says so. Where a control is known broken, this page says that too.
 It describes the code as committed:
 
 - `LabDesk`, branch `feat/labnet`
-- `labdesk-site`, branch `feat/labnet-broker`
+- `labdesk-site`, branch `dev`, which since 2026-09-05 is what production serves
 
 The audit that produced the gap list below ran before the fixes for it landed.
 Everything the fixes closed has been moved into "Closed since the audit" in
@@ -316,16 +316,28 @@ Worker (only the three write lines in the ingest), and `metric_batch` has none
 either, so not even a hand-crafted request with an owner cookie can read back a
 CPU, memory or disk figure.
 
-**15. There is no web operator console.** `src/app/pages/` holds four files:
-`account.tsx`, `admin.tsx`, `auth.tsx`, `download.tsx`. Fleets exist in the
-database with no page to manage them, and the organization API has no caller in
-any client. Page work was started and then removed unreviewed rather than left
-in the tree unmounted, so this gap is open, not partly done.
+**15. There is no web operator console.** CLOSED 2026-09-05, kept for the
+record. The console is live in production: the merge `2960665` and its build
+`3666a6f2` put version `6203a2e6` in production at 2026-09-06T00:18:03Z, and
+later commits to `dev` deploy newer versions. `/fleet`,
+`/machine/:id`, `/people`, `/enrol`, `/rules`, `/jobs`, `/alerts` and
+`/updates` sit beside `/org`, `/account` and `/accept-invitation`, each fed by
+its own route, with `routes/jobs.ts` and `routes/rules.ts` behind them and an
+owner able to invite a second person into the organization. Every one of them
+still requires a signed-in session, and no signed-in request has reached the
+console plane in production yet (section 5).
 
-**16. `machine.platform` has no writer.** The only INSERT
-(`src/worker/routes/agent.ts:142-156`) omits it and the ingest never sets it, so
-a machine that arrived by enrolment has a permanently empty platform and the
-client's per-platform command lookup matches nothing.
+**16. `machine.platform` has no writer.** CLOSED 2026-09-05, kept for the
+record, and worth keeping because of what it cost. Five places read the column,
+including `POST /org/jobs` and the health rule action path; enrolment and the
+batch both wrote hostname, OS build and agent version and neither ever wrote
+platform or arch, and every fixture machine had one set by hand, so no test saw
+it. The first really enrolled machine was refused every catalog tool with "That
+machine has not reported its platform yet." Fixed on both sides: the batch's
+`machine` member names `platform` and `arch`, and the ingest stores a platform
+this build's catalog knows and nothing else. The security lesson is not the
+column, it is that a fixture that fills a field the product never fills hides
+the defect it exists to catch.
 
 **17. A deterministic 400 wedges the head of the spool.** Every flush rebuilds
 the window from index 0 and only an accepted batch drops lines
@@ -454,16 +466,24 @@ installer does once it is running as root.
 Each item here is unknown because nobody has settled it, not because it is
 believed to be fine. Each names the evidence that would settle it.
 
-**No disk call has ever run against real hardware.** No `DeviceIoControl` on
-Windows, no SG_IO ioctl on Linux. Every byte in `src/labdesk/disk/fixtures/` was
-constructed programmatically, and that directory's own `README.md` says so in its
-third paragraph. Two specifics deserve naming. `IOCTL_STORAGE_PREDICT_FAILURE`
+**No WINDOWS disk call has ever run against real hardware.** The Linux half of
+this item was settled on 2026-09-05: on homebox-devserver the module read a
+Micron 3400 NVMe over `NVME_IOCTL_ADMIN_CMD` and a Seagate ST1000VX008 over
+`SG_IO` with the ATA PASS-THROUGH(16) CDB, both verdict `ok`, and both refused
+without root as `unreadable` rather than as healthy. Three defects the hardware
+found are fixed and both captures are committed as fixtures with their
+provenance. No `DeviceIoControl` has run on Windows, and trapLab-Foundry cannot
+settle it in any case: its disks are QEMU virtual and cannot answer SMART. The
+rest of `src/labdesk/disk/fixtures/` was still constructed programmatically, and
+that directory's own `README.md` says which bytes came from a drive and which
+did not. Two specifics deserve naming. `IOCTL_STORAGE_PREDICT_FAILURE`
 returning a bare `Some(false)` is treated as a healthy verdict, and the module is
 explicitly designed to trust that call on the USB bridges and RAID members that
 refuse everything else: the test `a_bare_negative_prediction_is_ok`
 (`src/labdesk/disk/verdict.rs:417`) pins that behaviour. If such a bridge answers
 zero rather than failing the call, every external drive in a fleet renders
-healthy. And
+healthy, and the Linux run above cannot settle that because neither drive was
+behind a USB bridge. And
 `src/labdesk/disk/windows.rs:453` sets `bDriveHeadReg` to
 `DRIVE_HEAD_MASTER | (((drive & 1) as u8) << 4)`, which applies the IDE master
 and slave convention to a PhysicalDrive index, and a PhysicalDrive index is not
@@ -483,10 +503,21 @@ organizations' peers, and whether `syncLabnetGroup` produces the policy it
 believes it does are all unverified against the real control plane.
 **Settles it:** run the suite against a real NetBird instance.
 
-**Migrations 0002 through 0008 are pending on production D1.** They have not been
-applied, so the deployed schema is not the schema any test or probe ran against.
-This was established this session against the live database, not from the
-repository. **Settles it:** apply them, then read the deployed schema back.
+**Migrations 0002 through 0008 are pending on production D1.** SETTLED
+2026-09-05, kept for the record. Read back from the live database that evening,
+`d1_migrations` holds `0000` through `0011` applied, with no `0007` in the
+repository at all; `0010_setting.sql` and `0011_job_urgent.sql` are the day's.
+The deployed schema is now the schema the tests run against.
+
+**Nothing has ever run in production.** Read back 2026-09-05: production D1
+holds 3 users, 1 organization, 3 members, and zero machines, metric batches,
+jobs, connect tickets, enrolment tokens and disks. Every end-to-end proof in
+phase 1, homebox-devserver included, ran against the deployed Worker's code on a
+local stack reached through a front proxy on the machine, and that machine was
+de-enrolled in the round's cleanup. So no authorization decision on the machine
+plane, the console plane or the job approval path has ever been made by the
+production Worker against a real caller. **Settles it:** the owner mints an
+enrolment token, a machine enrols, and a signed-in console drives it.
 
 **Whether `/agent/*` is on the Cloudflare Access bypass is unknown.** SETTLED
 2026-09-05, kept for the record: `/agent` was put on the bypass that morning

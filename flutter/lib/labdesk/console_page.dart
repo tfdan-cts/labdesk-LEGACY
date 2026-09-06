@@ -116,6 +116,10 @@ class _LabDeskConsolePageState extends State<LabDeskConsolePage> {
   late final OverlayEnrolment _enrolment;
   late final OverlaySession _overlay;
   var _labnet = LabnetCardState.off;
+  bool _preparingConnection = false;
+  int _connectionGeneration = 0;
+  bool _disablingLabnet = false;
+  final _windowPeerIds = <int, List<String>>{};
   var _inbox = LabnetInbox.empty;
 
   /// The organization's machines as lab-desk.net holds them, read with the
@@ -312,22 +316,29 @@ class _LabDeskConsolePageState extends State<LabDeskConsolePage> {
     try {
       final remote = <String, int>{};
       final terminal = <String, int>{};
-      for (final w in rustDeskWinManager.windowsOfType(WindowType.RemoteDesktop)) {
-        final list = await _ask(w, kWindowEventGetRemoteList);
-        if (list is String) {
-          for (final id in list.split(',')) {
-            if (id.isNotEmpty) remote[id] = w;
+      final presentWindows = <int>{};
+      for (final type in [
+        WindowType.RemoteDesktop,
+        WindowType.Terminal,
+        WindowType.FileTransfer,
+        WindowType.PortForward,
+        WindowType.ViewCamera,
+      ]) {
+        for (final w in rustDeskWinManager.windowsOfType(type)) {
+          presentWindows.add(w);
+          final list = await _ask(w, kWindowEventGetRemoteList);
+          if (list is String) {
+            _windowPeerIds[w] = list.split(',').where((id) => id.isNotEmpty).toList();
+          }
+          // A busy window is not a closed session. Retain its last successful
+          // response until it answers again or the window manager removes it.
+          for (final id in _windowPeerIds[w] ?? const <String>[]) {
+            if (type == WindowType.RemoteDesktop) remote[id] = w;
+            if (type == WindowType.Terminal) terminal[id] = w;
           }
         }
       }
-      for (final w in rustDeskWinManager.windowsOfType(WindowType.Terminal)) {
-        final list = await _ask(w, kWindowEventLabDeskTerminalList);
-        if (list is String) {
-          for (final id in list.split(',')) {
-            if (id.isNotEmpty) terminal[id] = w;
-          }
-        }
-      }
+      _windowPeerIds.removeWhere((window, _) => !presentWindows.contains(window));
       if (!mounted) return;
       final changed = !mapEquals(remote, _remoteWindowOf) ||
           !mapEquals(terminal, _terminalWindowOf);
@@ -338,7 +349,10 @@ class _LabDeskConsolePageState extends State<LabDeskConsolePage> {
         ..clear()
         ..addAll(terminal);
       // A granted direct path is released once its session has come and gone.
-      await _overlay.noteOpenSessions({...remote.keys, ...terminal.keys});
+      await _overlay.noteOpenSessions([
+        ..._windowPeerIds.values.expand((ids) => ids),
+        ...LabDeskMachineLink.openIds,
+      ]);
 
       // Chat transcripts of the desktop sessions that are open.
       final chats = <String, SessionChat>{};
@@ -412,7 +426,8 @@ class _LabDeskConsolePageState extends State<LabDeskConsolePage> {
               f.id, false, 'skipped: $platform is not $platformHint');
           break;
         }
-        final ffi = await LabDeskMachineLink.open(id);
+        final ffi = await LabDeskMachineLink.open(id,
+            beforeOpen: () => _prepareManagedLink(id));
         if (ffi == null) {
           _automation.recordOutcome(
               f.id, false, LabDeskMachineLink.reason(id));
@@ -477,7 +492,8 @@ class _LabDeskConsolePageState extends State<LabDeskConsolePage> {
       if (r is String) return jsonDecode(r) as Map<String, dynamic>;
       return {'lines': <String>[], 'reason': 'The terminal window did not answer.'};
     }
-    final ffi = await LabDeskMachineLink.open(id);
+    final ffi = await LabDeskMachineLink.open(id,
+        beforeOpen: () => _prepareManagedLink(id));
     if (ffi == null) {
       return {'lines': <String>[], 'reason': LabDeskMachineLink.reason(id)};
     }
@@ -600,21 +616,7 @@ class _LabDeskConsolePageState extends State<LabDeskConsolePage> {
   /// board rendered it: signed in on homebox-devserver the board read "No
   /// machines yet." while lab-desk.net was answering the same console with four
   /// machines, one of them that machine, online and carrying figures.
-  List<MachineRow> get _fleetRows {
-    final rows = _machines;
-    final known = {for (final r in rows) r.id};
-    return [
-      ...rows,
-      for (final m in _orgMachines)
-        if (!known.contains(m.peerId))
-          MachineRow(
-            id: m.peerId,
-            hostname: m.name,
-            platform: m.platform,
-            status: _serverStatusOf(m.peerId) ?? LabDeskPeerStatus.unknown,
-          ),
-    ];
-  }
+  List<MachineRow> get _fleetRows => _machines;
 
   MachineHealth _healthFor(String id) {
     final row = _rowOf(id);
@@ -656,7 +658,8 @@ class _LabDeskConsolePageState extends State<LabDeskConsolePage> {
       if (r is String) out = jsonDecode(r) as Map<String, dynamic>;
     } else {
       // No terminal window: the console's own link carries the shell.
-      final ffi = await LabDeskMachineLink.open(id);
+      final ffi = await LabDeskMachineLink.open(id,
+          beforeOpen: () => _prepareManagedLink(id));
       if (ffi == null) {
         if (!mounted) return;
         setState(() => lines.add(TerminalLine(LabDeskMachineLink.reason(id),
@@ -752,6 +755,11 @@ class _LabDeskConsolePageState extends State<LabDeskConsolePage> {
 
   List<MachineRow> get _machines => buildMachineRows(
         peers: _peers,
+        organizationPeers: [
+          for (final m in _orgMachines)
+            (id: m.peerId, hostname: m.name, platform: m.platform,
+              alias: '', username: ''),
+        ],
         store: labdeskStatus.store,
         historyOf: labdeskStatus.historyOf,
         groupOf: _groupOf,
@@ -1203,6 +1211,24 @@ class _LabDeskConsolePageState extends State<LabDeskConsolePage> {
           // it (src/labdesk/labnet.rs).
           enrol: MachineEnrolCard(
             enrol: (token) => bind.mainAgentEnrol(token: token),
+            broker: _broker,
+            signedIn: _signedIn,
+            signIn: () async => await loginDialog() == true,
+            machineId: _machineIdOfPeer(_thisPeerId),
+            checkService: () async {
+              final error = await _daemon.checkAgent();
+              if (error != null) {
+                throw StateError('The LabDesk background service is unavailable. '
+                    'Install or repair LabDesk, then try again. $error');
+              }
+            },
+            repairService: () => bind.mainGotoInstall(),
+            onEnrolled: () async {
+              await _enableLabnet();
+              if (_enrolment.current.phase == LabnetPhase.error) {
+                throw StateError(_enrolment.current.detail);
+              }
+            },
           ),
           labnet: LabnetCard(
             state: _labnet,
@@ -1272,6 +1298,7 @@ class _LabDeskConsolePageState extends State<LabDeskConsolePage> {
       setOption: (k, v) => bind.mainSetOption(key: k, value: v),
       identity: () async =>
           (await bind.mainGetIdPk(), await bind.mainGetDirectAccessPort()),
+      desiredState: () => bind.mainGetOption(key: kLabnetEnabledOption),
     );
     _enrolment.states.listen((s) {
       if (mounted) setState(() => _labnet = s);
@@ -1281,14 +1308,13 @@ class _LabDeskConsolePageState extends State<LabDeskConsolePage> {
       daemon: _daemon,
       setOption: (k, v) => bind.mainSetOption(key: k, value: v),
     );
-    // What the daemon says now, so a machine enrolled last week opens as On.
-    _daemon.status().then((s) {
-      if (!mounted || !s.isUp) return;
-      setState(
-          () => _labnet = LabnetCardState(LabnetPhase.on, ip: bareIp(s.ip)));
+    // Reconcile registration and the listener before showing On. Refresh also
+    // runs while signed out: daemon readiness belongs to the machine.
+    _enrolment.refresh();
+    _inboxTick = Timer.periodic(const Duration(seconds: 15), (_) {
+      _enrolment.refresh();
+      _pollInbox();
     });
-    _inboxTick =
-        Timer.periodic(const Duration(seconds: 15), (_) => _pollInbox());
     WidgetsBinding.instance.addPostFrameCallback((_) => _pollInbox());
   }
 
@@ -1507,6 +1533,9 @@ class _LabDeskConsolePageState extends State<LabDeskConsolePage> {
   /// The one prompt: asked once per machine, only while signed in, never
   /// again once answered or enrolled.
   Future<void> _maybeAskConsent(LabnetInbox inbox) async {
+    // A signed-in account is not an enrolled machine. Add this machine owns
+    // the initial consent and setup sequence for a new installation.
+    if (_machineIdOfPeer(_thisPeerId).isEmpty) return;
     final asked = bind.mainGetLocalOption(key: _kConsentKey) == 'asked';
     if (!shouldAskLabnetConsent(
         signedIn: _signedIn,
@@ -1519,14 +1548,13 @@ class _LabDeskConsolePageState extends State<LabDeskConsolePage> {
       context: context,
       builder: (ctx) => AlertDialog(
         backgroundColor: C.surface,
-        title: Text('Encrypted direct connections', style: C.h2()),
+        title: Text('Turn on Labnet', style: C.h2()),
         content: SizedBox(
           width: 440,
           child: Text(
-            'Machines on your account can open a direct encrypted path to '
-            'this one instead of going through an ID server. Nothing else can '
-            'reach it that way. You can turn this off under This machine at '
-            'any time.',
+            'Use NetBird to connect authorized machines through encrypted '
+            'tunnels. Connections go directly when possible and use a relay '
+            'when needed. You can turn labnet off under This machine at any time.',
             style: C.body(),
           ),
         ),
@@ -1563,28 +1591,58 @@ class _LabDeskConsolePageState extends State<LabDeskConsolePage> {
 
   Future<void> _enableLabnet() async {
     if (_labnet.phase == LabnetPhase.working) return;
+    await bind.mainSetLocalOption(key: _kConsentKey, value: 'asked');
     await _enrolment.enable();
     await _pollInbox();
   }
 
   Future<void> _disableLabnet() async {
-    if (_labnet.phase == LabnetPhase.working) return;
-    await _enrolment.disable();
-    // Every per-peer hint the session service wrote goes with the labnet, or
-    // the next connect to each of those peers dials a dead address first.
-    final opts = jsonDecode(bind.mainGetOptionsSync()) as Map<String, dynamic>;
-    for (final k in opts.keys) {
-      if (k.startsWith(kOverlayAddrOption) || k.startsWith(kOverlayPkOption)) {
-        await bind.mainSetOption(key: k, value: '');
+    if (_labnet.phase == LabnetPhase.working || _disablingLabnet) return;
+    _disablingLabnet = true;
+    _connectionGeneration++;
+    try {
+      // Invalidate preparation before the first shutdown await.
+      await Future.wait([_overlay.releaseAll(), _enrolment.disable()]);
+      // Every per-peer hint the session service wrote goes with the labnet, or
+      // the next connect to each of those peers dials a dead address first.
+      final opts = jsonDecode(bind.mainGetOptionsSync()) as Map<String, dynamic>;
+      for (final k in opts.keys) {
+        if (k.startsWith(kOverlayAddrOption) ||
+            k.startsWith(kOverlayPkOption) ||
+            k.startsWith(kOverlayTicketOption) ||
+            k.startsWith(kOverlayRequiredOption)) {
+          await bind.mainSetOption(key: k, value: '');
+        }
       }
+      await _pollInbox();
+    } finally {
+      _disablingLabnet = false;
     }
-    await _pollInbox();
   }
 
   /// Every way the console opens a session goes through here. With the direct
   /// path on, lab-desk.net is asked for the grant and the target is waited for
   /// before the client dials; without it, or if anything short of that
   /// happens, the session goes the way it always has.
+  Future<String?> _prepareManagedLink(String id) async {
+    final generation = _connectionGeneration;
+    const cancelled = 'Labnet connection cancelled.';
+    if (_disablingLabnet) return cancelled;
+    if (_labnet.phase == LabnetPhase.off && !_orgByPeer.containsKey(id)) {
+      return null;
+    }
+    final state = await _enrolment.refresh();
+    if (generation != _connectionGeneration || !mounted) return cancelled;
+    if (state.phase != LabnetPhase.on) {
+      return state.detail.isNotEmpty
+          ? state.detail
+          : 'Turn on Labnet on this machine to use its managed tools.';
+    }
+    final ready = await _overlay.prepare(id);
+    if (generation != _connectionGeneration || !mounted) return cancelled;
+    return ready ? null : _overlay.lastError;
+  }
+
   Future<void> _connectVia(
     String id, {
     bool isTerminal = false,
@@ -1593,17 +1651,45 @@ class _LabDeskConsolePageState extends State<LabDeskConsolePage> {
     bool isTcpTunneling = false,
     bool isRDP = false,
   }) async {
-    if (_labnet.phase == LabnetPhase.on) await _overlay.prepare(id);
-    if (!mounted) return;
-    connect(
-      context,
-      id,
-      isTerminal: isTerminal,
-      isFileTransfer: isFileTransfer,
-      isViewCamera: isViewCamera,
-      isTcpTunneling: isTcpTunneling,
-      isRDP: isRDP,
-    );
+    if (_preparingConnection || _disablingLabnet) return;
+    final generation = _connectionGeneration;
+    _preparingConnection = true;
+    try {
+      if (_labnet.phase != LabnetPhase.off || _orgByPeer.containsKey(id)) {
+        final state = await _enrolment.refresh();
+        if (generation != _connectionGeneration || !mounted) return;
+        final ready = state.phase == LabnetPhase.on && await _overlay.prepare(id);
+        if (generation != _connectionGeneration || !mounted) return;
+        if (!ready) {
+          final detail = state.phase == LabnetPhase.on
+              ? _overlay.lastError
+              : state.detail.isNotEmpty
+                  ? state.detail
+                  : 'Add this machine to your organization under This machine, '
+                      'then turn on Labnet on both machines.';
+          final fallback = await showDialog<bool>(
+            context: context,
+            builder: (_) => LabnetConnectionFailure(detail: detail),
+          );
+          if (fallback != true ||
+              generation != _connectionGeneration ||
+              !mounted) return;
+          await _overlay.useRustDesk(id);
+        }
+      }
+      if (generation != _connectionGeneration || !mounted) return;
+      await connect(
+        context,
+        id,
+        isTerminal: isTerminal,
+        isFileTransfer: isFileTransfer,
+        isViewCamera: isViewCamera,
+        isTcpTunneling: isTcpTunneling,
+        isRDP: isRDP,
+      );
+    } finally {
+      _preparingConnection = false;
+    }
   }
 
   Future<void> _labnetDo(Future<void> Function() action) async {

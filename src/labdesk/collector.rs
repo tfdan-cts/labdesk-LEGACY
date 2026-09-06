@@ -53,7 +53,9 @@ const PLATFORM: &str = "";
 /// How often an un-enrolled daemon looks again. `labdesk --enrol` runs in a separate
 /// process and writes the machine id into the identity file, so the only way this one
 /// learns about it is to re-read the file.
-const ENROLMENT_POLL: Duration = Duration::from_secs(60);
+// Local identity reads only. Newly enrolled machines must start their inbox
+// inside the console's 30-second session preparation deadline.
+const ENROLMENT_POLL: Duration = Duration::from_secs(5);
 const UPLINK_TIMEOUT: Duration = Duration::from_secs(20);
 /// The slow cadence, section 4.2: disk health once an hour.
 ///
@@ -65,9 +67,8 @@ const DISK_INTERVAL: Duration = Duration::from_secs(3600);
 /// first hour. A machine that has just been enrolled reports its drives while the
 /// administrator who enrolled it is still looking at the console.
 const DISK_FIRST: Duration = Duration::from_secs(60);
-/// How often the daemon asks `--server` whether a delivered connect ticket was
-/// claimed, and only while one is live. A ticket lives 120 s, so the answer has
-/// to be asked for in seconds rather than on the flush cadence.
+/// Ticket delivery and claim reporting are independent of telemetry's 300 s cadence.
+/// ponytail: 17,280 idle requests/device/day; a push channel replaces polling if fleet scale requires it.
 const TICKET_POLL: Duration = Duration::from_secs(5);
 
 /// Start the collector on its own thread with its own runtime.
@@ -101,6 +102,7 @@ async fn run() {
         Some(identity) => identity,
         None => return,
     };
+    start_ticket_inbox();
     let spool = Spool::new(Config::path(SPOOL_FILE));
     let mut sampler = Sampler::new();
     let mut sample_seconds = identity.sample_seconds();
@@ -131,12 +133,6 @@ async fn run() {
     let mut attrs = Attrs::default();
     // The collector's own probe, used only while self-healing is off.
     let mut own_probe = Reachability::default();
-    // While a ticket this daemon delivered is still live, ask `--server` every
-    // TICKET_POLL whether it was claimed and report the claim before the row
-    // expires. A ticket lives 120 s and the flush cadence is 300 s by default,
-    // so a claim reported on the next flush would always arrive too late.
-    // `None` is "no live ticket", and the loop is quiet.
-    let mut ticket_watch_until: Option<Instant> = None;
     let mut failures = 0u32;
     log::info!(
         "[collector] Started: sampling every {}s, flushing every {}s offset by {}s",
@@ -146,10 +142,7 @@ async fn run() {
     );
 
     loop {
-        let mut deadline = next_sample.min(next_flush).min(next_disks);
-        if ticket_watch_until.is_some() {
-            deadline = deadline.min(Instant::now() + TICKET_POLL);
-        }
+        let deadline = next_sample.min(next_flush).min(next_disks);
         let now = Instant::now();
         if deadline > now {
             sleep(deadline - now).await;
@@ -226,8 +219,7 @@ async fn run() {
                         match ticket::deliver(&t).await {
                             Ok(()) => {
                                 log::info!("[collector] Delivered connect ticket {}", t.id);
-                                ticket_watch_until =
-                                    Some(watch_until(ticket_watch_until, t.expires_at));
+                                acknowledge_ticket_ready(&identity, &t.id).await;
                             }
                             Err(err) => {
                                 log::warn!("[collector] Ticket {} not delivered: {}", t.id, err)
@@ -283,57 +275,106 @@ async fn run() {
                 next_flush = Instant::now() + Duration::from_secs(tools::COLLECT_NOW_SECONDS);
             }
         }
+    }
+}
 
-        if let Some(until) = ticket_watch_until {
-            report_claimed_tickets(&identity).await;
-            if Instant::now() >= until {
-                ticket_watch_until = None;
+/// A SMART read and a telemetry timeout must never hold up session credentials.
+fn start_ticket_inbox() {
+    if let Err(err) = std::thread::Builder::new()
+        .name("labdesk-tickets".to_owned())
+        .spawn(|| {
+            match hbb_common::tokio::runtime::Builder::new_current_thread()
+                .enable_all()
+                .build()
+            {
+                Ok(runtime) => runtime.block_on(run_ticket_inbox()),
+                Err(err) => log::error!("[ticket] Failed to build the runtime: {}", err),
+            }
+        })
+    {
+        log::warn!("[ticket] Failed to spawn the inbox thread: {}", err);
+    }
+}
+
+async fn run_ticket_inbox() {
+    let mut failures = 0u32;
+    let mut claims = BTreeMap::new();
+    let mut machine_id = String::new();
+    loop {
+        let identity = match AgentIdentity::load_existing() {
+            Ok(Some(identity)) if !identity.machine_id().is_empty() => identity,
+            _ => {
+                sleep(ENROLMENT_POLL).await;
+                continue;
+            }
+        };
+        if machine_id != identity.machine_id() {
+            machine_id = identity.machine_id().to_owned();
+            claims.clear();
+        }
+        // A backlog of failed claim reports must not consume the new session's
+        // preparation deadline. Canceled reports remain in `claims` for retry.
+        hbb_common::tokio::time::timeout(
+            TICKET_POLL,
+            report_claimed_tickets(&identity, &mut claims),
+        )
+        .await
+        .ok();
+        match request_signed(&identity, "GET", "/agent/tickets", "").await {
+            Ok((status, text)) if (200..300).contains(&status) => {
+                failures = 0;
+                for t in ticket::tickets_in(&text) {
+                    if t.expires_at <= hbb_common::get_time() / 1000 || claims.contains_key(&t.id) {
+                        continue;
+                    }
+                    if ticket::deliver(&t).await.is_ok() {
+                        acknowledge_ticket_ready(&identity, &t.id).await;
+                    }
+                }
+            }
+            Ok((status, _)) => {
+                log::debug!("[ticket] Inbox refused: HTTP {}", status);
+                failures = failures.saturating_add(1);
+            }
+            Err(err) => {
+                log::debug!("[ticket] Inbox unavailable: {}", err);
+                failures = failures.saturating_add(1);
             }
         }
+        // Recovery must fit the controller's 30-second preparation deadline.
+        let wait = backoff_seconds(TICKET_POLL.as_secs(), failures).min(10);
+        sleep(Duration::from_secs(wait)).await;
     }
 }
 
-/// How long to keep asking after a delivery: until the newest live ticket
-/// expires, and never more than a couple of minutes past now whatever clock
-/// the answer carried.
-fn watch_until(held: Option<Instant>, expires_at: i64) -> Instant {
-    let left = (expires_at - hbb_common::get_time() / 1000).clamp(0, 300) as u64;
-    let until = Instant::now() + Duration::from_secs(left);
-    match held {
-        Some(held) if held > until => held,
-        _ => until,
+async fn acknowledge_ticket_ready(identity: &AgentIdentity, id: &str) {
+    let path = format!("/agent/ticket/{}/ready", id);
+    // Only called after --server has acknowledged insertion. A failed HTTP
+    // acknowledgment is retried when the next inbox poll redelivers the ticket.
+    if !matches!(post_signed(identity, &path, "{}").await, Ok((200..=299, _))) {
+        log::debug!("[ticket] Installation acknowledgment will be retried");
     }
 }
 
-/// Report the tickets `--server` has claimed since the last ask, so the row
-/// records that the one-time credential was spent (section 3 of the phase 1
-/// contracts). A ticket claimed but never reported would be re-delivered for
-/// the rest of its two minutes and would leave the console with no sign that
-/// the session used it.
-async fn report_claimed_tickets(identity: &AgentIdentity) {
-    let ids = match ticket::claimed().await {
-        Ok(ids) => ids,
-        // `--server` is not answering: nobody is logged in, or it is
-        // restarting. There is nothing to report and nothing to say about it
-        // every few seconds.
-        Err(err) => {
-            log::debug!("[collector] No claim answer from --server: {}", err);
-            return;
+/// IPC drains claims once. Keep them until HTTP confirms them, including across
+/// temporary network failures; the server's terminal statuses also settle a retry.
+async fn report_claimed_tickets(identity: &AgentIdentity, pending: &mut BTreeMap<String, i64>) {
+    let now = hbb_common::get_time() / 1000;
+    pending.retain(|_, until| *until > now);
+    if let Ok(ids) = ticket::claimed().await {
+        for id in ids {
+            pending.entry(id).or_insert(now + 600);
         }
-    };
-    for id in ids {
+    }
+    for id in pending.keys().cloned().collect::<Vec<_>>() {
         let path = format!("/agent/ticket/{}/claimed", id);
         match post_signed(identity, &path, "{}").await {
-            Ok((status, _)) if (200..300).contains(&status) => {
-                log::info!("[collector] Reported connect ticket {} claimed", id)
+            Ok((status, _))
+                if (200..300).contains(&status) || [404, 409, 410].contains(&status) =>
+            {
+                pending.remove(&id);
             }
-            Ok((status, body)) => log::warn!(
-                "[collector] Ticket {} claim not recorded: HTTP {} {}",
-                id,
-                status,
-                body
-            ),
-            Err(err) => log::warn!("[collector] Ticket {} claim not sent: {}", id, err),
+            _ => log::debug!("[ticket] Claim report will be retried"),
         }
     }
 }
@@ -776,21 +817,34 @@ async fn post_signed(
     path: &str,
     body: &str,
 ) -> ResultType<(u16, String)> {
+    request_signed(identity, "POST", path, body).await
+}
+
+async fn request_signed(
+    identity: &AgentIdentity,
+    method: &str,
+    path: &str,
+    body: &str,
+) -> ResultType<(u16, String)> {
     // Always lab-desk.net: the `api-server` option is the profile's hbbs API, not the
     // machine plane (see `enrol` in src/labdesk/identity.rs).
     let ts = (hbb_common::get_time() / 1000).to_string();
-    let signature = identity.sign(&uplink_signed_msg("POST", path, &ts, body.as_bytes()))?;
+    let signature = identity.sign(&uplink_signed_msg(method, path, &ts, body.as_bytes()))?;
     let url = format!("{}{}", crate::LABDESK_SITE, path);
     // The strict client refuses anything but HTTPS. An uplink carries a machine's whole
     // inventory, so cleartext is not a configuration we quietly accept.
     let response = crate::hbbs_http::create_http_client_async_with_url_strict(&url)
         .await?
-        .post(&url)
+        .request(method.parse()?, &url)
         .header("Content-Type", "application/json")
         .header("X-LD-Machine", identity.machine_id())
         .header("X-LD-Ts", &ts)
         .header("X-LD-Sig", signature)
-        .timeout(UPLINK_TIMEOUT)
+        .timeout(if path == BATCH_PATH {
+            UPLINK_TIMEOUT
+        } else {
+            TICKET_POLL
+        })
         .body(body.to_owned())
         .send()
         .await?;

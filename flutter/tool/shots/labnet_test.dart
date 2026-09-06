@@ -157,5 +157,21 @@ void main() {
     await tester.pumpWidget(_frame(ConsoleSection.network, (_) => _network(const LabnetInbox(enrolled: true, overlayIp: '100.64.0.3'))));
     await tester.pumpAndSettle();
     await _capture(tester, 'labnet-network-empty');
+    await tester.pumpWidget(RepaintBoundary(
+      key: const ValueKey('shot'),
+      child: MaterialApp(
+        debugShowCheckedModeBanner: false,
+        theme: C.theme(),
+        home: const Scaffold(
+          backgroundColor: C.bg,
+          body: LabnetConnectionFailure(
+            detail: 'The target has not confirmed that it is ready for this session. '
+                'Check that its LabDesk service is running and can reach lab-desk.net.',
+          ),
+        ),
+      ),
+    ));
+    await tester.pumpAndSettle();
+    await _capture(tester, 'labnet-connection-unavailable');
   });
 }

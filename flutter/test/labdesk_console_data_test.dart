@@ -23,6 +23,17 @@ ConsolePeer _peer(
 
 void main() {
   group('buildMachineRows', () {
+    test('organization machines appear without any recent or LAN peer', () {
+      final rows = buildMachineRows(
+        peers: const [],
+        organizationPeers: [_peer('201', hostname: 'Remote office')],
+        store: LabDeskPeerStatusStore(),
+        historyOf: (_) => const [],
+        serverStatusOf: (_) => LabDeskPeerStatus.online,
+      );
+      expect(rows.single.id, '201');
+      expect(rows.single.status, LabDeskPeerStatus.online);
+    });
     test('a machine listed by several sources appears once, from the first '
         'source that named it', () {
       final rows = buildMachineRows(

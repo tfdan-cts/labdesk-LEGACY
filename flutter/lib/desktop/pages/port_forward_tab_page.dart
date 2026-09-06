@@ -68,7 +68,7 @@ class _PortForwardTabPageState extends State<PortForwardTabPage> {
         if (tabController.state.value.tabs.indexWhere((e) => e.key == id) >=
             0) {
           debugPrint("port forward $id exists");
-          return;
+          return null;
         }
         tabController.add(TabInfo(
             key: id,
@@ -85,6 +85,8 @@ class _PortForwardTabPageState extends State<PortForwardTabPage> {
               forceRelay: args['forceRelay'],
               connToken: args['connToken'],
             )));
+      } else if (call.method == kWindowEventGetRemoteList) {
+        return tabController.state.value.tabs.map((tab) => tab.key).join(',');
       } else if (call.method == "onDestroy") {
         tabController.clear();
       } else if (call.method == kWindowActionRebuild) {

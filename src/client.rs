@@ -202,6 +202,12 @@ fn parse_overlay_hint(hint: &str) -> Option<SocketAddr> {
     Some(addr)
 }
 
+fn parse_overlay_source(ip: &str) -> Option<SocketAddr> {
+    let mut addr = parse_overlay_hint(&format!("{}:1", ip))?;
+    addr.set_port(0);
+    Some(addr)
+}
+
 /// labnet: a hint that led nowhere is cleared on both copies of the options.
 /// The client process holds one and the service holds the other, and a hint
 /// cleared only here comes back on the next option sync, so the clear goes
@@ -234,7 +240,21 @@ fn overlay_is_impersonation(secured: bool, signed_other_id: bool) -> bool {
 
 #[cfg(test)]
 mod overlay_hint_tests {
-    use super::{overlay_is_impersonation, parse_overlay_hint};
+    use super::{overlay_is_impersonation, parse_overlay_hint, parse_overlay_source};
+
+    #[test]
+    fn source_is_a_literal_overlay_address_with_an_ephemeral_port() {
+        assert_eq!(
+            parse_overlay_source("100.72.0.4").unwrap().to_string(),
+            "100.72.0.4:0"
+        );
+        for invalid in [
+            "", "0.0.0.0", "10.1.10.110", "100.72.0.4:21118",
+            "peer.example.com", "100.72.0.4/32", "::ffff:100.72.0.4",
+        ] {
+            assert!(parse_overlay_source(invalid).is_none());
+        }
+    }
 
     #[test]
     fn only_a_signed_other_id_is_an_impersonation() {
@@ -365,8 +385,9 @@ impl Client {
         if config::is_incoming_only() && !is_switch_sides_back(conn_type, &interface).await {
             bail!("Incoming only mode");
         }
+        let overlay_required = Config::get_option(&format!("labdesk-overlay-required-{}", peer)) == "Y";
         // to-do: remember the port for each peer, so that we can retry easier
-        if hbb_common::is_ip_str(peer) {
+        if !overlay_required && hbb_common::is_ip_str(peer) {
             return Ok((
                 (
                     connect_tcp_local(check_port(peer, RELAY_PORT + 1), None, CONNECT_TIMEOUT)
@@ -381,7 +402,7 @@ impl Client {
             ));
         }
         // Allow connect to {domain}:{port}
-        if hbb_common::is_domain_port_str(peer) {
+        if !overlay_required && hbb_common::is_domain_port_str(peer) {
             return Ok((
                 (
                     connect_tcp_local(peer, None, CONNECT_TIMEOUT).await?,
@@ -403,10 +424,9 @@ impl Client {
         };
         // labnet: the console may have written an overlay address for this
         // peer, with the peer's own id public key beside it. Try that address
-        // before any server. An address that leads nowhere, or that answers
-        // without offering an identity, falls through to the path below
-        // unchanged; a machine that answers there and signs an identity that is
-        // not the peer's ends the connect instead.
+        // before any server. Managed sessions require this path; choosing the
+        // legacy RustDesk route is an explicit console action, never an
+        // automatic result of a failed labnet connection.
         if other_server.is_empty() {
             let addr_key = format!("labdesk-overlay-addr-{}", peer);
             let pk_key = format!("labdesk-overlay-pk-{}", peer);
@@ -419,7 +439,18 @@ impl Client {
                     }
                     Some(addr) => {
                         let started = Instant::now();
-                        match connect_tcp_local(addr, None, OVERLAY_TIMEOUT).await {
+                        let source =
+                            parse_overlay_source(&Config::get_option("labdesk-direct-bind"));
+                        if overlay_required && source.is_none() {
+                            bail!("This machine has no verified labnet address. Check its labnet status before connecting.");
+                        }
+                        // A labnet dial uses the owned overlay source and bypasses
+                        // the legacy RustDesk SOCKS proxy. The address range alone
+                        // is not evidence of which VPN owns an OS route.
+                        match hbb_common::tcp::FramedStream::new(addr, source, OVERLAY_TIMEOUT)
+                            .await
+                            .map(Stream::Tcp)
+                        {
                             Ok(mut conn) => {
                                 let pk =
                                     crate::decode64(Config::get_option(&pk_key)).unwrap_or_default();
@@ -449,9 +480,10 @@ impl Client {
                                         // did not prove it is the peer.
                                         if conn.is_secured() {
                                             log::info!(
-                                                "labnet: direct path to {} at {}",
+                                                "labnet: authenticated overlay path to {} at {} from {}",
                                                 peer,
-                                                addr
+                                                addr,
+                                                conn.local_addr()
                                             );
                                             return Ok((
                                                 (conn, true, option_pk, None, "TCP"),
@@ -493,6 +525,9 @@ impl Client {
                                 // and a hint cleared only here comes back from the
                                 // server copy on the next option sync.
                                 clear_overlay_hint(&addr_key, &pk_key).await;
+                                if overlay_required {
+                                    bail!("labnet: could not authenticate {} at {}: {}", peer, addr, err);
+                                }
                                 if overlay_is_impersonation(conn.is_secured(), signed_other_id) {
                                     // Another machine answered on the peer's
                                     // address under an identity of its own. Say
@@ -516,6 +551,10 @@ impl Client {
                     }
                 }
             }
+        }
+
+        if overlay_required {
+            bail!("The labnet connection could not be established. Check the labnet status on both machines, or explicitly choose RustDesk in the console.");
         }
 
         let (rendezvous_server, servers, contained) = if other_server.is_empty() {
