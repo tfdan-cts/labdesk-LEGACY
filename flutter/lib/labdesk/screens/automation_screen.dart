@@ -149,7 +149,8 @@ class _AutomationScreenState extends State<AutomationScreen> {
                       'No rules yet. A rule watches one thing and does one '
                       'thing: a machine going offline, a disk filling up, a '
                       'time of day.',
-                      style: C.small(color: C.textFaint),
+                      style:
+                          C.of(context).small(color: C.of(context).textFaint),
                     ),
                   )
                 : Column(
@@ -164,8 +165,7 @@ class _AutomationScreenState extends State<AutomationScreen> {
                           onToggle: widget.onToggle == null
                               ? null
                               : (v) => widget.onToggle!(r.id, v),
-                          onEdit:
-                              widget.onSave == null ? null : () => _open(r),
+                          onEdit: widget.onSave == null ? null : () => _open(r),
                           onRunNow: widget.onRunNow == null
                               ? null
                               : () => widget.onRunNow!(r.id),
@@ -194,7 +194,9 @@ class _AutomationScreenState extends State<AutomationScreen> {
                 ? Padding(
                     padding: const EdgeInsets.fromLTRB(18, 22, 18, 26),
                     child: Text('Nothing has fired yet.',
-                        style: C.small(color: C.textFaint)),
+                        style: C
+                            .of(context)
+                            .small(color: C.of(context).textFaint)),
                   )
                 : Column(
                     children: [
@@ -224,16 +226,16 @@ class _Notice extends StatelessWidget {
   Widget build(BuildContext context) {
     return DecoratedBox(
       decoration: BoxDecoration(
-        color: C.surface,
+        color: C.of(context).surface,
         borderRadius: C.rounded,
-        border: Border.all(color: C.hairline),
+        border: Border.all(color: C.of(context).hairline),
       ),
       child: Padding(
         padding: const EdgeInsets.fromLTRB(14, 12, 16, 12),
         child: Row(
           crossAxisAlignment: CrossAxisAlignment.start,
           children: [
-            LdIcon(LdIcons.info, size: 16, color: C.textMuted),
+            LdIcon(LdIcons.info, size: 16, color: C.of(context).textMuted),
             const SizedBox(width: 10),
             Expanded(
               child: Text(
@@ -241,7 +243,7 @@ class _Notice extends StatelessWidget {
                 'figures come from the machines themselves, reported to '
                 'lab-desk.net on their flush, but this console is what checks the conditions, '
                 'once a second, and does the work over its own connection.',
-                style: C.small(color: C.textMuted),
+                style: C.of(context).small(color: C.of(context).textMuted),
               ),
             ),
           ],
@@ -291,9 +293,11 @@ class _RuleRowState extends State<_RuleRow> {
         child: Container(
           decoration: BoxDecoration(
             color: widget.selected
-                ? C.surfaceHi
-                : (_hover ? C.surfaceHi.withOpacity(0.5) : Colors.transparent),
-            border: Border(top: BorderSide(color: C.hairline)),
+                ? C.of(context).surfaceHi
+                : (_hover
+                    ? C.of(context).surfaceHi.withOpacity(0.5)
+                    : Colors.transparent),
+            border: Border(top: BorderSide(color: C.of(context).hairline)),
           ),
           padding: const EdgeInsets.fromLTRB(18, 12, 14, 12),
           child: Row(
@@ -304,12 +308,16 @@ class _RuleRowState extends State<_RuleRow> {
                   crossAxisAlignment: CrossAxisAlignment.start,
                   children: [
                     Text(r.name.isEmpty ? 'Untitled rule' : r.name,
-                        style: C.body(
-                            color: r.enabled ? C.text : C.textMuted)),
+                        style: C.of(context).body(
+                            color: r.enabled
+                                ? C.of(context).text
+                                : C.of(context).textMuted)),
                     const SizedBox(height: 3),
                     Text(widget.sentence,
-                        style: C.small(
-                            color: r.enabled ? C.textMuted : C.textFaint)),
+                        style: C.of(context).small(
+                            color: r.enabled
+                                ? C.of(context).textMuted
+                                : C.of(context).textFaint)),
                   ],
                 ),
               ),
@@ -320,9 +328,11 @@ class _RuleRowState extends State<_RuleRow> {
                   last == null
                       ? 'Never fired'
                       : 'Fired ${_ago(last.at, widget.now)}',
-                  style: C.data(
+                  style: C.of(context).data(
                       size: 11,
-                      color: last == null ? C.textFaint : C.textMuted),
+                      color: last == null
+                          ? C.of(context).textFaint
+                          : C.of(context).textMuted),
                   textAlign: TextAlign.right,
                 ),
               ),
@@ -358,19 +368,23 @@ class _LogRow extends StatelessWidget {
     // still running; painting it red would report a failure that has not
     // happened.
     final (color, word) = switch (ok) {
-      null => (C.textFaint, 'running'),
-      true => (C.ok, 'ok'),
-      false => (C.bad, 'failed'),
+      null => (C.of(context).textFaint, 'running'),
+      true => (C.of(context).ok, 'ok'),
+      false => (C.of(context).bad, 'failed'),
     };
     return Container(
-      decoration: BoxDecoration(border: Border(top: BorderSide(color: C.hairline))),
+      decoration: BoxDecoration(
+          border: Border(top: BorderSide(color: C.of(context).hairline))),
       padding: const EdgeInsets.fromLTRB(18, 10, 18, 10),
       child: Row(
         crossAxisAlignment: CrossAxisAlignment.start,
         children: [
           SizedBox(
             width: 66,
-            child: Text(_clock(entry.at), style: C.data(size: 11, color: C.textFaint)),
+            child: Text(_clock(entry.at),
+                style: C
+                    .of(context)
+                    .data(size: 11, color: C.of(context).textFaint)),
           ),
           Container(
             width: 7,
@@ -385,17 +399,20 @@ class _LogRow extends StatelessWidget {
                 Text(
                   '${entry.ruleName.isEmpty ? entry.ruleId : entry.ruleName} '
                   '· $machineName · ${entry.action.sentence}',
-                  style: C.small(color: C.text),
+                  style: C.of(context).small(color: C.of(context).text),
                 ),
                 if (entry.detail != null && entry.detail!.isNotEmpty) ...[
                   const SizedBox(height: 3),
-                  Text(entry.detail!, style: C.data(size: 11, color: C.textMuted)),
+                  Text(entry.detail!,
+                      style: C
+                          .of(context)
+                          .data(size: 11, color: C.of(context).textMuted)),
                 ],
               ],
             ),
           ),
           const SizedBox(width: 12),
-          Text(word, style: C.micro(color: color)),
+          Text(word, style: C.of(context).micro(color: color)),
         ],
       ),
     );
@@ -408,7 +425,14 @@ class _LogRow extends StatelessWidget {
 
 /// Which trigger the editor is offering. The trigger classes are values, so the
 /// chooser needs its own enumeration of the kinds to pick between.
-enum _TriggerKind { cameOnline, wentOffline, metricAbove, uptimeAbove, every, atTime }
+enum _TriggerKind {
+  cameOnline,
+  wentOffline,
+  metricAbove,
+  uptimeAbove,
+  every,
+  atTime
+}
 
 enum _ActionKind { run, notify, wol, session }
 
@@ -515,8 +539,9 @@ class _Draft {
             forMinutes: _int(forMinutesText, 0),
           ),
         _TriggerKind.uptimeAbove => UptimeAbove(days: _int(daysText, 7)),
-        _TriggerKind.every =>
-          Schedule(every: Duration(minutes: _int(everyMinutesText, 60).clamp(1, 10080))),
+        _TriggerKind.every => Schedule(
+            every:
+                Duration(minutes: _int(everyMinutesText, 60).clamp(1, 10080))),
         _TriggerKind.atTime => Schedule.atTime(
             hour: _int(hourText, 0).clamp(0, 23),
             minute: _int(minuteText, 0).clamp(0, 59),
@@ -601,19 +626,28 @@ class _Editor extends StatelessWidget {
       subtitle: preview,
       actions: [
         if (onDelete != null) ...[
-          GhostButton(label: 'Delete', glyph: LdIcons.trash, onPressed: onDelete),
+          GhostButton(
+              label: 'Delete', glyph: LdIcons.trash, onPressed: onDelete),
           const SizedBox(width: 8),
         ],
         GhostButton(label: 'Cancel', onPressed: onCancel),
         const SizedBox(width: 8),
-        GhostButton(label: 'Save rule', glyph: LdIcons.check, onPressed: onSave),
+        GhostButton(
+            label: 'Save rule', glyph: LdIcons.check, onPressed: onSave),
       ],
       child: Column(
         crossAxisAlignment: CrossAxisAlignment.stretch,
         children: [
-          _field('Name', _TextBox(controller: draft.name, hint: 'What this rule is for', onChanged: onChanged)),
+          _field(
+              context,
+              'Name',
+              _TextBox(
+                  controller: draft.name,
+                  hint: 'What this rule is for',
+                  onChanged: onChanged)),
           const SizedBox(height: 18),
           _field(
+            context,
             'When',
             Column(
               crossAxisAlignment: CrossAxisAlignment.start,
@@ -628,12 +662,13 @@ class _Editor extends StatelessWidget {
                   },
                 ),
                 const SizedBox(height: 12),
-                ..._triggerFields(),
+                ..._triggerFields(context),
               ],
             ),
           ),
           const SizedBox(height: 18),
           _field(
+            context,
             'Then',
             Column(
               crossAxisAlignment: CrossAxisAlignment.start,
@@ -648,14 +683,15 @@ class _Editor extends StatelessWidget {
                   },
                 ),
                 const SizedBox(height: 12),
-                ..._actionFields(),
+                ..._actionFields(context),
               ],
             ),
           ),
           const SizedBox(height: 18),
-          _field('On which machines', _targets()),
+          _field(context, 'On which machines', _targets(context)),
           const SizedBox(height: 18),
           _field(
+            context,
             'Do not repeat within',
             Row(
               children: [
@@ -668,7 +704,7 @@ class _Editor extends StatelessWidget {
                       onChanged: onChanged),
                 ),
                 const SizedBox(width: 10),
-                Text('minutes, per machine', style: C.small()),
+                Text('minutes, per machine', style: C.of(context).small()),
               ],
             ),
           ),
@@ -677,16 +713,19 @@ class _Editor extends StatelessWidget {
     );
   }
 
-  List<Widget> _triggerFields() {
+  List<Widget> _triggerFields(BuildContext context) {
     switch (draft.kind) {
       case _TriggerKind.cameOnline:
         return [
-          Text('Fires on the change from offline to online, which the console '
-              'has to have watched happen.', style: C.small(color: C.textFaint)),
+          Text(
+              'Fires on the change from offline to online, which the console '
+              'has to have watched happen.',
+              style: C.of(context).small(color: C.of(context).textFaint)),
         ];
       case _TriggerKind.wentOffline:
         return [
-          _numberRow('for', draft.forMinutesText, 'minutes (0 fires straight away)'),
+          _numberRow(context, 'for', draft.forMinutesText,
+              'minutes (0 fires straight away)'),
         ];
       case _TriggerKind.metricAbove:
         return [
@@ -704,37 +743,51 @@ class _Editor extends StatelessWidget {
             ],
           ),
           const SizedBox(height: 10),
-          _numberRow('above', draft.thresholdText, 'percent'),
+          _numberRow(context, 'above', draft.thresholdText, 'percent'),
           const SizedBox(height: 8),
-          _numberRow('for', draft.forMinutesText, 'minutes'),
+          _numberRow(context, 'for', draft.forMinutesText, 'minutes'),
           const SizedBox(height: 8),
           Text(
             'Figures are the machine\'s own, reported on its flush. A machine '
             'your organization has not enrolled reports none, and a rule over '
             'it does not fire.',
-            style: C.small(color: C.textFaint),
+            style: C.of(context).small(color: C.of(context).textFaint),
           ),
         ];
       case _TriggerKind.uptimeAbove:
-        return [_numberRow('more than', draft.daysText, 'days')];
+        return [_numberRow(context, 'more than', draft.daysText, 'days')];
       case _TriggerKind.every:
         return [
-          _numberRow('every', draft.everyMinutesText, 'minutes'),
+          _numberRow(context, 'every', draft.everyMinutesText, 'minutes'),
           const SizedBox(height: 8),
-          Text('A slot missed while LabDesk was closed is skipped, not caught '
-              'up.', style: C.small(color: C.textFaint)),
+          Text(
+              'A slot missed while LabDesk was closed is skipped, not caught '
+              'up.',
+              style: C.of(context).small(color: C.of(context).textFaint)),
         ];
       case _TriggerKind.atTime:
         return [
           Row(
             children: [
-              Text('at', style: C.small()),
+              Text('at', style: C.of(context).small()),
               const SizedBox(width: 10),
-              SizedBox(width: 60, child: _TextBox(controller: draft.hourText, numeric: true, hint: '07', onChanged: onChanged)),
+              SizedBox(
+                  width: 60,
+                  child: _TextBox(
+                      controller: draft.hourText,
+                      numeric: true,
+                      hint: '07',
+                      onChanged: onChanged)),
               const SizedBox(width: 6),
-              Text(':', style: C.body()),
+              Text(':', style: C.of(context).body()),
               const SizedBox(width: 6),
-              SizedBox(width: 60, child: _TextBox(controller: draft.minuteText, numeric: true, hint: '30', onChanged: onChanged)),
+              SizedBox(
+                  width: 60,
+                  child: _TextBox(
+                      controller: draft.minuteText,
+                      numeric: true,
+                      hint: '30',
+                      onChanged: onChanged)),
             ],
           ),
           const SizedBox(height: 10),
@@ -754,12 +807,13 @@ class _Editor extends StatelessWidget {
             ],
           ),
           const SizedBox(height: 8),
-          Text('No day picked means every day.', style: C.small(color: C.textFaint)),
+          Text('No day picked means every day.',
+              style: C.of(context).small(color: C.of(context).textFaint)),
         ];
     }
   }
 
-  List<Widget> _actionFields() {
+  List<Widget> _actionFields(BuildContext context) {
     switch (draft.actionKind) {
       case _ActionKind.run:
         return [
@@ -783,7 +837,7 @@ class _Editor extends StatelessWidget {
                 child: Text(
                   'Optional. Leave blank to run everywhere; a shell line is '
                   'rarely portable.',
-                  style: C.small(color: C.textFaint),
+                  style: C.of(context).small(color: C.of(context).textFaint),
                 ),
               ),
             ],
@@ -798,18 +852,20 @@ class _Editor extends StatelessWidget {
         ];
       case _ActionKind.wol:
         return [
-          Text('Sends the magic packet. Only reaches machines on a network '
-              'this one can broadcast to.', style: C.small(color: C.textFaint)),
+          Text(
+              'Sends the magic packet. Only reaches machines on a network '
+              'this one can broadcast to.',
+              style: C.of(context).small(color: C.of(context).textFaint)),
         ];
       case _ActionKind.session:
         return [
           Text('Opens a desktop session in its own window. Loud on purpose.',
-              style: C.small(color: C.textFaint)),
+              style: C.of(context).small(color: C.of(context).textFaint)),
         ];
     }
   }
 
-  Widget _targets() {
+  Widget _targets(BuildContext context) {
     final all = draft.targets.contains(Rule.allTargets);
     return Column(
       crossAxisAlignment: CrossAxisAlignment.start,
@@ -835,27 +891,31 @@ class _Editor extends StatelessWidget {
                   },
           ),
         if (machines.isEmpty)
-          Text('No machines yet.', style: C.small(color: C.textFaint)),
+          Text('No machines yet.',
+              style: C.of(context).small(color: C.of(context).textFaint)),
       ],
     );
   }
 
-  Widget _numberRow(String lead, TextEditingController c, String tail) => Row(
+  Widget _numberRow(BuildContext context, String lead, TextEditingController c,
+          String tail) =>
+      Row(
         children: [
-          Text(lead, style: C.small()),
+          Text(lead, style: C.of(context).small()),
           const SizedBox(width: 10),
           SizedBox(
               width: 78,
-              child: _TextBox(controller: c, numeric: true, onChanged: onChanged)),
+              child:
+                  _TextBox(controller: c, numeric: true, onChanged: onChanged)),
           const SizedBox(width: 10),
-          Expanded(child: Text(tail, style: C.small())),
+          Expanded(child: Text(tail, style: C.of(context).small())),
         ],
       );
 
-  Widget _field(String label, Widget child) => Column(
+  Widget _field(BuildContext context, String label, Widget child) => Column(
         crossAxisAlignment: CrossAxisAlignment.start,
         children: [
-          Text(label.toUpperCase(), style: C.micro()),
+          Text(label.toUpperCase(), style: C.of(context).micro()),
           const SizedBox(height: 8),
           child,
         ],
@@ -927,16 +987,21 @@ class _ChipState extends State<_Chip> {
           padding: const EdgeInsets.symmetric(horizontal: 11),
           alignment: Alignment.center,
           decoration: BoxDecoration(
-            color: on ? C.accent.withOpacity(0.14) : Colors.transparent,
+            color: on
+                ? C.of(context).accent.withOpacity(0.14)
+                : Colors.transparent,
             borderRadius: C.roundedSm,
             border: Border.all(
                 color: on
-                    ? C.accent
-                    : (_hover ? C.textFaint : C.hairline.withOpacity(0.6))),
+                    ? C.of(context).accent
+                    : (_hover
+                        ? C.of(context).textFaint
+                        : C.of(context).hairline.withOpacity(0.6))),
           ),
           child: Text(widget.label,
-              style: C.small(
-                  color: on ? C.text : C.textMuted, w: FontWeight.w600)),
+              style: C.of(context).small(
+                  color: on ? C.of(context).text : C.of(context).textMuted,
+                  w: FontWeight.w600)),
         ),
       ),
     );
@@ -978,12 +1043,13 @@ class _CheckRowState extends State<_CheckRow> {
           padding: const EdgeInsets.symmetric(vertical: 5),
           child: Row(
             children: [
-              LdCheckbox(
-                  on: widget.on, enabled: widget.enabled, hover: _hover),
+              LdCheckbox(on: widget.on, enabled: widget.enabled, hover: _hover),
               const SizedBox(width: 10),
               Text(widget.label,
-                  style: C.small(
-                      color: widget.enabled ? C.text : C.textFaint)),
+                  style: C.of(context).small(
+                      color: widget.enabled
+                          ? C.of(context).text
+                          : C.of(context).textFaint)),
             ],
           ),
         ),
@@ -1015,20 +1081,20 @@ class _TextBox extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     final style =
-        mono || numeric ? C.data(size: 12.5) : C.body();
+        mono || numeric ? C.of(context).data(size: 12.5) : C.of(context).body();
     return Container(
       height: 32,
       padding: const EdgeInsets.symmetric(horizontal: 10),
       decoration: BoxDecoration(
-        color: C.bg,
+        color: C.of(context).bg,
         borderRadius: C.roundedSm,
-        border: Border.all(color: C.hairline),
+        border: Border.all(color: C.of(context).hairline),
       ),
       child: Center(
         child: TextField(
           controller: controller,
           style: style,
-          cursorColor: C.accent,
+          cursorColor: C.of(context).accent,
           cursorWidth: 1.6,
           keyboardType: numeric ? TextInputType.number : null,
           inputFormatters:
@@ -1039,7 +1105,7 @@ class _TextBox extends StatelessWidget {
             contentPadding: EdgeInsets.zero,
             border: InputBorder.none,
             hintText: hint,
-            hintStyle: style.copyWith(color: C.textFaint),
+            hintStyle: style.copyWith(color: C.of(context).textFaint),
           ),
         ),
       ),
@@ -1061,7 +1127,6 @@ String _ago(DateTime then, DateTime? now) {
   if (s < 86400) return '${s ~/ 3600}h ago';
   return '${s ~/ 86400}d ago';
 }
-
 
 /// The ready-made rules, offered above the list.
 ///
@@ -1095,15 +1160,20 @@ class _Presets extends StatelessWidget {
                     child: Column(
                       crossAxisAlignment: CrossAxisAlignment.start,
                       children: [
-                        Text(p.title, style: C.body()),
+                        Text(p.title, style: C.of(context).body()),
                         const SizedBox(height: 2),
-                        Text(p.description, style: C.small(color: C.textFaint)),
+                        Text(p.description,
+                            style: C
+                                .of(context)
+                                .small(color: C.of(context).textFaint)),
                       ],
                     ),
                   ),
                   const SizedBox(width: 16),
                   if (applied.contains(p.title))
-                    Text('Added', style: C.small(color: C.textFaint))
+                    Text('Added',
+                        style:
+                            C.of(context).small(color: C.of(context).textFaint))
                   else
                     GhostButton(
                       label: 'Add',

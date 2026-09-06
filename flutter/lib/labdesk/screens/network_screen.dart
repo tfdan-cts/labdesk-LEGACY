@@ -1,9 +1,7 @@
 import 'package:flutter/material.dart';
 
 import '../models/labnet.dart';
-import '../models/net_view.dart';
 import '../theme/console_theme.dart';
-import 'adapters_card.dart';
 
 /// A machine the operator can add to a labnet: its id and how it is known.
 class NetworkMachine {
@@ -36,10 +34,6 @@ class NetworkScreen extends StatelessWidget {
     this.machines = const [],
     this.fleets = const [],
     this.mustNameFleet = false,
-    this.netView = MachineNetView.empty,
-    this.netMachineId = '',
-    this.netBusy = false,
-    this.onSelectNetMachine,
     this.busy = false,
     this.error = '',
     this.onCreate,
@@ -63,12 +57,6 @@ class NetworkScreen extends StatelessWidget {
   /// [mustNameFleet] says the server would refuse a create without one.
   final List<NetworkFleet> fleets;
   final bool mustNameFleet;
-
-  /// One machine's own network, as it reported it.
-  final MachineNetView netView;
-  final String netMachineId;
-  final bool netBusy;
-  final ValueChanged<String>? onSelectNetMachine;
 
   final bool busy;
   final String error;
@@ -96,27 +84,17 @@ class NetworkScreen extends StatelessWidget {
       child: Column(
         crossAxisAlignment: CrossAxisAlignment.stretch,
         children: [
-          AdaptersCard(
-            view: netView,
-            machineName: _nameOf(netMachineId),
-            selectedId: netMachineId,
-            busy: netBusy,
-            machines: [for (final m in machines) (m.id, m.name)],
-            onSelect: onSelectNetMachine,
-          ),
-          const SizedBox(height: 16),
           if (!inbox.enrolled) ...[
             _Card(
               title: 'Not on labnet',
               subtitle: 'Add this machine to your organization under This '
-                  'machine, then turn on Labnet. Clearing RustDesk server '
-                  'settings does not enable labnet.',
+                  'device, then turn on Labnet.',
               child: const SizedBox.shrink(),
             ),
             const SizedBox(height: 16),
           ],
           if (error.isNotEmpty) ...[
-            Text(error, style: C.small(color: C.bad)),
+            Text(error, style: C.of(context).small(color: C.of(context).bad)),
             const SizedBox(height: 12),
           ],
           for (final i in inbox.invitations) ...[
@@ -144,7 +122,6 @@ class NetworkScreen extends StatelessWidget {
           ],
           Row(
             children: [
-              Text('Labnets', style: C.h2()),
               const Spacer(),
               if (inbox.enrolled && onCreate != null)
                 _TextAction(
@@ -160,7 +137,7 @@ class NetworkScreen extends StatelessWidget {
                     'their own screen.'
                 : 'Machines in a labnet reach each other through NetBird, on '
                     'LabDesk\'s port and ping unless full access is on.',
-            style: C.small(),
+            style: C.of(context).small(),
           ),
           const SizedBox(height: 16),
           for (final l in inbox.labnets) ...[
@@ -245,8 +222,7 @@ class _NameDialog extends StatefulWidget {
 class _NameDialogState extends State<_NameDialog> {
   late final TextEditingController _name =
       TextEditingController(text: widget.initial);
-  late String? _fleetId =
-      widget.fleets.isEmpty ? null : widget.fleets.first.id;
+  late String? _fleetId = widget.fleets.isEmpty ? null : widget.fleets.first.id;
 
   @override
   void dispose() {
@@ -259,8 +235,8 @@ class _NameDialogState extends State<_NameDialog> {
   @override
   Widget build(BuildContext context) {
     return AlertDialog(
-      backgroundColor: C.surface,
-      title: Text(widget.title, style: C.h2()),
+      backgroundColor: C.of(context).surface,
+      title: Text(widget.title, style: C.of(context).h2()),
       content: SizedBox(
         width: 360,
         child: Column(
@@ -270,13 +246,13 @@ class _NameDialogState extends State<_NameDialog> {
             TextField(
               controller: _name,
               autofocus: true,
-              style: C.body(),
+              style: C.of(context).body(),
               decoration: const InputDecoration(hintText: 'Name'),
               onSubmitted: (_) => _submit(),
             ),
             if (widget.fleets.isNotEmpty) ...[
               const SizedBox(height: 16),
-              Text('Fleet', style: C.micro()),
+              Text('Fleet', style: C.of(context).micro()),
               const SizedBox(height: 6),
               for (final f in widget.fleets)
                 GestureDetector(
@@ -289,12 +265,12 @@ class _NameDialogState extends State<_NameDialog> {
                           width: 8,
                           height: 8,
                           decoration: BoxDecoration(
-                            color: _fleetId == f.id ? C.accent : C.hairline,
+                            color: _fleetId == f.id ? C.of(context).accent : C.of(context).hairline,
                             shape: BoxShape.circle,
                           ),
                         ),
                         const SizedBox(width: 8),
-                        Text(f.name, style: C.body()),
+                        Text(f.name, style: C.of(context).body()),
                       ],
                     ),
                   ),
@@ -357,8 +333,8 @@ class _LabnetCard extends StatelessWidget {
         children: [
           for (final m in labnet.members)
             Container(
-              decoration: const BoxDecoration(
-                border: Border(bottom: BorderSide(color: C.hairline)),
+              decoration: BoxDecoration(
+                border: Border(bottom: BorderSide(color: C.of(context).hairline)),
               ),
               padding: const EdgeInsets.symmetric(vertical: 10),
               child: Row(
@@ -368,18 +344,18 @@ class _LabnetCard extends StatelessWidget {
                     height: 8,
                     decoration: BoxDecoration(
                       color: m.approved
-                          ? (m.overlayIp == null ? C.idle : C.ok)
-                          : C.accent,
+                          ? (m.overlayIp == null ? C.of(context).idle : C.of(context).ok)
+                          : C.of(context).accent,
                       shape: BoxShape.circle,
                     ),
                   ),
                   const SizedBox(width: 8),
-                  Expanded(child: Text(nameOf(m.deviceId), style: C.body())),
+                  Expanded(child: Text(nameOf(m.deviceId), style: C.of(context).body())),
                   Text(
                     m.approved
                         ? (m.overlayIp ?? 'Not up')
                         : 'Waiting for approval on that machine',
-                    style: C.small(),
+                    style: C.of(context).small(),
                   ),
                   if (labnet.owner &&
                       onRemove != null &&
@@ -443,19 +419,19 @@ class _MachinePicker extends StatelessWidget {
   Widget build(BuildContext context) {
     return PopupMenuButton<String>(
       tooltip: 'Add a machine',
-      color: C.surfaceHi,
+      color: C.of(context).surfaceHi,
       enabled: onPick != null,
       onSelected: onPick,
       itemBuilder: (_) => [
         for (final m in candidates)
           PopupMenuItem(
               value: m.id,
-              child: Text(m.name.isEmpty ? m.id : m.name, style: C.body())),
+              child: Text(m.name.isEmpty ? m.id : m.name, style: C.of(context).body())),
       ],
       child: Text(
         'Add machine',
-        style: C.small(color: C.textMuted)
-            .copyWith(decoration: TextDecoration.underline, decorationColor: C.textFaint),
+        style: C.of(context).small(color: C.of(context).textMuted).copyWith(
+            decoration: TextDecoration.underline, decorationColor: C.of(context).textFaint),
       ),
     );
   }
@@ -472,18 +448,18 @@ class _Card extends StatelessWidget {
   Widget build(BuildContext context) {
     return Container(
       decoration: BoxDecoration(
-        color: C.surface,
+        color: C.of(context).surface,
         borderRadius: C.rounded,
-        border: Border.all(color: C.hairline),
+        border: Border.all(color: C.of(context).hairline),
       ),
       padding: const EdgeInsets.fromLTRB(20, 18, 20, 20),
       child: Column(
         crossAxisAlignment: CrossAxisAlignment.start,
         children: [
-          Text(title, style: C.h2()),
+          Text(title, style: C.of(context).h2()),
           if (subtitle != null) ...[
             const SizedBox(height: 4),
-            Text(subtitle!, style: C.small()),
+            Text(subtitle!, style: C.of(context).small()),
           ],
           const SizedBox(height: 16),
           child,
@@ -517,16 +493,17 @@ class _TextActionState extends State<_TextAction> {
         onTap: widget.onTap,
         child: Text(
           widget.label,
-          style: C.small(
+          style: C
+              .small(
                   color: !enabled
-                      ? C.textFaint
+                      ? C.of(context).textFaint
                       : _hover
-                          ? C.accent
-                          : C.textMuted)
+                          ? C.of(context).accent
+                          : C.of(context).textMuted)
               .copyWith(
-            decoration: TextDecoration.underline,
-            decorationColor: _hover && enabled ? C.accent : C.textFaint,
-          ),
+                decoration: TextDecoration.underline,
+                decorationColor: _hover && enabled ? C.of(context).accent : C.of(context).textFaint,
+              ),
         ),
       ),
     );

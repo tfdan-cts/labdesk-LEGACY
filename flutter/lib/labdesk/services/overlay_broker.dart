@@ -5,6 +5,7 @@ import '../models/labnet.dart';
 import '../models/machine_metrics.dart';
 import '../models/machine_state.dart';
 import '../models/net_view.dart';
+import '../models/organization_context.dart';
 
 /// One HTTP exchange: status code and body text. Injected so the broker can
 /// be exercised without a network and run on `HttpClient` in the application.
@@ -193,6 +194,7 @@ class OverlayBroker {
     this.sign = _noMachineKey,
     this.peerId = _noPeerId,
     this.machineIdOf = _asGiven,
+    this.organizationId,
     HttpCall? http,
   }) : _http = http ?? _httpClient;
 
@@ -214,8 +216,26 @@ class OverlayBroker {
   /// from the map [machines] reads. The default answers what it was given, for
   /// a caller that already holds machine ids.
   final String Function(String peerId) machineIdOf;
+  final String? Function()? organizationId;
 
   final HttpCall _http;
+
+  /// Pins a remote operation to the account, organization and target it began
+  /// with. A later switch must not redirect readiness checks or grant cleanup.
+  OverlayBroker captureScope({String? targetPeerId}) {
+    final credential = token();
+    final organization = organizationId?.call();
+    final target = targetPeerId == null ? null : machineIdOf(targetPeerId);
+    return OverlayBroker(
+      baseUrl: baseUrl,
+      token: () => credential,
+      organizationId: () => organization,
+      sign: sign,
+      peerId: peerId,
+      machineIdOf: (id) => id == targetPeerId ? target! : machineIdOf(id),
+      http: _http,
+    );
+  }
 
   static Future<MachineSignature?> _noMachineKey(
           String method, String path, String body) async =>
@@ -285,8 +305,54 @@ class OverlayBroker {
   /// A call on the human plane, carrying the account's token and no signature.
   Future<Map<String, dynamic>> _human(String method, String path,
           [Map<String, dynamic>? body]) =>
-      _send(method, path, {'authorization': 'Bearer ${token()}'},
-          body == null ? null : jsonEncode(body), false);
+      _send(
+          method,
+          path,
+          {
+            'authorization': 'Bearer ${token()}',
+            if (organizationId?.call() case final String id when id.isNotEmpty)
+              'x-labdesk-organization': id,
+          },
+          body == null ? null : jsonEncode(body),
+          false);
+
+  /// Lists memberships without a selected context, including after a saved
+  /// membership was revoked. The machine signing plane never sends this header.
+  Future<OrganizationDirectory> organizations() async {
+    final response = await _send('GET', '/console/organizations',
+        {'authorization': 'Bearer ${token()}'}, null, false);
+    final rows = response['organizations'];
+    final userId = response['userId'];
+    if (rows is! List || userId is! String || userId.isEmpty || userId.length > 128) {
+      throw const OverlayBrokerException(
+          502, 'The organization list could not be read.');
+    }
+    return OrganizationDirectory(userId: userId, organizations: rows
+        .map(OrganizationSummary.fromJson)
+        .whereType<OrganizationSummary>()
+        .toList());
+  }
+
+  /// Verifies membership before the caller adopts a new desktop context.
+  Future<String> verifyOrganization(String id) async {
+    if (id.isEmpty || id.length > 128 || id.contains(RegExp(r'[\r\n]'))) {
+      throw const OverlayBrokerException(400, 'Choose a valid organization.');
+    }
+    final response = await _send(
+        'GET',
+        '/console/org',
+        {
+          'authorization': 'Bearer ${token()}',
+          'x-labdesk-organization': id,
+        },
+        null,
+        false);
+    if (response['orgId'] != id) {
+      throw const OverlayBrokerException(
+          403, 'The selected organization could not be verified.');
+    }
+    return id;
+  }
 
   /// A call on the machine plane, carrying the signature and no token.
   ///
@@ -397,6 +463,20 @@ class OverlayBroker {
 
   /// The hot row for one machine, which carries what the fleet answer does not:
   /// uptime, the signed-in user and the agent version.
+  /// Changes only this machine's stored collector policy. The next successful
+  /// upload delivers it to the collector; it is not an immediate refresh.
+  Future<void> setReportingInterval(String machineId, int seconds) async {
+    if (machineId.isEmpty || machineId.length > 200 || seconds < 60 || seconds > 86400) {
+      throw const OverlayBrokerException(400, 'Choose a reporting interval from 60 to 86400 seconds.');
+    }
+    final response = await _human('PATCH',
+      '/console/org/machines/${Uri.encodeComponent(machineId)}/reporting',
+      {'flushSeconds': seconds});
+    if (response['machineId'] != machineId || response['flushSeconds'] != seconds) {
+      throw const OverlayBrokerException(502, 'The service did not confirm the reporting interval. Refresh before retrying.');
+    }
+  }
+
   Future<MachineState> machineState(String machineId) async =>
       MachineState.fromJson(
           await _human('GET', '/console/org/machines/$machineId/state'));

@@ -66,7 +66,7 @@ class SettingsScreen extends StatelessWidget {
                 : Column(
                     children: [
                       for (var i = 0; i < profiles.length; i++) ...[
-                        if (i > 0) Divider(height: 1, thickness: 1, color: C.hairline),
+                        if (i > 0) Divider(height: 1, thickness: 1, color: C.of(context).hairline),
                         _ProfileTile(
                           profile: profiles[i],
                           onActivate: onActivate,
@@ -100,7 +100,7 @@ class _NoProfiles extends StatelessWidget {
         padding: const EdgeInsets.symmetric(vertical: 42, horizontal: 24),
         child: Column(
           children: [
-            Text('No profiles yet', style: C.h2()),
+            Text('No profiles yet', style: C.of(context).h2()),
             const SizedBox(height: 6),
             SizedBox(
               width: 380,
@@ -109,7 +109,7 @@ class _NoProfiles extends StatelessWidget {
                 'reach machines on, then switch between them without retyping '
                 'anything.',
                 textAlign: TextAlign.center,
-                style: C.small(color: C.textFaint),
+                style: C.of(context).small(color: C.of(context).textFaint),
               ),
             ),
           ],
@@ -150,8 +150,8 @@ class _ProfileTileState extends State<_ProfileTile> {
           duration: C.fast,
           padding: const EdgeInsets.symmetric(horizontal: 18, vertical: 14),
           color: p.active
-              ? C.accent.withOpacity(0.08)
-              : (_hover ? C.surfaceHi : Colors.transparent),
+              ? C.of(context).accent.withOpacity(0.08)
+              : (_hover ? C.of(context).surfaceHi : Colors.transparent),
           child: Row(
             children: [
               // One profile is in force at a time, so the mark is the console's
@@ -167,10 +167,10 @@ class _ProfileTileState extends State<_ProfileTile> {
                   children: [
                     Row(
                       children: [
-                        Text(p.name, style: C.body()),
+                        Text(p.name, style: C.of(context).body()),
                         if (p.active) ...[
                           const SizedBox(width: 9),
-                          Text('Active', style: C.micro(color: C.accent)),
+                          Text('Active', style: C.of(context).micro(color: C.of(context).accent)),
                         ],
                       ],
                     ),
@@ -180,15 +180,15 @@ class _ProfileTileState extends State<_ProfileTile> {
                       // shown because they need to recognise the profile, and
                       // never logged or sent anywhere.
                       p.host.isEmpty ? 'No custom server set' : p.host,
-                      style: C.data(size: 11.5, color: C.textFaint),
+                      style: C.of(context).data(size: 11.5, color: C.of(context).textFaint),
                     ),
                   ],
                 ),
               ),
               if (p.hasKey)
-                const Tooltip(
+                Tooltip(
                   message: 'A server key is set for this profile',
-                  child: LdIcon(LdIcons.key, size: 15, color: C.textFaint),
+                  child: LdIcon(LdIcons.key, size: 15, color: C.of(context).textFaint),
                 ),
               const SizedBox(width: 14),
               AnimatedOpacity(
@@ -249,7 +249,7 @@ class _PollInterval extends StatelessWidget {
           'Checking more often finds machines sooner and asks more of the ID '
           'server. Nothing is stored between runs, so a longer interval only '
           'means a coarser picture while LabDesk is open.',
-          style: C.small(color: C.textFaint),
+          style: C.of(context).small(color: C.of(context).textFaint),
         ),
       ],
     );
@@ -275,14 +275,14 @@ class _Choice extends StatelessWidget {
           padding: const EdgeInsets.symmetric(horizontal: 14),
           alignment: Alignment.center,
           decoration: BoxDecoration(
-            color: selected ? C.accent.withOpacity(0.16) : Colors.transparent,
+            color: selected ? C.of(context).accent.withOpacity(0.16) : Colors.transparent,
             borderRadius: C.roundedSm,
-            border: Border.all(color: selected ? C.accent.withOpacity(0.45) : C.hairline),
+            border: Border.all(color: selected ? C.of(context).accent.withOpacity(0.45) : C.of(context).hairline),
           ),
           child: Text(
             label,
-            style: C.small(
-              color: selected ? C.text : C.textMuted,
+            style: C.of(context).small(
+              color: selected ? C.of(context).text : C.of(context).textMuted,
               w: selected ? FontWeight.w700 : FontWeight.w500,
             ),
           ),

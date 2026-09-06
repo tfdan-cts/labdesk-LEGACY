@@ -231,7 +231,7 @@ class _ToolsScreenState extends State<ToolsScreen> {
         ),
       ],
       child: widget.machines.isEmpty
-          ? Text('No machines yet.', style: C.small(color: C.textFaint))
+          ? Text('No machines yet.', style: C.of(context).small(color: C.of(context).textFaint))
           : Wrap(
               spacing: 8,
               runSpacing: 8,
@@ -296,7 +296,7 @@ class _ToolsScreenState extends State<ToolsScreen> {
       child: picked.isEmpty
           ? Center(
               child: Text('Pick a machine above.',
-                  style: C.small(color: C.textFaint)),
+                  style: C.of(context).small(color: C.of(context).textFaint)),
             )
           : SingleChildScrollView(
               padding: const EdgeInsets.fromLTRB(18, 14, 18, 18),
@@ -330,14 +330,14 @@ class _ToolsScreenState extends State<ToolsScreen> {
               width: 8,
               height: 8,
               decoration: BoxDecoration(
-                color: m.status == LabDeskPeerStatus.online ? C.ok : C.idle,
+                color: m.status == LabDeskPeerStatus.online ? C.of(context).ok : C.of(context).idle,
                 shape: BoxShape.circle,
               ),
             ),
             const SizedBox(width: 10),
-            Text(m.displayName, style: C.h2()),
+            Text(m.displayName, style: C.of(context).h2()),
             const SizedBox(width: 10),
-            Text(m.platform, style: C.data(size: 11, color: C.textFaint)),
+            Text(m.platform, style: C.of(context).data(size: 11, color: C.of(context).textFaint)),
           ],
         ),
         const SizedBox(height: 10),
@@ -362,7 +362,7 @@ class _ToolsScreenState extends State<ToolsScreen> {
   Widget _note(String text, {bool bad = false}) => Padding(
         padding: const EdgeInsets.only(bottom: 2),
         child: Text(text,
-            style: C.small(color: bad ? C.bad : C.textFaint)),
+            style: C.of(context).small(color: bad ? C.of(context).bad : C.of(context).textFaint)),
       );
 
   Widget _powerRow(MachineRow m) {
@@ -413,9 +413,9 @@ class _ToolsScreenState extends State<ToolsScreen> {
     ];
     return Container(
       decoration: BoxDecoration(
-        color: C.bg,
+        color: C.of(context).bg,
         borderRadius: C.roundedSm,
-        border: Border.all(color: C.hairline),
+        border: Border.all(color: C.of(context).hairline),
       ),
       child: Column(
         crossAxisAlignment: CrossAxisAlignment.stretch,
@@ -427,14 +427,14 @@ class _ToolsScreenState extends State<ToolsScreen> {
                 for (var i = 0; i < table.columns.length; i++)
                   Expanded(
                     flex: flex[i],
-                    child: Text(table.columns[i], style: C.micro()),
+                    child: Text(table.columns[i], style: C.of(context).micro()),
                   ),
                 if (actions.isNotEmpty)
                   const Expanded(flex: 8, child: SizedBox.shrink()),
               ],
             ),
           ),
-          Divider(height: 1, thickness: 1, color: C.hairline),
+          Divider(height: 1, thickness: 1, color: C.of(context).hairline),
           for (final row in shown)
             _TableRow(
               cells: row,
@@ -455,7 +455,7 @@ class _ToolsScreenState extends State<ToolsScreen> {
               padding: const EdgeInsets.fromLTRB(12, 8, 12, 9),
               child: Text(
                 'Showing the first ${shown.length} of ${table.rows.length}.',
-                style: C.small(color: C.textFaint),
+                style: C.of(context).small(color: C.of(context).textFaint),
               ),
             ),
         ],
@@ -500,16 +500,16 @@ class _ToolsScreenState extends State<ToolsScreen> {
     return Container(
       padding: const EdgeInsets.fromLTRB(14, 12, 14, 14),
       decoration: BoxDecoration(
-        color: C.bg,
+        color: C.of(context).bg,
         borderRadius: C.roundedSm,
-        border: Border.all(color: C.hairline),
+        border: Border.all(color: C.of(context).hairline),
       ),
       child: Column(
         crossAxisAlignment: CrossAxisAlignment.stretch,
         children: [
           Row(
             children: [
-              Expanded(child: Text('Saved scripts', style: C.h2())),
+              Expanded(child: Text('Saved scripts', style: C.of(context).h2())),
               GhostButton(
                 key: const ValueKey('tools-script-new'),
                 label: 'New script',
@@ -524,7 +524,7 @@ class _ToolsScreenState extends State<ToolsScreen> {
               'Nothing saved. A script is one or more shell lines; LabDesk '
               'joins them with a semicolon and sends them as one line, '
               'because that is all the channel takes.',
-              style: C.small(color: C.textFaint),
+              style: C.of(context).small(color: C.of(context).textFaint),
             )
           else
             for (final s in widget.library.scripts)
@@ -545,7 +545,7 @@ class _ToolsScreenState extends State<ToolsScreen> {
               ),
           if (draft != null) ...[
             const SizedBox(height: 14),
-            Divider(height: 1, thickness: 1, color: C.hairline),
+            Divider(height: 1, thickness: 1, color: C.of(context).hairline),
             const SizedBox(height: 14),
             _field('Name', _name, key: const ValueKey('tools-script-name')),
             const SizedBox(height: 10),
@@ -554,7 +554,7 @@ class _ToolsScreenState extends State<ToolsScreen> {
               runSpacing: 6,
               crossAxisAlignment: WrapCrossAlignment.center,
               children: [
-                Text('Runs on', style: C.micro()),
+                Text('Runs on', style: C.of(context).micro()),
                 for (final p in ScriptPlatform.values)
                   _SmallChip(
                     key: ValueKey('tools-script-platform-${p.id}'),
@@ -596,21 +596,21 @@ class _ToolsScreenState extends State<ToolsScreen> {
     return Column(
       crossAxisAlignment: CrossAxisAlignment.start,
       children: [
-        Text(label, style: C.micro()),
+        Text(label, style: C.of(context).micro()),
         const SizedBox(height: 6),
         Container(
           padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 8),
           decoration: BoxDecoration(
-            color: C.surface,
+            color: C.of(context).surface,
             borderRadius: C.roundedSm,
-            border: Border.all(color: C.hairline),
+            border: Border.all(color: C.of(context).hairline),
           ),
           child: TextField(
             key: key,
             controller: c,
             maxLines: lines,
-            style: C.data(size: 12.5, color: C.text),
-            cursorColor: C.accent,
+            style: C.of(context).data(size: 12.5, color: C.of(context).text),
+            cursorColor: C.of(context).accent,
             cursorWidth: 1.6,
             decoration: const InputDecoration(
               isDense: true,
@@ -653,10 +653,10 @@ class _MachineChipState extends State<_MachineChip> {
     final online = m.status == LabDeskPeerStatus.online;
     final enabled = widget.onTap != null;
     final fg = !enabled
-        ? C.textFaint
+        ? C.of(context).textFaint
         : widget.selected
-            ? C.accent
-            : (_hover ? C.text : C.textMuted);
+            ? C.of(context).accent
+            : (_hover ? C.of(context).text : C.of(context).textMuted);
     return MouseRegion(
       cursor: enabled ? SystemMouseCursors.click : SystemMouseCursors.basic,
       onEnter: (_) => setState(() => _hover = true),
@@ -669,11 +669,11 @@ class _MachineChipState extends State<_MachineChip> {
           padding: const EdgeInsets.symmetric(horizontal: 10),
           decoration: BoxDecoration(
             color: widget.selected
-                ? C.accent.withOpacity(0.14)
-                : (_hover && enabled ? C.surfaceHi : Colors.transparent),
+                ? C.of(context).accent.withOpacity(0.14)
+                : (_hover && enabled ? C.of(context).surfaceHi : Colors.transparent),
             borderRadius: C.roundedSm,
             border: Border.all(
-                color: widget.selected ? C.accentDim : C.hairline),
+                color: widget.selected ? C.of(context).accentDim : C.of(context).hairline),
           ),
           child: Row(
             mainAxisSize: MainAxisSize.min,
@@ -687,17 +687,17 @@ class _MachineChipState extends State<_MachineChip> {
                 width: 6,
                 height: 6,
                 decoration: BoxDecoration(
-                    color: online ? C.ok : C.idle, shape: BoxShape.circle),
+                    color: online ? C.of(context).ok : C.of(context).idle, shape: BoxShape.circle),
               ),
               const SizedBox(width: 7),
-              Text(m.displayName, style: C.small(color: fg, w: FontWeight.w600)),
+              Text(m.displayName, style: C.of(context).small(color: fg, w: FontWeight.w600)),
               if (widget.busy) ...[
                 const SizedBox(width: 8),
                 SizedBox(
                   width: 11,
                   height: 11,
                   child: CircularProgressIndicator(
-                      strokeWidth: 1.5, color: C.accent),
+                      strokeWidth: 1.5, color: C.of(context).accent),
                 ),
               ],
             ],
@@ -724,7 +724,7 @@ class _ToolRowState extends State<_ToolRow> {
 
   @override
   Widget build(BuildContext context) {
-    final fg = widget.selected ? C.accent : (_hover ? C.text : C.textMuted);
+    final fg = widget.selected ? C.of(context).accent : (_hover ? C.of(context).text : C.of(context).textMuted);
     return MouseRegion(
       cursor: SystemMouseCursors.click,
       onEnter: (_) => setState(() => _hover = true),
@@ -737,22 +737,22 @@ class _ToolRowState extends State<_ToolRow> {
           padding: const EdgeInsets.fromLTRB(10, 8, 10, 9),
           decoration: BoxDecoration(
             color: widget.selected
-                ? C.accent.withOpacity(0.12)
-                : (_hover ? C.surfaceHi : Colors.transparent),
+                ? C.of(context).accent.withOpacity(0.12)
+                : (_hover ? C.of(context).surfaceHi : Colors.transparent),
             borderRadius: C.roundedSm,
             border: Border.all(
-                color: widget.selected ? C.accentDim : Colors.transparent),
+                color: widget.selected ? C.of(context).accentDim : Colors.transparent),
           ),
           child: Column(
             crossAxisAlignment: CrossAxisAlignment.start,
             children: [
               Text(widget.tool.label,
-                  style: C.small(color: fg, w: FontWeight.w700)),
+                  style: C.of(context).small(color: fg, w: FontWeight.w700)),
               const SizedBox(height: 2),
               Text(widget.tool.blurb,
                   maxLines: 2,
                   overflow: TextOverflow.ellipsis,
-                  style: C.micro()),
+                  style: C.of(context).micro()),
             ],
           ),
         ),
@@ -787,7 +787,7 @@ class _TableRowState extends State<_TableRow> {
       onEnter: (_) => setState(() => _hover = true),
       onExit: (_) => setState(() => _hover = false),
       child: Container(
-        color: _hover ? C.surfaceHi : Colors.transparent,
+        color: _hover ? C.of(context).surfaceHi : Colors.transparent,
         padding: const EdgeInsets.fromLTRB(12, 6, 12, 6),
         child: Row(
           children: [
@@ -800,7 +800,7 @@ class _TableRowState extends State<_TableRow> {
                     widget.cells[i],
                     maxLines: 1,
                     overflow: TextOverflow.ellipsis,
-                    style: C.data(size: 12, color: C.textMuted),
+                    style: C.of(context).data(size: 12, color: C.of(context).textMuted),
                   ),
                 ),
               ),
@@ -856,11 +856,11 @@ class _ScriptRow extends StatelessWidget {
             child: Column(
               crossAxisAlignment: CrossAxisAlignment.start,
               children: [
-                Text(script.name, style: C.small(color: C.text, w: FontWeight.w600)),
+                Text(script.name, style: C.of(context).small(color: C.of(context).text, w: FontWeight.w600)),
                 const SizedBox(height: 2),
                 Text(
                   '${script.platform.label}  ·  $targets of the picked machines',
-                  style: C.micro(),
+                  style: C.of(context).micro(),
                 ),
               ],
             ),
@@ -897,13 +897,13 @@ class _SmallChip extends StatelessWidget {
         padding: const EdgeInsets.symmetric(horizontal: 9),
         alignment: Alignment.center,
         decoration: BoxDecoration(
-          color: selected ? C.accent.withOpacity(0.14) : Colors.transparent,
+          color: selected ? C.of(context).accent.withOpacity(0.14) : Colors.transparent,
           borderRadius: C.roundedSm,
-          border: Border.all(color: selected ? C.accentDim : C.hairline),
+          border: Border.all(color: selected ? C.of(context).accentDim : C.of(context).hairline),
         ),
         child: Text(label,
-            style: C.small(
-                color: selected ? C.accent : C.textMuted, w: FontWeight.w600)),
+            style: C.of(context).small(
+                color: selected ? C.of(context).accent : C.of(context).textMuted, w: FontWeight.w600)),
       ),
     );
   }
@@ -931,9 +931,9 @@ Future<bool> _confirm(
           width: 400,
           padding: const EdgeInsets.fromLTRB(20, 18, 20, 16),
           decoration: BoxDecoration(
-            color: C.surface,
+            color: C.of(context).surface,
             borderRadius: C.rounded,
-            border: Border.all(color: C.hairline),
+            border: Border.all(color: C.of(context).hairline),
             boxShadow: const [
               BoxShadow(
                   color: Color(0x99000000),
@@ -945,9 +945,9 @@ Future<bool> _confirm(
             mainAxisSize: MainAxisSize.min,
             crossAxisAlignment: CrossAxisAlignment.start,
             children: [
-              Text(title, style: C.h2()),
+              Text(title, style: C.of(context).h2()),
               const SizedBox(height: 8),
-              Text(body, style: C.small(color: C.textFaint)),
+              Text(body, style: C.of(context).small(color: C.of(context).textFaint)),
               const SizedBox(height: 20),
               Row(
                 mainAxisAlignment: MainAxisAlignment.end,
@@ -1010,14 +1010,14 @@ class _DangerButtonState extends State<_DangerButton> {
           decoration: BoxDecoration(
             color: !enabled
                 ? Colors.transparent
-                : C.bad.withOpacity(_hover ? 0.2 : 0.12),
+                : C.of(context).bad.withOpacity(_hover ? 0.2 : 0.12),
             borderRadius: C.roundedSm,
-            border: Border.all(color: C.bad.withOpacity(enabled ? 0.55 : 0.2)),
+            border: Border.all(color: C.of(context).bad.withOpacity(enabled ? 0.55 : 0.2)),
           ),
           child: Text(
             widget.label,
-            style: C.small(
-                color: enabled ? C.bad : C.bad.withOpacity(0.45),
+            style: C.of(context).small(
+                color: enabled ? C.of(context).bad : C.of(context).bad.withOpacity(0.45),
                 w: FontWeight.w700),
           ),
         ),

@@ -23,27 +23,45 @@ can check against the code.
 
 ## The sections
 
-`ConsoleSection` in `flutter/lib/labdesk/screens/console_shell.dart` declares ten sections, and
-the sidebar renders every one of them in that order. Ctrl+1 to Ctrl+9 open the first nine.
-Settings is tenth and has no shortcut, because `_NavItem` is given one only for an index below
-nine.
+Home opens first. The four primary destinations use Ctrl+1 through Ctrl+4.
+Connect and Sessions remain available in the sidebar; Help, Settings, account and Terms sit below them.
 
-Health is not a section. It was one, showing a single machine chosen on Fleet first; it is now a
-tab inside Fleet beside Machines, so the whole fleet's figures sit with the reachability table
-they belong with.
+| Destination | Key | Contents |
+|---|---|---|
+| Home | Ctrl+1 | Eight telemetry reports with visual, compact and detailed styles; fleet filters and per-machine scopes; local dashboard layout editor. |
+| Fleet | Ctrl+2 | Machines, Health, Jobs and Automation tabs. Selecting a machine opens Overview, Health, Terminal, Tools and Network. |
+| Labnets | Ctrl+3 | Approved private-network membership and access management. Machine adapter diagnostics live under Fleet → machine → Network. |
+| This device | Ctrl+4 | Local identity, enrollment, background service, Labnet participation and repair controls. |
+| Connect | none | Direct ID/address connection and the existing local peer stores, groups and peer actions. |
+| Sessions | none | This client's open remote desktop sessions and chat. |
+| Help | none | Searchable feature glossary, machine-state explanations, recommended actions and expandable technical details. Header Help opens the current feature topic. |
+| Settings | none | Existing settings pages with one category navigation; legacy server profiles under Advanced connections. |
 
-| Section | Key | What renders it | What is behind it today |
-|---|---|---|---|
-| Connect | Ctrl+1 | `screens/connect_screen.dart`, with the client's `OnlineStatusWidget` beneath it | The client's five peer stores, folded into one list by `buildMachineRows`. Live. |
-| Fleet | Ctrl+2 | `screens/fleet_console.dart` on the Machines tab, `screens/health_board.dart` on the Health tab | Reachability and figures from lab-desk.net for every enrolled machine; the console's own poll answers for peers the server has never been told about. |
-| Sessions | Ctrl+3 | `screens/sessions_screen.dart` | Chat read from this client's own remote desktop windows. Incoming connections are not in it. |
-| Terminal | Ctrl+4 | `screens/terminal_screen.dart` | One command at a time over a hidden shell. Needs a terminal session, an open link, or a saved password. |
-| Tools | Ctrl+5 | `screens/tools_screen.dart` | The same shell path, running the commands in `services/tool_catalog.dart`. |
-| Automation | Ctrl+6 | `screens/automation_screen.dart` | Rules evaluated in this process, once a second, only while the console is open, plus the ready-made rules in `models/automation_presets.dart`. |
-| Actions | Ctrl+7 | `screens/actions_screen.dart` | Five actions. Three open a session; two need one already open. |
-| Network | Ctrl+8 | `screens/network_screen.dart`, with `screens/adapters_card.dart` above it | The machine's own adapters and internet verdict, and the labnets from lab-desk.net over the two planes described under *labnet* below. Nothing in it has yet been exercised from a signed-in console against production. |
-| This machine | Ctrl+9 | `screens/this_machine_screen.dart` | The client's `ServerModel`. Live. |
-| Settings | none | `settingsPageBody` from `desktop_setting_page.dart`, one page at a time | The client's own settings. Live. |
+Organizations are authenticated service memberships, not server profiles or Labnet enrollment.
+The selector verifies membership before activating a context. Layouts, scripts and automation rules
+are stored locally per immutable account and organization. Existing local scripts can be imported;
+imported automation rules start paused. Context changes clear caches and unsaved feature drafts.
+Pending commands check their initiating context again after connection readiness. Existing open
+sessions retain their original grant authority for cleanup.
+
+Home supports Everyday, Technician and Operations starting layouts. The twelve-column editor
+supports drag, resize, keyboard positioning, adding, duplicating, removing, Undo and Close gaps.
+Save persists the draft; Cancel leaves the previous layout intact. Widget scopes may follow the
+fleet filter, select one or multiple machines, or show a named-contributor average. All styles
+preserve missing values and actual source timestamps; no synthetic live readings are generated.
+
+Machine reporting policy appears in the selected machine's Health view. Owners and technicians
+can explicitly apply an interval from one minute through one day. New enrollments default to one
+minute; existing stored intervals are preserved. The collector receives the policy in its next
+successful upload response. Cached online status expires to unknown, while an explicit service
+offline result stays offline. Home and Health identify stale, absent and future-dated readings.
+
+The desktop requires the service's authenticated organization-directory route, organization header
+support and inventory reporting interval. Deploy that compatible service before distributing this
+client. Browser cookie organization selection is independent of desktop bearer context.
+
+Terms opens a draft document under TrapLab Studios. It does not record acceptance or activate a
+legal agreement. The operator's jurisdiction and public legal contact still need to be supplied.
 
 The sidebar is reachable without a pointer: every entry takes focus, activates on Enter or
 Space, and reports itself to assistive technology as a selected or unselected button. Machine
@@ -57,9 +75,9 @@ every settings row and every dialog, and quietly losing whichever ones were miss
 `ConsoleShell` takes a `hosted` map from section to `WidgetBuilder`. A section with a builder
 renders that; a section without one falls back to the console's own screen.
 
-`console_page.dart` supplies seven of the ten: Connect, This machine, Settings, Sessions,
-Automation, Tools and Network. Fleet, Terminal and Actions are rendered by the shell itself from
-the values passed in beside the map.
+`console_page.dart` supplies Connect, This device, Settings, Sessions, Automation, Tools,
+Labnets and machine diagnostics. Home, Fleet, machine Health, Terminal, Overview and Help are
+rendered by the shell from plain values and callbacks.
 
 Two of those seven are now the console's own widgets rather than the application's, which is a
 change from how this document used to describe them.
@@ -71,13 +89,14 @@ change from how this document used to describe them.
   quietly returns nothing.
 * **Settings** no longer mounts `DesktopSettingPage` whole, because that put a second navigation
   rail beside the console's. The client passes its pages up as `ConsoleSubItem`s, the sidebar
-  nests them under Settings, and only `settingsPageBody(tab)` renders in the body.
+  displays them as category navigation inside Settings, and only `settingsPageBody(tab)` renders
+  beneath it.
 
 This is what lets `lib/labdesk/**` stay free of the FFI. The shell imports no client code, and
 `lib/labdesk/console_page.dart` is the single file in the console that touches it.
 
-The design harness, `lib/labdesk_preview.dart`, is not free of hosted sections. It supplies two
-of its own against fixtures, This machine and Network. Fleet, Terminal, Actions and Settings fall
+The design harness, `lib/labdesk_preview.dart`, supplies fixture builders for This device,
+Labnets and separate machine diagnostics. Fleet, Terminal, Actions and Settings fall
 through to the console's screens, with Settings landing on `screens/settings_screen.dart`, a
 harness placeholder listing the server profiles that the client never shows. Connect, Sessions,
 Automation and Tools land on `_HostedElsewhere`, which says the section is part of the running

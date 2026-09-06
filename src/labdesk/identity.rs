@@ -25,7 +25,7 @@ const MIN_SAMPLE_SECONDS: u64 = 15;
 const MAX_SAMPLE_SECONDS: u64 = 3600;
 const MIN_FLUSH_SECONDS: u64 = 60;
 const MAX_FLUSH_SECONDS: u64 = 86400;
-const DEFAULT_FLUSH_SECONDS: u64 = 300;
+const DEFAULT_FLUSH_SECONDS: u64 = 60;
 
 #[derive(Default, Serialize, Deserialize)]
 pub struct AgentIdentity {

@@ -15,6 +15,15 @@ class _World {
   final log = <String>[];
   final options = <String, String>{};
   final statuses = <bool>[];
+  final requests = <({
+    String method,
+    String path,
+    Map<String, String> headers,
+    String? body
+  })>[];
+  String token = 'token-a';
+  String organization = 'org-a';
+  String machinePrefix = 'a';
   int brokerStatus = 200;
   int deleteStatus = 200;
   String link = 'P2P';
@@ -36,6 +45,8 @@ class _World {
   Future<(int, String)> http(
       String method, Uri url, Map<String, String> h, String? body) async {
     log.add('broker $method ${url.path}');
+    requests
+        .add((method: method, path: url.path, headers: Map.of(h), body: body));
     if (method == 'DELETE') return (deleteStatus, '{}');
     if (url.path.endsWith('/ready')) {
       if (waitingReady != null) return waitingReady!.future;
@@ -63,7 +74,11 @@ class _World {
           {Duration readyTimeout = const Duration(seconds: 3)}) =>
       OverlaySession(
         broker: OverlayBroker(
-            baseUrl: 'https://lab-desk.net', token: () => 't', http: http),
+            baseUrl: 'https://lab-desk.net',
+            token: () => token,
+            organizationId: () => organization,
+            machineIdOf: (id) => '$machinePrefix-$id',
+            http: http),
         daemon: OverlayDaemon(call: call),
         setOption: (k, v) async {
           log.add('option $k=$v');
@@ -75,6 +90,58 @@ class _World {
 }
 
 void main() {
+  for (final stage in ['creation', 'readiness']) {
+    test('context switch during $stage keeps the grant in its original scope',
+        () async {
+      final w = _World();
+      final entered = Completer<void>();
+      final resume = Completer<void>();
+      var held = false;
+      final session = OverlaySession(
+        broker: OverlayBroker(
+          baseUrl: 'https://lab-desk.net',
+          token: () => w.token,
+          organizationId: () => w.organization,
+          machineIdOf: (id) => '${w.machinePrefix}-$id',
+          http: (method, url, headers, body) async {
+            final response = await w.http(method, url, headers, body);
+            if (!held &&
+                ((stage == 'creation' && method == 'POST') ||
+                    (stage == 'readiness' && url.path.endsWith('/ready')))) {
+              held = true;
+              entered.complete();
+              await resume.future;
+            }
+            return response;
+          },
+        ),
+        daemon: OverlayDaemon(call: w.call),
+        setOption: (key, value) async => w.options[key] = value,
+      );
+      final preparing = session.prepare('1');
+      await entered.future;
+      w.token = 'token-b';
+      w.organization = 'org-b';
+      w.machinePrefix = 'b';
+      resume.complete();
+      expect(await preparing, isTrue);
+      await session.release('1');
+      expect(w.requests.map((r) => r.headers['authorization']),
+          everyElement('Bearer token-a'));
+      expect(w.requests.map((r) => r.headers['x-labdesk-organization']),
+          everyElement('org-a'));
+      expect(jsonDecode(w.requests.first.body!)['target'], 'a-1');
+
+      w.requests.clear();
+      expect(await session.prepare('1'), isTrue);
+      await session.release('1');
+      expect(w.requests.map((r) => r.headers['authorization']),
+          everyElement('Bearer token-b'));
+      expect(w.requests.map((r) => r.headers['x-labdesk-organization']),
+          everyElement('org-b'));
+      expect(jsonDecode(w.requests.first.body!)['target'], 'b-1');
+    });
+  }
   for (final stage in [
     'broker',
     'readiness',
@@ -97,7 +164,8 @@ void main() {
       final session = OverlaySession(
         broker: OverlayBroker(
           baseUrl: 'https://lab-desk.net',
-          token: () => 't',
+          token: () => w.token,
+          organizationId: () => w.organization,
           http: (method, url, headers, body) async {
             if ((stage == 'broker' && method == 'POST') ||
                 (stage == 'readiness' && url.path.endsWith('/ready'))) {
@@ -118,46 +186,81 @@ void main() {
       );
       final preparing = session.prepare('1');
       await entered.future;
+      w.token = 'token-b';
+      w.organization = 'org-b';
       await session.releaseAll();
       resume.complete();
       expect(await preparing, isFalse);
       expect(w.options.values, everyElement(isEmpty));
       expect(session.hasGrants, isFalse);
       expect(w.log, contains('broker DELETE /console/overlay/session/s1'));
+      final deletion = w.requests.singleWhere((r) => r.method == 'DELETE');
+      expect(deletion.headers['authorization'], 'Bearer token-a');
+      expect(deletion.headers['x-labdesk-organization'], 'org-a');
     });
   }
 
-  test('session creation times out and releases a late minted grant', () async {
+  test('late creation cleanup keeps its scope and preserves newer peer hints',
+      () async {
     final w = _World();
     final minted = Completer<(int, String)>();
+    final entered = Completer<void>();
     final released = Completer<void>();
+    var held = false;
     final session = OverlaySession(
       broker: OverlayBroker(
         baseUrl: 'https://lab-desk.net',
-        token: () => 't',
+        token: () => w.token,
+        organizationId: () => w.organization,
+        machineIdOf: (id) => '${w.machinePrefix}-$id',
         http: (method, url, headers, body) async {
-          if (method == 'POST') return minted.future;
+          if (method == 'POST' && !held) {
+            held = true;
+            entered.complete();
+            return minted.future;
+          }
           final answer = await w.http(method, url, headers, body);
-          if (method == 'DELETE') released.complete();
+          if (method == 'DELETE' && url.path.endsWith('/late')) {
+            released.complete();
+          }
           return answer;
         },
       ),
       daemon: OverlayDaemon(call: w.call),
       setOption: (key, value) async => w.options[key] = value,
-      readyTimeout: const Duration(milliseconds: 50),
+      readyTimeout: const Duration(seconds: 1),
     );
-    expect(await session.prepare('1').timeout(const Duration(seconds: 1)),
-        isFalse);
+    final preparing = session.prepare('1');
+    await entered.future;
+    w.token = 'token-b';
+    w.organization = 'org-b';
+    w.machinePrefix = 'b';
+    expect(await preparing.timeout(const Duration(seconds: 2)), isFalse);
     expect(session.lastError, contains('timed out'));
+    expect(await session.prepare('1'), isTrue);
+    final newHints = Map.of(w.options);
     minted.complete((
       200,
       '{"id":"late","targetAddr":"100.64.0.9:21118","targetIdPk":"pk",'
           '"ticket":{"secret":"secret"}}'
     ));
     await released.future.timeout(const Duration(seconds: 1));
-    expect(session.hasGrants, isFalse);
-    expect(w.options.values, everyElement(isEmpty));
-    expect(w.log, contains('broker DELETE /console/overlay/session/late'));
+    expect(session.hasGrants, isTrue);
+    expect(w.options, newHints);
+    final deletion = w.requests.singleWhere((r) => r.method == 'DELETE');
+    expect(deletion.path, '/console/overlay/session/late');
+    expect(deletion.headers['authorization'], 'Bearer token-a');
+    expect(deletion.headers['x-labdesk-organization'], 'org-a');
+    expect(
+        w.requests
+            .where((r) => r.method != 'DELETE')
+            .map((r) => r.headers['authorization']),
+        everyElement('Bearer token-b'));
+    expect(
+        w.requests
+            .where((r) => r.method != 'DELETE')
+            .map((r) => r.headers['x-labdesk-organization']),
+        everyElement('org-b'));
   });
 
   test('a hung target readiness read obeys the wall-clock readiness budget',
@@ -192,15 +295,26 @@ void main() {
     final session = w.session();
     await session.prepare('1');
     await session.noteOpenSessions(['1']);
+    w.token = 'token-b';
+    w.organization = 'org-b';
+    w.machinePrefix = 'b';
     w.deleteStatus = 503;
     await session.noteOpenSessions([]);
+    expect(await session.prepare('1'), isTrue);
+    final newHints = Map.of(w.options);
     w.deleteStatus = 200;
-    await session.noteOpenSessions([]);
+    await session.noteOpenSessions(['1']);
+    expect(w.options, newHints);
+    final deletes = w.requests.where((r) => r.method == 'DELETE');
+    expect(deletes.map((r) => r.headers['authorization']),
+        everyElement('Bearer token-a'));
+    expect(deletes.map((r) => r.headers['x-labdesk-organization']),
+        everyElement('org-a'));
     expect(
         w.log.where(
             (line) => line == 'broker DELETE /console/overlay/session/s1'),
         hasLength(2));
-    await session.noteOpenSessions([]);
+    await session.noteOpenSessions(['1']);
     expect(
         w.log.where(
             (line) => line == 'broker DELETE /console/overlay/session/s1'),
@@ -357,12 +471,15 @@ void main() {
   });
 
   test(
-      'overlapping sessions to one peer keep every grant until final window closes',
+      'overlapping scopes to one peer keep every grant until final window closes',
       () async {
     final w = _World();
     final session = w.session();
     await session.prepare('1');
     await session.noteOpenSessions(['1']);
+    w.token = 'token-b';
+    w.organization = 'org-b';
+    w.machinePrefix = 'b';
     await session.prepare('1');
     await session.noteOpenSessions(['1', '1']);
     await session.noteOpenSessions(['1']);
@@ -372,5 +489,10 @@ void main() {
       'broker DELETE /console/overlay/session/s1',
       'broker DELETE /console/overlay/session/s2'
     ]);
+    final deletes = w.requests.where((r) => r.method == 'DELETE').toList();
+    expect(deletes.map((r) => r.headers['authorization']),
+        ['Bearer token-a', 'Bearer token-b']);
+    expect(deletes.map((r) => r.headers['x-labdesk-organization']),
+        ['org-a', 'org-b']);
   });
 }

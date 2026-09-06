@@ -531,7 +531,7 @@ class _ConnectScreenState extends State<ConnectScreen> {
           controller: _id,
           onConnect: (mode) => _connect(_id.id, mode),
         ),
-        Divider(height: 1, thickness: 1, color: C.hairline),
+        Divider(height: 1, thickness: 1, color: C.of(context).hairline),
         // One bar, two jobs. A selection bar stacked under the filter row
         // would push the table down the moment a row is ticked and shorten
         // the list exactly when the operator is working through it.
@@ -861,7 +861,7 @@ class _IdBar extends StatelessWidget {
       child: Column(
         crossAxisAlignment: CrossAxisAlignment.start,
         children: [
-          Text('MACHINE ID', style: C.micro().copyWith(letterSpacing: 0.7)),
+          Text('MACHINE ID', style: C.of(context).micro().copyWith(letterSpacing: 0.7)),
           const SizedBox(height: 8),
           Row(
             children: [
@@ -871,9 +871,9 @@ class _IdBar extends StatelessWidget {
                 alignment: Alignment.centerLeft,
                 padding: const EdgeInsets.symmetric(horizontal: 12),
                 decoration: BoxDecoration(
-                  color: C.surface,
+                  color: C.of(context).surface,
                   borderRadius: C.roundedSm,
-                  border: Border.all(color: C.hairline),
+                  border: Border.all(color: C.of(context).hairline),
                 ),
                 child: TextField(
                   key: const ValueKey('connect-id-field'),
@@ -881,17 +881,17 @@ class _IdBar extends StatelessWidget {
                   autocorrect: false,
                   enableSuggestions: false,
                   maxLines: 1,
-                  cursorColor: C.accent,
+                  cursorColor: C.of(context).accent,
                   cursorWidth: 1.5,
                   // An identifier is data, so it is set in the mono face and
                   // spaced in threes the way the client has always spaced it.
-                  style: C.data(size: 16, w: FontWeight.w600),
+                  style: C.of(context).data(size: 16, w: FontWeight.w600),
                   inputFormatters: [IDTextInputFormatter()],
                   decoration: InputDecoration(
                     isCollapsed: true,
                     border: InputBorder.none,
                     hintText: '000 000 000',
-                    hintStyle: C.data(size: 16, color: C.textFaint),
+                    hintStyle: C.of(context).data(size: 16, color: C.of(context).textFaint),
                   ),
                   onSubmitted: (_) => onConnect(ConnectMode.control),
                 ),
@@ -915,7 +915,7 @@ class _IdBar extends StatelessWidget {
                   // nor to what. One sentence, and both halves have a verb.
                   'Press Enter to take control, or use the arrow for file transfer, camera and terminal.',
                   overflow: TextOverflow.ellipsis,
-                  style: C.small(color: C.textFaint),
+                  style: C.of(context).small(color: C.of(context).textFaint),
                 ),
               ),
             ],
@@ -951,7 +951,7 @@ class _FilterBar extends StatelessWidget {
       height: 52,
       padding: const EdgeInsets.symmetric(horizontal: _padH),
       decoration: BoxDecoration(
-        border: Border(bottom: BorderSide(color: C.hairline)),
+        border: Border(bottom: BorderSide(color: C.of(context).hairline)),
       ),
       child: Row(
         children: [
@@ -960,27 +960,27 @@ class _FilterBar extends StatelessWidget {
             height: 32,
             padding: const EdgeInsets.symmetric(horizontal: 10),
             decoration: BoxDecoration(
-              color: C.surface,
+              color: C.of(context).surface,
               borderRadius: C.roundedSm,
-              border: Border.all(color: C.hairline),
+              border: Border.all(color: C.of(context).hairline),
             ),
             child: Row(
               children: [
-                const LdIcon(LdIcons.search, size: 14, color: C.textFaint),
+                LdIcon(LdIcons.search, size: 14, color: C.of(context).textFaint),
                 const SizedBox(width: 8),
                 Expanded(
                   child: TextField(
                     key: const ValueKey('connect-search'),
                     controller: search,
                     onChanged: onQuery,
-                    style: C.small(color: C.text),
-                    cursorColor: C.accent,
+                    style: C.of(context).small(color: C.of(context).text),
+                    cursorColor: C.of(context).accent,
                     cursorWidth: 1.5,
                     decoration: InputDecoration(
                       isCollapsed: true,
                       border: InputBorder.none,
                       hintText: 'Search name, host or id',
-                      hintStyle: C.small(color: C.textFaint),
+                      hintStyle: C.of(context).small(color: C.of(context).textFaint),
                     ),
                   ),
                 ),
@@ -1002,14 +1002,14 @@ class _FilterBar extends StatelessWidget {
             padding: const EdgeInsets.symmetric(horizontal: 9),
             alignment: Alignment.center,
             decoration: BoxDecoration(
-              color: C.surfaceHi,
+              color: C.of(context).surfaceHi,
               borderRadius: C.roundedSm,
             ),
             child: Text(
               shown == total
                   ? '$total ${total == 1 ? 'machine' : 'machines'}'
                   : '$shown of $total',
-              style: C.small(color: C.textMuted, w: FontWeight.w600),
+              style: C.of(context).small(color: C.of(context).textMuted, w: FontWeight.w600),
             ),
           ),
         ],
@@ -1038,10 +1038,10 @@ class _SetChipState extends State<_SetChip> {
     final s = widget.set;
     final enabled = s.enabled;
     final fg = !enabled
-        ? C.textFaint
+        ? C.of(context).textFaint
         : widget.selected
-            ? C.accent
-            : (_hover ? C.text : C.textMuted);
+            ? C.of(context).accent
+            : (_hover ? C.of(context).text : C.of(context).textMuted);
 
     Widget chip = MouseRegion(
       cursor: enabled ? SystemMouseCursors.click : SystemMouseCursors.basic,
@@ -1056,11 +1056,11 @@ class _SetChipState extends State<_SetChip> {
           padding: const EdgeInsets.symmetric(horizontal: 11),
           decoration: BoxDecoration(
             color: widget.selected
-                ? C.accent.withOpacity(0.14)
-                : (_hover && enabled ? C.surfaceHi : Colors.transparent),
+                ? C.of(context).accent.withOpacity(0.14)
+                : (_hover && enabled ? C.of(context).surfaceHi : Colors.transparent),
             borderRadius: C.roundedSm,
             border: Border.all(
-              color: widget.selected ? C.accentDim : C.hairline,
+              color: widget.selected ? C.of(context).accentDim : C.of(context).hairline,
             ),
           ),
           child: Row(
@@ -1070,10 +1070,10 @@ class _SetChipState extends State<_SetChip> {
                 LdIcon(s.icon!, size: 14, color: fg),
                 const SizedBox(width: 7),
               ],
-              Text(s.label, style: C.small(color: fg, w: FontWeight.w600)),
+              Text(s.label, style: C.of(context).small(color: fg, w: FontWeight.w600)),
               if (!enabled) ...[
                 const SizedBox(width: 6),
-                const LdIcon(LdIcons.lock, size: 12, color: C.textFaint),
+                LdIcon(LdIcons.lock, size: 12, color: C.of(context).textFaint),
               ],
             ],
           ),
@@ -1100,7 +1100,7 @@ class _TableHeader extends StatelessWidget {
           child: Text(
             s,
             textAlign: right ? TextAlign.right : TextAlign.left,
-            style: C.micro().copyWith(letterSpacing: 0.7),
+            style: C.of(context).micro().copyWith(letterSpacing: 0.7),
           ),
         );
 
@@ -1108,7 +1108,7 @@ class _TableHeader extends StatelessWidget {
       height: 28,
       padding: const EdgeInsets.symmetric(horizontal: _padH),
       decoration: BoxDecoration(
-        border: Border(bottom: BorderSide(color: C.hairline)),
+        border: Border(bottom: BorderSide(color: C.of(context).hairline)),
       ),
       child: Row(
         children: [
@@ -1164,26 +1164,26 @@ class _GroupHeaderState extends State<_GroupHeader> {
           height: 30,
           padding: const EdgeInsets.symmetric(horizontal: _padH),
           decoration: BoxDecoration(
-            color: _hover ? C.surfaceHi : C.chrome,
-            border: Border(bottom: BorderSide(color: C.hairline)),
+            color: _hover ? C.of(context).surfaceHi : C.of(context).chrome,
+            border: Border(bottom: BorderSide(color: C.of(context).hairline)),
           ),
           child: Row(
             children: [
               LdIcon(
                 widget.collapsed ? LdIcons.chevronRight : LdIcons.chevronDown,
                 size: 14,
-                color: C.textMuted,
+                color: C.of(context).textMuted,
               ),
               const SizedBox(width: 8),
               if (!widget.plain) ...[
-                const LdIcon(LdIcons.group, size: 14, color: C.accent),
+                LdIcon(LdIcons.group, size: 14, color: C.of(context).accent),
                 const SizedBox(width: 8),
               ],
               Text(widget.name,
-                  style: C.small(color: C.text, w: FontWeight.w700)),
+                  style: C.of(context).small(color: C.of(context).text, w: FontWeight.w700)),
               const SizedBox(width: 8),
               Text('${widget.count}',
-                  style: C.data(size: 11, color: C.textFaint)),
+                  style: C.of(context).data(size: 11, color: C.of(context).textFaint)),
             ],
           ),
         ),
@@ -1201,10 +1201,10 @@ class _GroupEmpty extends StatelessWidget {
         alignment: Alignment.centerLeft,
         padding: const EdgeInsets.symmetric(horizontal: _padH + 22),
         decoration: BoxDecoration(
-          border: Border(bottom: BorderSide(color: C.hairline)),
+          border: Border(bottom: BorderSide(color: C.of(context).hairline)),
         ),
         child: Text('No machines in this group yet.',
-            style: C.small(color: C.textFaint)),
+            style: C.of(context).small(color: C.of(context).textFaint)),
       );
 }
 
@@ -1241,10 +1241,10 @@ class _MachineTile extends StatefulWidget {
 class _MachineTileState extends State<_MachineTile> {
   bool _hover = false;
 
-  static (Color, String) _status(LabDeskPeerStatus s) => switch (s) {
-        LabDeskPeerStatus.online => (C.ok, 'Online'),
-        LabDeskPeerStatus.offline => (C.bad, 'Offline'),
-        LabDeskPeerStatus.unknown => (C.idle, 'Unknown'),
+  (Color, String) _status(LabDeskPeerStatus s) => switch (s) {
+        LabDeskPeerStatus.online => (C.of(context).ok, 'Online'),
+        LabDeskPeerStatus.offline => (C.of(context).bad, 'Offline'),
+        LabDeskPeerStatus.unknown => (C.of(context).idle, 'Unknown'),
       };
 
   static (String?, String) _platform(String raw) {
@@ -1280,14 +1280,14 @@ class _MachineTileState extends State<_MachineTile> {
         padding: const EdgeInsets.fromLTRB(_padH - _leadBar, 0, _padH, 0),
         decoration: BoxDecoration(
           color: widget.selected
-              ? C.accent.withOpacity(0.13)
-              : (_hover ? C.surfaceHi : Colors.transparent),
+              ? C.of(context).accent.withOpacity(0.13)
+              : (_hover ? C.of(context).surfaceHi : Colors.transparent),
           border: Border(
             left: BorderSide(
-              color: widget.selected ? C.accent : Colors.transparent,
+              color: widget.selected ? C.of(context).accent : Colors.transparent,
               width: _leadBar,
             ),
-            bottom: BorderSide(color: C.hairline),
+            bottom: BorderSide(color: C.of(context).hairline),
           ),
         ),
         child: Row(
@@ -1312,11 +1312,11 @@ class _MachineTileState extends State<_MachineTile> {
                       // The line box is pulled in from 1.45 so two lines fit
                       // the tighter row. The type sizes are untouched: this is
                       // leading, not the identity getting smaller.
-                      style: C.body().copyWith(height: 1.2)),
+                      style: C.of(context).body().copyWith(height: 1.2)),
                   Text(second,
                       overflow: TextOverflow.ellipsis,
                       style: C
-                          .data(size: 11, color: C.textFaint)
+                          .data(size: 11, color: C.of(context).textFaint)
                           .copyWith(height: 1.25)),
                 ],
               ),
@@ -1325,20 +1325,20 @@ class _MachineTileState extends State<_MachineTile> {
               flex: _fId,
               child: Text(formatID(m.id),
                   overflow: TextOverflow.ellipsis,
-                  style: C.data(size: 12, color: C.textMuted)),
+                  style: C.of(context).data(size: 12, color: C.of(context).textMuted)),
             ),
             Expanded(
               flex: _fPlatform,
               child: Row(
                 children: [
                   if (glyph != null) ...[
-                    LdIcon(glyph, size: 15, color: C.textMuted),
+                    LdIcon(glyph, size: 15, color: C.of(context).textMuted),
                     const SizedBox(width: 8),
                   ],
                   Flexible(
                     child: Text(platform,
                         overflow: TextOverflow.ellipsis,
-                        style: C.small(color: C.textMuted)),
+                        style: C.of(context).small(color: C.of(context).textMuted)),
                   ),
                 ],
               ),
@@ -1349,8 +1349,8 @@ class _MachineTileState extends State<_MachineTile> {
                 child: Text(
                   m.group ?? 'Ungrouped',
                   overflow: TextOverflow.ellipsis,
-                  style: C.small(
-                      color: m.group == null ? C.textFaint : C.textMuted),
+                  style: C.of(context).small(
+                      color: m.group == null ? C.of(context).textFaint : C.of(context).textMuted),
                 ),
               ),
             Expanded(
@@ -1375,7 +1375,7 @@ class _MachineTileState extends State<_MachineTile> {
                     Flexible(
                       child: Text(statusWord,
                           overflow: TextOverflow.ellipsis,
-                          style: C.small(color: C.textMuted)),
+                          style: C.of(context).small(color: C.of(context).textMuted)),
                     ),
                   ],
                 ),
@@ -1388,10 +1388,10 @@ class _MachineTileState extends State<_MachineTile> {
                     ? 'Now'
                     : m.sinceSeen(now: widget.now),
                 textAlign: TextAlign.right,
-                style: C.data(
+                style: C.of(context).data(
                   size: 12,
                   color:
-                      m.status == LabDeskPeerStatus.online ? C.ok : C.textMuted,
+                      m.status == LabDeskPeerStatus.online ? C.of(context).ok : C.of(context).textMuted,
                 ),
               ),
             ),
@@ -1415,19 +1415,19 @@ class _MachineTileState extends State<_MachineTile> {
                 height: 26,
                 decoration: BoxDecoration(
                   color: hovered || focused
-                      ? C.accent.withOpacity(0.12)
+                      ? C.of(context).accent.withOpacity(0.12)
                       : Colors.transparent,
                   borderRadius: C.roundedSm,
                   border: Border.all(
-                      color: focused ? C.accent : Colors.transparent),
+                      color: focused ? C.of(context).accent : Colors.transparent),
                 ),
                 child: Center(
                   child: LdIcon(
                     LdIcons.more,
                     size: 16,
                     color: hovered || focused
-                        ? C.accent
-                        : (_hover ? C.textMuted : C.textFaint),
+                        ? C.of(context).accent
+                        : (_hover ? C.of(context).textMuted : C.of(context).textFaint),
                   ),
                 ),
               ),
@@ -1601,13 +1601,13 @@ class _SelectionBar extends StatelessWidget {
         // The one place the accent tints a whole surface. The table under it
         // is in a mode, and a mode that looks like the screen it replaced is a
         // mode the operator forgets they are in.
-        color: C.accent.withOpacity(0.07),
-        border: Border(bottom: BorderSide(color: C.hairline)),
+        color: C.of(context).accent.withOpacity(0.07),
+        border: Border(bottom: BorderSide(color: C.of(context).hairline)),
       ),
       child: Row(
         children: [
           Text('$machines selected',
-              style: C.small(color: C.text, w: FontWeight.w700)),
+              style: C.of(context).small(color: C.of(context).text, w: FontWeight.w700)),
           const SizedBox(width: 14),
           if (count < visible)
             Padding(
@@ -1672,7 +1672,7 @@ class _RowConnectState extends State<_RowConnect> {
   @override
   Widget build(BuildContext context) {
     final active = _hover || _focused;
-    final fg = active ? C.accent : (widget.lit ? C.text : C.textMuted);
+    final fg = active ? C.of(context).accent : (widget.lit ? C.of(context).text : C.of(context).textMuted);
     // A gesture detector is not a control: it cannot be tabbed to and it does
     // not answer the space bar. This one now can, and shows where focus is
     // while it holds it.
@@ -1700,22 +1700,22 @@ class _RowConnectState extends State<_RowConnect> {
           width: 74,
           alignment: Alignment.center,
           decoration: BoxDecoration(
-            color: active ? C.accent.withOpacity(0.12) : Colors.transparent,
+            color: active ? C.of(context).accent.withOpacity(0.12) : Colors.transparent,
             borderRadius: C.roundedSm,
             // The word is always there; the box only arrives with the pointer.
             // Nine outlined buttons down a table is noise, and a control that
             // appears from nothing is a control a keyboard user never finds.
             border: Border.all(
               color: _focused
-                  ? C.accent
+                  ? C.of(context).accent
                   : _hover
-                      ? C.accentDim
+                      ? C.of(context).accentDim
                       : widget.lit
-                          ? C.hairline
+                          ? C.of(context).hairline
                           : Colors.transparent,
             ),
           ),
-          child: Text('Connect', style: C.small(color: fg, w: FontWeight.w600)),
+          child: Text('Connect', style: C.of(context).small(color: fg, w: FontWeight.w600)),
         ),
       ),
     );
@@ -1750,13 +1750,13 @@ class _IdModeMenu extends StatelessWidget {
           alignment: Alignment.center,
           decoration: BoxDecoration(
             color: hovered || focused
-                ? C.accent.withOpacity(0.12)
+                ? C.of(context).accent.withOpacity(0.12)
                 : Colors.transparent,
             borderRadius: C.roundedSm,
-            border: Border.all(color: focused ? C.accent : C.hairline),
+            border: Border.all(color: focused ? C.of(context).accent : C.of(context).hairline),
           ),
           child: LdIcon(LdIcons.chevronDown,
-              size: 15, color: hovered || focused ? C.accent : C.textMuted),
+              size: 15, color: hovered || focused ? C.of(context).accent : C.of(context).textMuted),
         ),
       );
 }
@@ -1780,9 +1780,9 @@ Future<bool> _confirm(
           width: 384,
           padding: const EdgeInsets.fromLTRB(20, 18, 20, 16),
           decoration: BoxDecoration(
-            color: C.surface,
+            color: C.of(context).surface,
             borderRadius: C.rounded,
-            border: Border.all(color: C.hairline),
+            border: Border.all(color: C.of(context).hairline),
             boxShadow: const [
               BoxShadow(
                   color: Color(0x99000000),
@@ -1794,18 +1794,19 @@ Future<bool> _confirm(
             mainAxisSize: MainAxisSize.min,
             crossAxisAlignment: CrossAxisAlignment.start,
             children: [
-              Text(title, style: C.h2()),
+              Text(title, style: C.of(context).h2()),
               const SizedBox(height: 8),
-              Text(body, style: C.small(color: C.textFaint)),
+              Text(body, style: C.of(context).small(color: C.of(context).textFaint)),
               const SizedBox(height: 20),
-              Row(
-                mainAxisAlignment: MainAxisAlignment.end,
+              Wrap(
+                alignment: WrapAlignment.end,
+                spacing: 8,
+                runSpacing: 8,
                 children: [
                   GhostButton(
                     label: 'Cancel',
                     onPressed: () => Navigator.pop(ctx, false),
                   ),
-                  const SizedBox(width: 8),
                   _DangerButton(
                     label: confirmLabel,
                     onPressed: () => Navigator.pop(ctx, true),
@@ -1870,14 +1871,14 @@ class _DangerButtonState extends State<_DangerButton> {
           decoration: BoxDecoration(
             color: !enabled
                 ? Colors.transparent
-                : C.bad.withOpacity(_hover ? 0.2 : 0.12),
+                : C.of(context).bad.withOpacity(_hover ? 0.2 : 0.12),
             borderRadius: C.roundedSm,
-            border: Border.all(color: C.bad.withOpacity(enabled ? 0.55 : 0.2)),
+            border: Border.all(color: C.of(context).bad.withOpacity(enabled ? 0.55 : 0.2)),
           ),
           child: Text(
             widget.label,
-            style: C.small(
-                color: enabled ? C.bad : C.bad.withOpacity(0.45),
+            style: C.of(context).small(
+                color: enabled ? C.of(context).bad : C.of(context).bad.withOpacity(0.45),
                 w: FontWeight.w700),
           ),
         ),
@@ -1897,7 +1898,7 @@ class _PrimaryButton extends StatefulWidget {
   State<_PrimaryButton> createState() => _PrimaryButtonState();
 }
 
-/// The shared filled primary: [C.primaryFill] under [C.primaryFg], the same
+/// The shared filled primary: [C.of(context).primaryFill] under [C.of(context).primaryFg], the same
 /// pair the installer's Accept and install uses. This button used to paint the
 /// dim accent under a white label, so the product's two most important confirms
 /// were two different colours.
@@ -1925,12 +1926,12 @@ class _PrimaryButtonState extends State<_PrimaryButton> {
           alignment: Alignment.center,
           decoration: BoxDecoration(
             color: _down
-                ? C.primaryFillDown
-                : (_hover ? C.primaryFillHover : C.primaryFill),
+                ? C.of(context).primaryFillDown
+                : (_hover ? C.of(context).primaryFillHover : C.of(context).primaryFill),
             borderRadius: C.roundedSm,
           ),
           child: Text(widget.label,
-              style: C.small(color: C.primaryFg, w: FontWeight.w700)),
+              style: C.of(context).small(color: C.of(context).primaryFg, w: FontWeight.w700)),
         ),
       ),
     );
@@ -1947,18 +1948,18 @@ class _UncheckedNote extends StatelessWidget {
         key: const ValueKey('note-unchecked'),
         padding: const EdgeInsets.fromLTRB(_padH, 11, _padH, 11),
         decoration: BoxDecoration(
-          color: C.surface,
-          border: Border(bottom: BorderSide(color: C.hairline)),
+          color: C.of(context).surface,
+          border: Border(bottom: BorderSide(color: C.of(context).hairline)),
         ),
         child: Row(
           children: [
-            const _Dot(color: C.idle, hollow: true),
+            _Dot(color: C.of(context).idle, hollow: true),
             const SizedBox(width: 10),
             Flexible(
               child: Text(
                 'Nothing has been checked yet. Reachability is polled, so these '
                 'machines are neither up nor down until Refresh asks the ID server.',
-                style: C.small(color: C.textMuted),
+                style: C.of(context).small(color: C.of(context).textMuted),
               ),
             ),
           ],
@@ -2039,15 +2040,15 @@ class _Empty extends StatelessWidget {
           child: Column(
             mainAxisSize: MainAxisSize.min,
             children: [
-              LdIcon(icon, size: 24, color: C.textFaint),
+              LdIcon(icon, size: 24, color: C.of(context).textFaint),
               const SizedBox(height: 14),
-              Text(title, style: C.h2()),
+              Text(title, style: C.of(context).h2()),
               const SizedBox(height: 6),
               SizedBox(
                 width: 360,
                 child: Text(body,
                     textAlign: TextAlign.center,
-                    style: C.small(color: C.textFaint)),
+                    style: C.of(context).small(color: C.of(context).textFaint)),
               ),
               if (action != null) ...[
                 const SizedBox(height: 16),

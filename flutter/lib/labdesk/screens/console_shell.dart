@@ -6,16 +6,21 @@ import 'package:flutter_svg/flutter_svg.dart';
 import '../charts/reachability_chart.dart';
 import '../models/machine_metrics.dart';
 import '../models/machine_row.dart';
+import '../models/dashboard_layout.dart';
+import '../models/organization_context.dart';
 import '../theme/console_theme.dart';
 import '../theme/ld_icons.dart';
 import 'actions_screen.dart';
-import 'console_menu.dart';
 import 'fleet_console.dart';
 import 'health_board.dart';
+import 'home_dashboard.dart';
+import 'help_screen.dart';
 import 'settings_screen.dart';
 import 'terminal_screen.dart';
 
 enum ConsoleSection {
+  home,
+  help,
   connect,
   fleet,
   sessions,
@@ -24,6 +29,8 @@ enum ConsoleSection {
   automation,
   actions,
   network,
+  diagnostics,
+  machineHealth,
   thisMachine,
   settings,
 }
@@ -31,23 +38,36 @@ enum ConsoleSection {
 /// The two views of the fleet. Health used to be a section of its own that
 /// showed one machine, chosen on Fleet first; it is a tab here so the whole
 /// fleet's figures sit beside the reachability table they belong with.
-enum FleetTab { machines, health }
+enum FleetTab { machines, health, jobs, automation }
+
+const primaryConsoleSections = [
+  ConsoleSection.home,
+  ConsoleSection.fleet,
+  ConsoleSection.network,
+  ConsoleSection.thisMachine,
+];
 
 extension ConsoleSectionInfo on ConsoleSection {
   String get label => switch (this) {
+        ConsoleSection.home => 'Home',
+        ConsoleSection.help => 'Help',
         ConsoleSection.connect => 'Connect',
-        ConsoleSection.thisMachine => 'This machine',
+        ConsoleSection.thisMachine => 'This device',
         ConsoleSection.fleet => 'Fleet',
         ConsoleSection.sessions => 'Sessions',
         ConsoleSection.terminal => 'Terminal',
         ConsoleSection.tools => 'Tools',
         ConsoleSection.automation => 'Automation',
         ConsoleSection.actions => 'Actions',
-        ConsoleSection.network => 'Network',
+        ConsoleSection.network => 'Labnets',
+        ConsoleSection.diagnostics => 'Network',
+        ConsoleSection.machineHealth => 'Health',
         ConsoleSection.settings => 'Settings',
       };
 
   String get glyph => switch (this) {
+        ConsoleSection.home => LdIcons.home,
+        ConsoleSection.help => LdIcons.info,
         ConsoleSection.connect => LdIcons.connect,
         ConsoleSection.thisMachine => LdIcons.machine,
         ConsoleSection.fleet => LdIcons.fleet,
@@ -57,12 +77,16 @@ extension ConsoleSectionInfo on ConsoleSection {
         ConsoleSection.terminal => LdIcons.terminal,
         ConsoleSection.actions => LdIcons.actions,
         ConsoleSection.network => LdIcons.group,
+        ConsoleSection.diagnostics => LdIcons.group,
+        ConsoleSection.machineHealth => LdIcons.machine,
         ConsoleSection.settings => LdIcons.settings,
       };
 
   /// Sections that act on one machine show which machine in the title bar, and
   /// prompt to pick one when none is selected.
   bool get needsMachine => switch (this) {
+        ConsoleSection.help ||
+        ConsoleSection.home ||
         ConsoleSection.connect ||
         ConsoleSection.thisMachine ||
         ConsoleSection.fleet ||
@@ -134,7 +158,22 @@ class ConsoleShell extends StatefulWidget {
     this.terminalIds,
     this.onRunAction,
     this.onTerminalSubmit,
-    this.initialSection = ConsoleSection.connect,
+    this.initialSection = ConsoleSection.home,
+    this.organizations = const [],
+    this.activeOrganizationId,
+    this.onOrganizationSelected,
+    this.accountName = 'Signed out',
+    this.accountDescription,
+    this.onAccountPressed,
+    this.dashboardError,
+    this.dashboardLayout,
+    this.onSaveDashboard,
+    this.dashboardContextKey = 'local',
+    this.fleets = const [],
+    this.machineFleetIds = const {},
+    this.onMachineSelected,
+    this.onTermsPressed,
+    this.machineHealthFooter,
     this.hosted = const {},
     this.sectionRequest,
     this.subItems = const {},
@@ -144,6 +183,21 @@ class ConsoleShell extends StatefulWidget {
   });
 
   final List<MachineRow> machines;
+  final List<OrganizationSummary> organizations;
+  final String? activeOrganizationId;
+  final ValueChanged<String>? onOrganizationSelected;
+  final String accountName;
+  final String? accountDescription;
+  final VoidCallback? onAccountPressed;
+  final String? dashboardError;
+  final DashboardLayout? dashboardLayout;
+  final Future<void> Function(DashboardLayout)? onSaveDashboard;
+  final String dashboardContextKey;
+  final List<DashboardFleet> fleets;
+  final Map<String, Set<String>> machineFleetIds;
+  final ValueChanged<String>? onMachineSelected;
+  final VoidCallback? onTermsPressed;
+  final Widget Function(String machineId)? machineHealthFooter;
 
   /// What the Health tab accounts for, when that is not the same list.
   ///
@@ -233,6 +287,10 @@ class _ConsoleShellState extends State<ConsoleShell> {
   @override
   void didUpdateWidget(covariant ConsoleShell old) {
     super.didUpdateWidget(old);
+    if (old.dashboardContextKey != widget.dashboardContextKey) {
+      _selectedId = null;
+      _fleetTab = FleetTab.machines;
+    }
     if (!identical(old.sectionRequest, widget.sectionRequest)) {
       old.sectionRequest?.removeListener(_onSectionRequested);
       widget.sectionRequest?.addListener(_onSectionRequested);
@@ -250,6 +308,26 @@ class _ConsoleShellState extends State<ConsoleShell> {
     if (s != null && mounted) _setSection(s);
   }
 
+  String _helpTopic = 'home';
+  void _openHelp() {
+    _helpTopic = switch (_section) {
+      ConsoleSection.home => 'home',
+      ConsoleSection.fleet => switch (_fleetTab) {
+          FleetTab.jobs => 'jobs',
+          FleetTab.automation => 'automation',
+          _ => 'fleet'
+        },
+      ConsoleSection.machineHealth => 'fleet',
+      ConsoleSection.diagnostics => 'labnets',
+      ConsoleSection.terminal || ConsoleSection.tools => 'jobs',
+      ConsoleSection.network => 'labnets',
+      ConsoleSection.thisMachine => 'device',
+      ConsoleSection.settings => 'organizations',
+      _ => 'sessions',
+    };
+    _setSection(ConsoleSection.help);
+  }
+
   void _setSection(ConsoleSection s) {
     if (s == _section) return;
     setState(() => _section = s);
@@ -259,7 +337,7 @@ class _ConsoleShellState extends State<ConsoleShell> {
   MachineRow? get _selected {
     final id = _selectedId;
     if (id == null) return null;
-    for (final m in widget.machines) {
+    for (final m in [...?widget.healthMachines, ...widget.machines]) {
       if (m.id == id) return m;
     }
     return null;
@@ -270,6 +348,7 @@ class _ConsoleShellState extends State<ConsoleShell> {
 
   void _select(String id) {
     setState(() => _selectedId = id);
+    widget.onMachineSelected?.call(id);
   }
 
   @override
@@ -291,15 +370,15 @@ class _ConsoleShellState extends State<ConsoleShell> {
     return CallbackShortcuts(
       bindings: {
         for (var i = 0;
-            i < ConsoleSection.values.length && i < digits.length;
+            i < primaryConsoleSections.length && i < digits.length;
             i++)
           SingleActivator(digits[i], control: true): () =>
-              _setSection(ConsoleSection.values[i]),
+              _setSection(primaryConsoleSections[i]),
       },
       child: Focus(
         autofocus: true,
         child: ColoredBox(
-          color: C.bg,
+          color: C.of(context).bg,
           child: Row(
             crossAxisAlignment: CrossAxisAlignment.stretch,
             children: [
@@ -313,6 +392,13 @@ class _ConsoleShellState extends State<ConsoleShell> {
                 subItems: widget.subItems,
                 selectedSubItem: widget.selectedSubItem,
                 onSubItemSelected: widget.onSubItemSelected,
+                organizations: widget.organizations,
+                activeOrganizationId: widget.activeOrganizationId,
+                onOrganizationSelected: widget.onOrganizationSelected,
+                accountName: widget.accountName,
+                accountDescription: widget.accountDescription,
+                onAccountPressed: widget.onAccountPressed,
+                onTermsPressed: widget.onTermsPressed,
               ),
               Expanded(
                 child: Column(
@@ -325,8 +411,13 @@ class _ConsoleShellState extends State<ConsoleShell> {
                       lastRefreshed: widget.lastRefreshed,
                       onRefresh: widget.onRefresh,
                       now: widget.now,
+                      onHelp:
+                          _section == ConsoleSection.help ? null : _openHelp,
                     ),
-                    Expanded(child: _body()),
+                    Expanded(
+                        child: KeyedSubtree(
+                            key: ValueKey(widget.dashboardContextKey),
+                            child: _body())),
                   ],
                 ),
               ),
@@ -338,40 +429,187 @@ class _ConsoleShellState extends State<ConsoleShell> {
   }
 
   Widget _body() {
+    if (_section == ConsoleSection.settings) {
+      return Column(crossAxisAlignment: CrossAxisAlignment.stretch, children: [
+        SingleChildScrollView(
+          scrollDirection: Axis.horizontal,
+          padding: const EdgeInsets.symmetric(horizontal: 20, vertical: 10),
+          child: Row(children: [
+            for (final item in widget.subItems[ConsoleSection.settings] ??
+                const <ConsoleSubItem>[])
+              TextButton(
+                  onPressed: () => widget.onSubItemSelected
+                      ?.call(ConsoleSection.settings, item.id),
+                  child: Text(item.label,
+                      style: C.of(context).body(
+                          color: item.id == widget.selectedSubItem
+                              ? C.of(context).accent
+                              : C.of(context).textMuted))),
+          ]),
+        ),
+        Expanded(child: _sectionBody()),
+      ]);
+    }
+    if (_section == ConsoleSection.fleet &&
+        _selected != null &&
+        _fleetTab == FleetTab.machines) {
+      return Column(children: [
+        _machineNavigation(),
+        Expanded(
+            child: ActionsScreen(
+          machine: _selected,
+          connected: _connected,
+          onRun: (action) => widget.onRunAction?.call(_selectedId!, action),
+        )),
+      ]);
+    }
+    if ([
+      ConsoleSection.terminal,
+      ConsoleSection.actions,
+      ConsoleSection.tools,
+      ConsoleSection.diagnostics,
+      ConsoleSection.machineHealth
+    ].contains(_section)) {
+      return Column(children: [
+        _machineNavigation(),
+        Expanded(child: _sectionBody()),
+      ]);
+    }
+    return _sectionBody();
+  }
+
+  Widget _machineNavigation() => Padding(
+        padding: const EdgeInsets.symmetric(horizontal: 24, vertical: 12),
+        child: Row(children: [
+          TextButton.icon(
+            onPressed: () {
+              setState(() {
+                _selectedId = null;
+                _section = ConsoleSection.fleet;
+              });
+              widget.onSectionChanged?.call(ConsoleSection.fleet);
+            },
+            icon: const Icon(Icons.arrow_back, size: 18),
+            label: const Text('All machines'),
+          ),
+          const SizedBox(width: 16),
+          Expanded(
+              child: SingleChildScrollView(
+            scrollDirection: Axis.horizontal,
+            child: Row(children: [
+              for (final item in [
+                ('Overview', ConsoleSection.fleet),
+                ('Health', ConsoleSection.machineHealth),
+                ('Terminal', ConsoleSection.terminal),
+                ('Tools', ConsoleSection.tools),
+                ('Network', ConsoleSection.diagnostics),
+              ])
+                TextButton(
+                  onPressed: () => _setSection(item.$2),
+                  child: Text(item.$1,
+                      style: C.of(context).body(
+                          color: _section == item.$2
+                              ? C.of(context).accent
+                              : C.of(context).textMuted)),
+                ),
+            ]),
+          )),
+        ]),
+      );
+
+  Widget _sectionBody() {
     final host = widget.hosted[_section];
     if (host != null) return host(context);
     switch (_section) {
+      case ConsoleSection.help:
+        return HelpScreen(initialTopic: _helpTopic);
+      case ConsoleSection.home:
+        return HomeDashboard(
+          machines: widget.healthMachines ?? widget.machines,
+          healthFor: (id) => widget.healthFor?.call(id) ?? MachineHealth.empty,
+          layout: widget.dashboardLayout,
+          onSaveLayout: widget.onSaveDashboard,
+          contextKey: widget.dashboardContextKey,
+          fleets: widget.fleets,
+          machineFleetIds: widget.machineFleetIds,
+          now: widget.now,
+          isLoading: widget.isLoading,
+          error: widget.dashboardError,
+          onOpenMachine: (id) {
+            _select(id);
+            _setSection(ConsoleSection.fleet);
+          },
+          onExploreHealth: () {
+            setState(() {
+              _selectedId = null;
+              _fleetTab = FleetTab.health;
+            });
+            _setSection(ConsoleSection.fleet);
+          },
+        );
       case ConsoleSection.fleet:
         return Column(
           crossAxisAlignment: CrossAxisAlignment.stretch,
           children: [
             _FleetTabs(
               tab: _fleetTab,
-              onChanged: (t) => setState(() => _fleetTab = t),
+              onChanged: (t) {
+                setState(() {
+                  _fleetTab = t;
+                  _selectedId = null;
+                });
+                widget.onSectionChanged?.call(t == FleetTab.automation
+                    ? ConsoleSection.automation
+                    : ConsoleSection.fleet);
+              },
             ),
             Expanded(
-              child: switch (_fleetTab) {
-                FleetTab.machines => FleetConsole(
-                    machines: widget.machines,
-                    samples: widget.samples,
-                    isRefreshing: widget.isRefreshing,
-                    isLoading: widget.isLoading,
-                    lastRefreshed: widget.lastRefreshed,
-                    selectedId: _selectedId,
-                    onSelect: _select,
-                    now: widget.now,
-                    embedded: true,
-                  ),
-                FleetTab.health => HealthBoard(
-                    machines: widget.healthMachines ?? widget.machines,
-                    healthFor: (id) =>
-                        widget.healthFor?.call(id) ?? MachineHealth.empty,
-                    now: widget.now,
-                  ),
-              },
+              child: AnimatedSwitcher(
+                duration: MediaQuery.of(context).disableAnimations
+                    ? Duration.zero
+                    : C.medium,
+                child: KeyedSubtree(
+                    key: ValueKey(_fleetTab),
+                    child: switch (_fleetTab) {
+                      FleetTab.machines => FleetConsole(
+                          machines: widget.machines,
+                          samples: widget.samples,
+                          isRefreshing: widget.isRefreshing,
+                          isLoading: widget.isLoading,
+                          lastRefreshed: widget.lastRefreshed,
+                          selectedId: _selectedId,
+                          onSelect: _select,
+                          now: widget.now,
+                          embedded: true,
+                        ),
+                      FleetTab.health => HealthBoard(
+                          machines: widget.healthMachines ?? widget.machines,
+                          healthFor: (id) =>
+                              widget.healthFor?.call(id) ?? MachineHealth.empty,
+                          now: widget.now,
+                        ),
+                      FleetTab.jobs => widget.hosted[ConsoleSection.tools]
+                              ?.call(context) ??
+                          const _HostedElsewhere(section: ConsoleSection.tools),
+                      FleetTab.automation => widget
+                              .hosted[ConsoleSection.automation]
+                              ?.call(context) ??
+                          const _HostedElsewhere(
+                              section: ConsoleSection.automation),
+                    }),
+              ),
             ),
           ],
         );
+      case ConsoleSection.machineHealth:
+        return HealthBoard(
+            footer: _selectedId == null
+                ? null
+                : widget.machineHealthFooter?.call(_selectedId!),
+            machines: _selected == null ? const [] : [_selected!],
+            healthFor: (id) =>
+                widget.healthFor?.call(id) ?? MachineHealth.empty,
+            now: widget.now);
       case ConsoleSection.terminal:
         return TerminalScreen(
           machine: _selected,
@@ -403,11 +641,16 @@ class _ConsoleShellState extends State<ConsoleShell> {
                 },
         );
       case ConsoleSection.settings:
-        return SettingsScreen(profiles: widget.profiles);
+        return SettingsScreen(
+            profiles: widget.profiles,
+            onActivate: widget.onProfileSelected == null
+                ? null
+                : (profile) => widget.onProfileSelected!(profile.name));
       case ConsoleSection.sessions:
       case ConsoleSection.tools:
       case ConsoleSection.automation:
       case ConsoleSection.network:
+      case ConsoleSection.diagnostics:
         // Supplied by the client through [hosted] once built; until then the
         // section says so rather than showing an empty frame.
         return _HostedElsewhere(section: _section);
@@ -422,76 +665,68 @@ class _ConsoleShellState extends State<ConsoleShell> {
   }
 }
 
-/// The two views of Fleet, as a strip under the title bar. Plain text tabs on
-/// a hairline, the way the table headers sit, not a Material tab bar with its
-/// ink and its animated indicator.
-class _FleetTabs extends StatelessWidget {
+/// Native tabs provide keyboard traversal and a moving selection indicator.
+class _FleetTabs extends StatefulWidget {
   const _FleetTabs({required this.tab, required this.onChanged});
-
   final FleetTab tab;
   final ValueChanged<FleetTab> onChanged;
-
   @override
-  Widget build(BuildContext context) {
-    return Container(
-      height: 40,
-      padding: const EdgeInsets.symmetric(horizontal: 24),
-      decoration: BoxDecoration(
-        color: C.bg,
-        border: Border(bottom: BorderSide(color: C.hairline)),
-      ),
-      child: Row(
-        children: [
-          for (final t in FleetTab.values) ...[
-            _FleetTabItem(
-              label: t == FleetTab.machines ? 'Machines' : 'Health',
-              active: t == tab,
-              onTap: () => onChanged(t),
-            ),
-            const SizedBox(width: 22),
-          ],
-        ],
-      ),
-    );
-  }
+  State<_FleetTabs> createState() => _FleetTabsState();
 }
 
-class _FleetTabItem extends StatelessWidget {
-  const _FleetTabItem(
-      {required this.label, required this.active, required this.onTap});
-
-  final String label;
-  final bool active;
-  final VoidCallback onTap;
+class _FleetTabsState extends State<_FleetTabs> with TickerProviderStateMixin {
+  TabController? _controller;
+  @override
+  void didChangeDependencies() {
+    super.didChangeDependencies();
+    final duration =
+        MediaQuery.of(context).disableAnimations ? Duration.zero : C.medium;
+    if (_controller == null || _controller!.animationDuration != duration) {
+      _controller?.dispose();
+      _controller = TabController(
+          length: FleetTab.values.length,
+          vsync: this,
+          initialIndex: widget.tab.index,
+          animationDuration: duration);
+    }
+  }
 
   @override
-  Widget build(BuildContext context) {
-    return MouseRegion(
-      cursor: SystemMouseCursors.click,
-      child: GestureDetector(
-        behavior: HitTestBehavior.opaque,
-        onTap: onTap,
-        child: Container(
-          padding: const EdgeInsets.only(top: 12),
-          decoration: BoxDecoration(
-            border: Border(
-              bottom: BorderSide(
-                color: active ? C.accent : Colors.transparent,
-                width: 2,
-              ),
-            ),
-          ),
-          child: Text(
-            label,
-            style: C.small(
-              color: active ? C.text : C.textMuted,
-              w: active ? FontWeight.w700 : FontWeight.w500,
-            ),
-          ),
-        ),
-      ),
-    );
+  void didUpdateWidget(covariant _FleetTabs old) {
+    super.didUpdateWidget(old);
+    if (_controller!.index != widget.tab.index) {
+      _controller!.animateTo(widget.tab.index);
+    }
   }
+
+  @override
+  void dispose() {
+    _controller?.dispose();
+    super.dispose();
+  }
+
+  @override
+  Widget build(BuildContext context) => TabBar(
+        controller: _controller,
+        isScrollable: true,
+        tabAlignment: TabAlignment.start,
+        labelStyle: C
+            .of(context)
+            .body()
+            .copyWith(fontSize: 16, fontWeight: FontWeight.w600),
+        labelColor: C.of(context).accent,
+        unselectedLabelColor: C.of(context).textMuted,
+        indicatorColor: C.of(context).accent,
+        dividerColor: C.of(context).hairline,
+        padding: const EdgeInsets.symmetric(horizontal: 24),
+        onTap: (index) => widget.onChanged(FleetTab.values[index]),
+        tabs: const [
+          Tab(text: 'Machines', height: 52),
+          Tab(text: 'Health', height: 52),
+          Tab(text: 'Jobs', height: 52),
+          Tab(text: 'Automation', height: 52)
+        ],
+      );
 }
 
 /// Stands in for a section the client owns, when there is no client.
@@ -508,15 +743,15 @@ class _HostedElsewhere extends StatelessWidget {
         child: Column(
           mainAxisSize: MainAxisSize.min,
           children: [
-            LdIcon(section.glyph, size: 28, color: C.textFaint),
+            LdIcon(section.glyph, size: 28, color: C.of(context).textFaint),
             const SizedBox(height: 12),
             Text('${section.label} is part of the running client',
-                style: C.h2(), textAlign: TextAlign.center),
+                style: C.of(context).h2(), textAlign: TextAlign.center),
             const SizedBox(height: 6),
             Text(
               'This harness renders the console without a client, so the '
               'sections the client supplies are not here.',
-              style: C.small(),
+              style: C.of(context).small(),
               textAlign: TextAlign.center,
             ),
           ],
@@ -537,6 +772,13 @@ class _Sidebar extends StatelessWidget {
     this.subItems = const {},
     this.selectedSubItem,
     this.onSubItemSelected,
+    this.organizations = const [],
+    this.activeOrganizationId,
+    this.onOrganizationSelected,
+    this.accountName = 'Signed out',
+    this.accountDescription,
+    this.onAccountPressed,
+    this.onTermsPressed,
   });
 
   final ConsoleSection section;
@@ -548,14 +790,21 @@ class _Sidebar extends StatelessWidget {
   final Map<ConsoleSection, List<ConsoleSubItem>> subItems;
   final String? selectedSubItem;
   final void Function(ConsoleSection section, String id)? onSubItemSelected;
+  final List<OrganizationSummary> organizations;
+  final String? activeOrganizationId;
+  final ValueChanged<String>? onOrganizationSelected;
+  final String accountName;
+  final String? accountDescription;
+  final VoidCallback? onAccountPressed;
+  final VoidCallback? onTermsPressed;
 
   @override
   Widget build(BuildContext context) {
     return Container(
       // Wide enough for "This machine" and a profile name beside its chevron;
       // the 216 it was left a gutter of nothing to the right of every label.
-      width: 184,
-      color: C.chrome,
+      width: 224,
+      color: C.of(context).chrome,
       child: Column(
         crossAxisAlignment: CrossAxisAlignment.stretch,
         children: [
@@ -571,10 +820,50 @@ class _Sidebar extends StatelessWidget {
                 const SizedBox(width: 10),
                 Flexible(
                   child: Text('LabDesk',
-                      overflow: TextOverflow.ellipsis, style: C.h1()),
+                      overflow: TextOverflow.ellipsis,
+                      style: C.of(context).h1()),
                 ),
               ],
             ),
+          ),
+          Padding(
+            padding: const EdgeInsets.fromLTRB(20, 8, 20, 24),
+            child: Column(
+                crossAxisAlignment: CrossAxisAlignment.stretch,
+                children: [
+                  Text('Organization', style: C.of(context).micro()),
+                  const SizedBox(height: 8),
+                  DropdownButtonFormField<String>(
+                    value: organizations
+                            .any((org) => org.id == activeOrganizationId)
+                        ? activeOrganizationId
+                        : null,
+                    isExpanded: true,
+                    dropdownColor: C.of(context).surface,
+                    style: C.of(context).body(),
+                    decoration: const InputDecoration(
+                        isDense: true,
+                        contentPadding:
+                            EdgeInsets.symmetric(horizontal: 10, vertical: 12)),
+                    hint: Text(
+                        organizations.isEmpty
+                            ? 'Sign in to choose'
+                            : 'Choose organization',
+                        style: C.of(context).small()),
+                    items: [
+                      for (final org in organizations)
+                        DropdownMenuItem(
+                            value: org.id,
+                            child: Text(org.name,
+                                overflow: TextOverflow.ellipsis)),
+                    ],
+                    onChanged: onOrganizationSelected == null
+                        ? null
+                        : (id) {
+                            if (id != null) onOrganizationSelected!(id);
+                          },
+                  ),
+                ]),
           ),
           // Scrolls rather than overflows. Seven sections plus the eight
           // settings pages nested under one of them is taller than a short
@@ -585,12 +874,21 @@ class _Sidebar extends StatelessWidget {
               child: Column(
                 crossAxisAlignment: CrossAxisAlignment.stretch,
                 children: [
-                  for (final s in ConsoleSection.values) ...[
+                  for (final s in primaryConsoleSections) ...[
                     _NavItem(
                       section: s,
-                      active: s == section,
-                      shortcut: ConsoleSection.values.indexOf(s) < 9
-                          ? 'Ctrl+${ConsoleSection.values.indexOf(s) + 1}'
+                      active: s == section ||
+                          (s == ConsoleSection.fleet &&
+                              [
+                                ConsoleSection.tools,
+                                ConsoleSection.terminal,
+                                ConsoleSection.actions,
+                                ConsoleSection.automation,
+                                ConsoleSection.diagnostics,
+                                ConsoleSection.machineHealth
+                              ].contains(section)),
+                      shortcut: primaryConsoleSections.indexOf(s) < 9
+                          ? 'Ctrl+${primaryConsoleSections.indexOf(s) + 1}'
                           : null,
                       onTap: () => onSelect(s),
                     ),
@@ -605,75 +903,70 @@ class _Sidebar extends StatelessWidget {
                           onTap: () => onSubItemSelected?.call(s, sub.id),
                         ),
                   ],
+                  const SizedBox(height: 24),
+                  _NavItem(
+                      section: ConsoleSection.connect,
+                      active: section == ConsoleSection.connect,
+                      onTap: () => onSelect(ConsoleSection.connect)),
+                  _NavItem(
+                      section: ConsoleSection.sessions,
+                      active: section == ConsoleSection.sessions,
+                      onTap: () => onSelect(ConsoleSection.sessions)),
                 ],
               ),
             ),
           ),
           if (selected != null) ...[
-            Divider(height: 1, thickness: 1, color: C.hairline),
+            Divider(height: 1, thickness: 1, color: C.of(context).hairline),
             Padding(
               padding: const EdgeInsets.fromLTRB(18, 12, 18, 12),
               child: Column(
                 crossAxisAlignment: CrossAxisAlignment.start,
                 children: [
-                  Text('Selected', style: C.micro()),
+                  Text('Selected', style: C.of(context).micro()),
                   const SizedBox(height: 4),
                   Text(
                     selected!.displayName,
                     overflow: TextOverflow.ellipsis,
-                    style: C.small(color: C.text, w: FontWeight.w600),
+                    style: C
+                        .of(context)
+                        .small(color: C.of(context).text, w: FontWeight.w600),
                   ),
                 ],
               ),
             ),
           ],
-          Divider(height: 1, thickness: 1, color: C.hairline),
-          _profileControl(),
+          _NavItem(
+              section: ConsoleSection.help,
+              active: section == ConsoleSection.help,
+              onTap: () => onSelect(ConsoleSection.help)),
+          _NavItem(
+              section: ConsoleSection.settings,
+              active: section == ConsoleSection.settings,
+              onTap: () => onSelect(ConsoleSection.settings)),
+          Padding(
+              padding: const EdgeInsets.fromLTRB(20, 16, 20, 4),
+              child: Column(children: [
+                Divider(height: 1, color: C.of(context).hairline),
+                TextButton(
+                    onPressed: onAccountPressed,
+                    child: Column(
+                        crossAxisAlignment: CrossAxisAlignment.start,
+                        children: [
+                          Text(accountName, style: C.of(context).body()),
+                          if (accountDescription != null)
+                            Text(accountDescription!,
+                                style: C.of(context).micro()),
+                        ])),
+                TextButton(
+                    onPressed: onTermsPressed,
+                    child: Text('Terms of Service',
+                        style: C
+                            .micro()
+                            .copyWith(decoration: TextDecoration.underline))),
+              ])),
         ],
       ),
-    );
-  }
-
-  /// The active server profile, and the way to change it.
-  ///
-  /// This was a label with a chevron drawn beside it and nothing behind the
-  /// chevron. It now opens the console's own menu over the profiles the client
-  /// supplied; with no way to act on a pick it stays a label, without the
-  /// chevron, so it never promises what it cannot do.
-  Widget _profileControl() {
-    final canPick = onProfileSelected != null && profiles.isNotEmpty;
-    Widget face(bool focused, bool hovered) => Container(
-          padding: const EdgeInsets.fromLTRB(18, 12, 18, 16),
-          color: hovered ? C.surfaceHi : Colors.transparent,
-          child: Column(
-            crossAxisAlignment: CrossAxisAlignment.start,
-            children: [
-              Text('Server profile', style: C.micro()),
-              const SizedBox(height: 5),
-              Row(
-                children: [
-                  Expanded(
-                    child: Text(profileName,
-                        overflow: TextOverflow.ellipsis, style: C.body()),
-                  ),
-                  if (canPick)
-                    LdIcon(LdIcons.chevronDown,
-                        size: 15, color: focused ? C.accent : C.textFaint),
-                ],
-              ),
-            ],
-          ),
-        );
-    if (!canPick) return face(false, false);
-    return ConsoleMenuButton<String>(
-      tooltip: 'Switch server profile',
-      entries: () => [
-        const ConsoleMenuHeading<String>('Server profile'),
-        for (final p in profiles)
-          ConsoleMenuAction<String>(p.name, p.name, checked: p.active),
-      ],
-      onSelected: onProfileSelected!,
-      builder: face,
     );
   }
 }
@@ -740,7 +1033,9 @@ class _NavItemState extends State<_NavItem> {
 
   @override
   Widget build(BuildContext context) {
-    final fg = widget.active ? C.text : (_hover ? C.text : C.textMuted);
+    final fg = widget.active
+        ? C.of(context).text
+        : (_hover ? C.of(context).text : C.of(context).textMuted);
     return Padding(
       padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 1),
       child: Tooltip(
@@ -755,15 +1050,15 @@ class _NavItemState extends State<_NavItem> {
           focused: _focused,
           child: AnimatedContainer(
             duration: C.fast,
-            height: 34,
+            height: 44,
             padding: const EdgeInsets.only(right: 10),
             decoration: BoxDecoration(
               color: widget.active
-                  ? C.accent.withOpacity(0.14)
-                  : (_hover ? C.surfaceHi : Colors.transparent),
+                  ? C.of(context).accent.withOpacity(0.14)
+                  : (_hover ? C.of(context).surfaceHi : Colors.transparent),
               borderRadius: C.roundedSm,
               border: Border.all(
-                color: _focused ? C.focusRing : Colors.transparent,
+                color: _focused ? C.of(context).focusRing : Colors.transparent,
                 width: 1,
               ),
             ),
@@ -777,22 +1072,24 @@ class _NavItemState extends State<_NavItem> {
                   width: 2,
                   height: 18,
                   decoration: BoxDecoration(
-                    color: widget.active ? C.accent : Colors.transparent,
+                    color: widget.active
+                        ? C.of(context).accent
+                        : Colors.transparent,
                     borderRadius: BorderRadius.circular(1),
                   ),
                 ),
                 const SizedBox(width: 8),
                 LdIcon(widget.section.glyph,
-                    size: 16, color: widget.active ? C.accent : fg),
+                    size: 16, color: widget.active ? C.of(context).accent : fg),
                 const SizedBox(width: 10),
                 Flexible(
                   child: Text(
                     widget.section.label,
                     overflow: TextOverflow.ellipsis,
-                    style: C.small(
-                      color: fg,
-                      w: widget.active ? FontWeight.w700 : FontWeight.w500,
-                    ),
+                    style: C.of(context).small(
+                          color: fg,
+                          w: widget.active ? FontWeight.w700 : FontWeight.w500,
+                        ),
                   ),
                 ),
               ],
@@ -812,6 +1109,7 @@ class _TitleBar extends StatelessWidget {
     required this.lastRefreshed,
     required this.onRefresh,
     this.now,
+    this.onHelp,
   });
 
   final ConsoleSection section;
@@ -820,22 +1118,27 @@ class _TitleBar extends StatelessWidget {
   final DateTime? lastRefreshed;
   final VoidCallback? onRefresh;
   final DateTime? now;
+  final VoidCallback? onHelp;
 
   @override
   Widget build(BuildContext context) {
     return Container(
       height: 60,
       decoration: BoxDecoration(
-        color: C.bg,
-        border: Border(bottom: BorderSide(color: C.hairline)),
+        color: C.of(context).bg,
+        border: Border(bottom: BorderSide(color: C.of(context).hairline)),
       ),
       padding: const EdgeInsets.symmetric(horizontal: 24),
       child: Row(
         children: [
-          Text(section.label, style: C.h1()),
+          Text(section.label, style: C.of(context).h1()),
           if (section.needsMachine && machine != null) ...[
             const SizedBox(width: 12),
-            Text('/', style: C.h1().copyWith(color: C.textFaint)),
+            Text('/',
+                style: C
+                    .of(context)
+                    .h1()
+                    .copyWith(color: C.of(context).textFaint)),
             const SizedBox(width: 12),
             // Flexible with an ellipsis: a machine can be named anything, and
             // an unbounded Text beside a Spacer overflows the title bar.
@@ -843,19 +1146,27 @@ class _TitleBar extends StatelessWidget {
               child: Text(
                 machine!.displayName,
                 overflow: TextOverflow.ellipsis,
-                style: C.h1().copyWith(color: C.textMuted),
+                style:
+                    C.of(context).h1().copyWith(color: C.of(context).textMuted),
               ),
             ),
           ],
           const Spacer(),
+          if (onHelp != null)
+            IconButton(
+              tooltip: 'Help for this page',
+              onPressed: onHelp,
+              icon: const Icon(Icons.help_outline, size: 20),
+            ),
           // Both surfaces that show whether a machine is reachable can ask
           // again. Reachability is polled, so without this the operator cannot
           // tell a stale dot from a machine that is genuinely down.
           if (onRefresh != null &&
-              (section == ConsoleSection.fleet ||
+              (section == ConsoleSection.home ||
+                  section == ConsoleSection.fleet ||
                   section == ConsoleSection.connect)) ...[
             Text(_stamp(lastRefreshed, now),
-                style: C.small(color: C.textFaint)),
+                style: C.of(context).small(color: C.of(context).textFaint)),
             const SizedBox(width: 12),
             GhostButton(
               label: 'Refresh',
@@ -902,7 +1213,9 @@ class _SubNavItemState extends State<_SubNavItem> {
 
   @override
   Widget build(BuildContext context) {
-    final fg = widget.active ? C.text : (_hover ? C.text : C.textMuted);
+    final fg = widget.active
+        ? C.of(context).text
+        : (_hover ? C.of(context).text : C.of(context).textMuted);
     return _navFocusable(
       label: widget.item.label,
       active: widget.active,
@@ -916,10 +1229,10 @@ class _SubNavItemState extends State<_SubNavItem> {
         margin: const EdgeInsets.fromLTRB(10, 1, 10, 1),
         padding: const EdgeInsets.only(left: 28, right: 10),
         decoration: BoxDecoration(
-          color: widget.active ? C.surfaceHi : Colors.transparent,
+          color: widget.active ? C.of(context).surfaceHi : Colors.transparent,
           borderRadius: C.roundedSm,
           border: Border.all(
-            color: _focused ? C.focusRing : Colors.transparent,
+            color: _focused ? C.of(context).focusRing : Colors.transparent,
             width: 1,
           ),
         ),
@@ -930,17 +1243,18 @@ class _SubNavItemState extends State<_SubNavItem> {
             Container(
               width: 2,
               height: 12,
-              color: widget.active ? C.accent : C.hairline,
+              color:
+                  widget.active ? C.of(context).accent : C.of(context).hairline,
             ),
             const SizedBox(width: 10),
             Expanded(
               child: Text(
                 widget.item.label,
                 overflow: TextOverflow.ellipsis,
-                style: C.small(
-                  color: fg,
-                  w: widget.active ? FontWeight.w600 : FontWeight.w500,
-                ),
+                style: C.of(context).small(
+                      color: fg,
+                      w: widget.active ? FontWeight.w600 : FontWeight.w500,
+                    ),
               ),
             ),
           ],

@@ -16,13 +16,20 @@ class _Organization {
   bool refuseEnrolment = false;
   int refreshed = 0;
   int completed = 0;
+  String organizationId = 'org-a';
+  String credential = 'signed-in-account';
+  final scopes = <String>[];
+  Future<void> Function(String method, String path)? beforeReply;
 
   late final broker = OverlayBroker(
     baseUrl: 'https://lab-desk.net',
-    token: () => 'signed-in-account',
+    token: () => credential,
+    organizationId: () => organizationId,
     http: (method, url, headers, body) async {
-      expect(headers['authorization'], 'Bearer signed-in-account');
+      scopes.add(
+          '${headers['authorization']}/${headers['x-labdesk-organization']}');
       calls.add('$method ${url.path}${body == null ? '' : ' $body'}');
+      if (beforeReply != null) await beforeReply!(method, url.path);
       if (method == 'POST' && stale) {
         return (403, '{"error":"Sign in again to confirm this change."}');
       }
@@ -64,6 +71,7 @@ Future<void> _show(WidgetTester t, _Organization org,
     String machineId = '',
     Future<void> Function()? checkService,
     Future<String> Function(String)? enrol,
+    Future<OverlayBroker?> Function()? refreshBroker,
     Future<void> Function()? onEnrolled}) async {
   await t.pumpWidget(MaterialApp(
     theme: C.theme(),
@@ -77,6 +85,11 @@ Future<void> _show(WidgetTester t, _Organization org,
               machineId: machineId,
               checkService: checkService,
               signIn: org.signIn,
+              refreshBroker: refreshBroker ??
+                  () async {
+                    await org.signIn();
+                    return org.broker.captureScope();
+                  },
               enrol: enrol ?? org.enrol,
               onEnrolled: onEnrolled ??
                   () async {
@@ -90,6 +103,188 @@ Future<void> _show(WidgetTester t, _Organization org,
 }
 
 void main() {
+  testWidgets(
+      'keyed sign-in remount never retries the captured signed-out broker',
+      (t) async {
+    var signedIn = false;
+    var logins = 0;
+    var reauths = 0;
+    final broker = OverlayBroker(
+      baseUrl: 'https://lab-desk.net',
+      token: () => signedIn ? 'verified-account' : '',
+      organizationId: () => signedIn ? 'org-a' : null,
+      http: (method, url, headers, body) async {
+        if (headers['authorization'] == 'Bearer ') {
+          return (401, '{"error":"Sign in required."}');
+        }
+        if (url.path == '/console/org') return (200, '{"role":"owner"}');
+        if (url.path == '/console/org/fleets') return (200, '{"fleets":[]}');
+        throw StateError('Unexpected request: $method $url');
+      },
+    );
+    await t.pumpWidget(MaterialApp(
+      theme: C.theme(),
+      home: Scaffold(body: StatefulBuilder(builder: (context, setParentState) {
+        return SingleChildScrollView(
+            child: MachineEnrolCard(
+          key: ValueKey(signedIn),
+          broker: broker.captureScope(),
+          signedIn: signedIn,
+          enrol: (_) async => throw StateError('Sign-in must not enroll'),
+          signIn: () async {
+            logins++;
+            // A successful controller sync notifies the parent before its
+            // Future returns. The next frame remounts this keyed card.
+            setParentState(() => signedIn = true);
+            return true;
+          },
+          refreshBroker: () async {
+            reauths++;
+            return broker.captureScope();
+          },
+        ));
+      })),
+    ));
+    await t.tap(find.text('Sign in to add this machine'));
+    await t.pumpAndSettle();
+    expect(logins, 1);
+    expect(reauths, 0);
+    expect(find.byKey(const Key('enrol-fleet-name')), findsOneWidget);
+  });
+
+  testWidgets('organization change during service check cannot create a fleet',
+      (t) async {
+    final org = _Organization();
+    final service = Completer<void>();
+    await _show(t, org, checkService: () => service.future);
+    await t.enterText(
+        find.byKey(const Key('enrol-fleet-name')), 'Original lab');
+    await t.pump();
+    await t.tap(find.byKey(const Key('enrol-submit')));
+    await t.pump();
+    org.organizationId = 'org-b';
+    service.complete();
+    await t.pumpAndSettle();
+    expect(org.calls.where((c) => c.startsWith('POST')), isEmpty);
+    expect(org.spent, isEmpty);
+  });
+
+  testWidgets('disposed card cannot mutate after service check completes',
+      (t) async {
+    final org = _Organization();
+    final service = Completer<void>();
+    await _show(t, org, checkService: () => service.future);
+    await t.enterText(
+        find.byKey(const Key('enrol-fleet-name')), 'Original lab');
+    await t.pump();
+    await t.tap(find.byKey(const Key('enrol-submit')));
+    await t.pump();
+    await t.pumpWidget(const SizedBox.shrink());
+    service.complete();
+    await t.pumpAndSettle();
+    expect(org.calls.where((c) => c.startsWith('POST')), isEmpty);
+    expect(org.spent, isEmpty);
+    expect(t.takeException(), isNull);
+  });
+
+  testWidgets('cancelled identity verification cannot replay a stale mutation',
+      (t) async {
+    final org = _Organization()..stale = true;
+    final refresh = Completer<OverlayBroker?>();
+    await _show(t, org, refreshBroker: () => refresh.future);
+    await t.enterText(
+        find.byKey(const Key('enrol-fleet-name')), 'Original lab');
+    await t.pump();
+    await t.tap(find.byKey(const Key('enrol-submit')));
+    await t.pump();
+    org.credential = 'different-account';
+    refresh.complete(null);
+    await t.pumpAndSettle();
+    expect(org.calls.where((c) => c.startsWith('POST')), hasLength(1));
+    expect(org.fleets, isEmpty);
+    expect(org.spent, isEmpty);
+  });
+
+  testWidgets('disposed card cannot replay after authentication returns',
+      (t) async {
+    final org = _Organization()..stale = true;
+    final refresh = Completer<OverlayBroker?>();
+    await _show(t, org, refreshBroker: () => refresh.future);
+    await t.enterText(
+        find.byKey(const Key('enrol-fleet-name')), 'Original lab');
+    await t.pump();
+    await t.tap(find.byKey(const Key('enrol-submit')));
+    await t.pump();
+    await t.pumpWidget(const SizedBox.shrink());
+    org.stale = false;
+    refresh.complete(org.broker);
+    await t.pumpAndSettle();
+    expect(org.calls.where((c) => c.startsWith('POST')), hasLength(1));
+    expect(org.spent, isEmpty);
+    expect(t.takeException(), isNull);
+  });
+
+  testWidgets('verified same-context refresh pins the new bearer for the chain',
+      (t) async {
+    final org = _Organization()..stale = true;
+    await _show(t, org, refreshBroker: () async {
+      org.credential = 'fresh-same-account';
+      org.stale = false;
+      return org.broker.captureScope();
+    });
+    await t.enterText(
+        find.byKey(const Key('enrol-fleet-name')), 'Original lab');
+    await t.pump();
+    await t.tap(find.byKey(const Key('enrol-submit')));
+    await t.pumpAndSettle();
+    expect(org.fleets, hasLength(1));
+    expect(org.spent, ['single-use-token']);
+    expect(org.scopes.skip(org.scopes.length - 2),
+        everyElement('Bearer fresh-same-account/org-a'));
+  });
+
+  testWidgets(
+      'different-organization refresh cannot replay the original action',
+      (t) async {
+    final org = _Organization()..stale = true;
+    await _show(t, org, refreshBroker: () async {
+      org.organizationId = 'org-b';
+      org.stale = false;
+      return org.broker.captureScope();
+    });
+    await t.enterText(
+        find.byKey(const Key('enrol-fleet-name')), 'Original lab');
+    await t.pump();
+    await t.tap(find.byKey(const Key('enrol-submit')));
+    await t.pumpAndSettle();
+    expect(org.calls.where((c) => c.startsWith('POST')), hasLength(1));
+    expect(org.fleets, isEmpty);
+    expect(org.spent, isEmpty);
+  });
+
+  testWidgets('organization switch after token dispatch cannot enroll the host',
+      (t) async {
+    final token = Completer<void>();
+    final org = _Organization()
+      ..beforeReply = (method, path) async {
+        if (path == '/console/org/enrol-token') await token.future;
+      };
+    await _show(t, org);
+    await t.enterText(
+        find.byKey(const Key('enrol-fleet-name')), 'Original lab');
+    await t.pump();
+    await t.tap(find.byKey(const Key('enrol-submit')));
+    await t.pump();
+    expect(org.calls.last, contains('/console/org/enrol-token'));
+    org.organizationId = 'org-b';
+    token.complete();
+    await t.pumpAndSettle();
+    expect(org.fleets, hasLength(1),
+        reason: 'original fleet already committed');
+    expect(org.spent, isEmpty);
+    expect(org.scopes, everyElement('Bearer signed-in-account/org-a'));
+  });
+
   testWidgets('missing privileged service blocks fleet and token creation',
       (t) async {
     final org = _Organization();

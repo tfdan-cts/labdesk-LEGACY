@@ -14,6 +14,8 @@ const kOverlayRequiredOption = 'labdesk-overlay-required-';
 /// `src/client.rs` on the connect, and cleared here with the other two.
 const kOverlayTicketOption = 'labdesk-ticket-';
 
+typedef _ScopedGrant = ({SessionGrant grant, OverlayBroker broker});
+
 /// A session grant from lab-desk.net, from asking for it to releasing it.
 ///
 /// `prepare` asks for the rule, waits until this machine's daemon reports the
@@ -41,9 +43,9 @@ class OverlaySession {
   final Future<void> Function(Duration) _sleep;
 
   /// Granted sessions by peer id, and whether the console has seen each open.
-  final _grants = <String, ({List<SessionGrant> grants, bool seenOpen})>{};
+  final _grants = <String, ({List<_ScopedGrant> grants, bool seenOpen})>{};
   final _preparing = <String>{};
-  final _pendingReleases = <String>{};
+  final _pendingReleases = <({String id, OverlayBroker broker})>{};
   int _generation = 0;
 
   String lastError = '';
@@ -63,6 +65,7 @@ class OverlaySession {
       return false;
     }
     SessionGrant? grant;
+    late final OverlayBroker scopedBroker;
     var prepared = false;
     final generation = _generation;
     bool cancelled() {
@@ -77,11 +80,14 @@ class OverlaySession {
     lastStatus = null;
     lastLink = OverlayLinkType.unknown;
     try {
+      // Every await may outlive a console account or organization switch.
+      // Keep creation, readiness and all cleanup under the original scope.
+      scopedBroker = broker.captureScope(targetPeerId: peerId);
       var creationTimedOut = false;
-      final creating = broker.session(peerId).then((created) async {
+      final creating = scopedBroker.session(peerId).then((created) async {
         // Creation changes server state. Retain ownership of a late answer
         // so timing out the caller cannot abandon the returned grant.
-        if (creationTimedOut) await _endGrant(created.id);
+        if (creationTimedOut) await _endGrant(created.id, scopedBroker);
         return created;
       });
       grant = await creating.timeout(remaining(), onTimeout: () {
@@ -107,7 +113,8 @@ class OverlaySession {
         final status = lastStatus = await daemon.status().timeout(remaining());
         if (cancelled()) return false;
         final peer = status.peerAt(ip);
-        ticketReady = await broker.sessionReady(grant.id).timeout(remaining());
+        ticketReady =
+            await scopedBroker.sessionReady(grant.id).timeout(remaining());
         if (cancelled()) return false;
         if (status.isUp && (peer?.connected ?? false) && ticketReady) {
           lastLink = peer!.link;
@@ -133,7 +140,7 @@ class OverlaySession {
       if (cancelled()) return false;
       final previous = _grants[peerId];
       _grants[peerId] = (
-        grants: [...?previous?.grants, grant],
+        grants: [...?previous?.grants, (grant: grant, broker: scopedBroker)],
         seenOpen: previous?.seenOpen ?? false,
       );
       _unseenPolls[peerId] = 0;
@@ -155,7 +162,7 @@ class OverlaySession {
         if (!prepared) await _clearHints(peerId);
       } finally {
         try {
-          if (grant != null) await _endGrant(grant.id);
+          if (grant != null) await _endGrant(grant.id, scopedBroker);
         } finally {
           _preparing.remove(peerId);
         }
@@ -193,26 +200,27 @@ class OverlaySession {
       await _clearHints(peerId);
     } finally {
       for (final grant in g.grants) {
-        await _endGrant(grant.id);
+        await _endGrant(grant.grant.id, grant.broker);
       }
     }
   }
 
-  Future<void> _endGrant(String id) async {
-    _pendingReleases.add(id);
+  Future<void> _endGrant(String id, OverlayBroker scopedBroker) async {
+    final release = (id: id, broker: scopedBroker);
+    _pendingReleases.add(release);
     try {
       // DELETE is idempotent. A late response can safely be ignored and the
       // release retried, unlike session creation or publishing dial hints.
-      if (await broker.endSession(id).timeout(const Duration(seconds: 10),
-          onTimeout: () => false)) _pendingReleases.remove(id);
+      if (await scopedBroker.endSession(id).timeout(const Duration(seconds: 10),
+          onTimeout: () => false)) _pendingReleases.remove(release);
     } catch (_) {
       // A failed release remains owned here until the next session poll.
     }
   }
 
   Future<void> _retryReleases() async {
-    for (final id in _pendingReleases.toList()) {
-      await _endGrant(id);
+    for (final release in _pendingReleases.toList()) {
+      await _endGrant(release.id, release.broker);
     }
   }
 

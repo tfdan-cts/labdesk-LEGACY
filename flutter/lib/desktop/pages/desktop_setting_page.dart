@@ -275,7 +275,7 @@ class _DesktopSettingPageState extends State<DesktopSettingPage>
   Widget build(BuildContext context) {
     super.build(context);
     return Scaffold(
-      backgroundColor: C.bg,
+      backgroundColor: C.of(context).bg,
       body: _buildBlock(
         children: <Widget>[
           // The standalone settings window keeps its own rail, because nothing
@@ -283,7 +283,7 @@ class _DesktopSettingPageState extends State<DesktopSettingPage>
           // built: the console nests the page bodies in its own sidebar, so
           // there is one rail on screen and not two.
           ColoredBox(
-            color: C.chrome,
+            color: C.of(context).chrome,
             child: SizedBox(
               width: _kTabWidth,
               child: Column(
@@ -294,10 +294,10 @@ class _DesktopSettingPageState extends State<DesktopSettingPage>
               ),
             ),
           ),
-          const VerticalDivider(width: 1, thickness: 1, color: C.hairline),
+          VerticalDivider(width: 1, thickness: 1, color: C.of(context).hairline),
           Expanded(
             child: Container(
-              color: C.bg,
+              color: C.of(context).bg,
               child: PageView(
                 controller: controller,
                 physics: NeverScrollableScrollPhysics(),
@@ -314,7 +314,7 @@ class _DesktopSettingPageState extends State<DesktopSettingPage>
     final settingsText = Text(
       translate('Settings'),
       textAlign: TextAlign.left,
-      style: C.h1(),
+      style: C.of(context).h1(),
     );
     return Row(
       children: [
@@ -325,7 +325,8 @@ class _DesktopSettingPageState extends State<DesktopSettingPage>
                 Navigator.pop(context);
               }
             },
-            icon: const LdIcon(LdIcons.chevronLeft, size: 18, color: C.textMuted),
+            icon: LdIcon(LdIcons.chevronLeft,
+                size: 18, color: C.of(context).textMuted),
           ).marginOnly(left: 5),
         if (isWeb)
           SizedBox(
@@ -407,8 +408,8 @@ class _RailItemState extends State<_RailItem> {
   @override
   Widget build(BuildContext context) {
     final fg = widget.selected
-        ? C.text
-        : (_hover ? C.text : C.textMuted);
+        ? C.of(context).text
+        : (_hover ? C.of(context).text : C.of(context).textMuted);
     return MouseRegion(
       cursor: SystemMouseCursors.click,
       onEnter: (_) => setState(() => _hover = true),
@@ -423,13 +424,13 @@ class _RailItemState extends State<_RailItem> {
           padding: const EdgeInsets.symmetric(horizontal: 11),
           decoration: BoxDecoration(
             color: widget.selected
-                ? C.accent.withOpacity(0.14)
-                : (_hover ? C.surface : Colors.transparent),
+                ? C.of(context).accent.withOpacity(0.14)
+                : (_hover ? C.of(context).surface : Colors.transparent),
             borderRadius: C.roundedSm,
           ),
           child: Row(children: [
             Icon(widget.icon,
-                size: 18, color: widget.selected ? C.accent : fg),
+                size: 18, color: widget.selected ? C.of(context).accent : fg),
             const SizedBox(width: 11),
             Expanded(
               child: Text(
@@ -439,8 +440,8 @@ class _RailItemState extends State<_RailItem> {
                 // a real semibold rather than in a weight the variable font
                 // was never asked for.
                 style: widget.selected
-                    ? C.h2().copyWith(fontSize: 13.5, color: fg)
-                    : C.body(color: fg),
+                    ? C.of(context).h2().copyWith(fontSize: 13.5, color: fg)
+                    : C.of(context).body(color: fg),
               ),
             ),
           ]),
@@ -826,7 +827,7 @@ class _GeneralState extends State<_General> {
             label: translate(
                 bind.isIncomingOnly() ? "Directory" : "Incoming"),
             controlAbove: true,
-            control: _directoryPath(root_dir, root_dir_exists),
+            control: _directoryPath(context, root_dir, root_dir_exists),
           ),
         if (!(showRootDir && bind.isIncomingOnly()))
           SettingsRow(
@@ -836,7 +837,8 @@ class _GeneralState extends State<_General> {
             controlAbove: true,
             control: Row(
               children: [
-                Expanded(child: _directoryPath(user_dir, user_dir_exists)),
+                Expanded(
+                    child: _directoryPath(context, user_dir, user_dir_exists)),
                 const SizedBox(width: 12),
                 LdButton(
                   label: translate('Change'),
@@ -1408,7 +1410,7 @@ class _SafetyState extends State<_Safety> with AutomaticKeepAliveClientMixin {
               // mark beside the label. Drawn in the console's one warning
               // colour rather than in a borrowed amber.
               leading: hasWhitelist.value
-                  ? const LdIcon(LdIcons.alert, size: 15, color: C.bad)
+                  ? LdIcon(LdIcons.alert, size: 15, color: C.of(context).bad)
                   : null,
               onTap: enabled ? () => onChanged(!hasWhitelist.value) : null,
               control: LdSwitch(
@@ -1440,7 +1442,7 @@ class _SafetyState extends State<_Safety> with AutomaticKeepAliveClientMixin {
             label: translate('Allowed IDs'),
             enabled: enabled,
             leading: hasIdWhitelist.value
-                ? const LdIcon(LdIcons.alert, size: 15, color: C.bad)
+                ? LdIcon(LdIcons.alert, size: 15, color: C.of(context).bad)
                 : null,
             onTap: enabled ? () => onChanged(!hasIdWhitelist.value) : null,
             control: LdSwitch(
@@ -1629,7 +1631,10 @@ class _NetworkState extends State<_Network> with AutomaticKeepAliveClientMixin {
             (onTap == null
                 ? null
                 : LdIcon(LdIcons.chevronRight,
-                    size: 15, color: locked ? C.textFaint : C.textMuted)),
+                    size: 15,
+                    color: locked
+                        ? C.of(context).textFaint
+                        : C.of(context).textMuted)),
       );
       if (tooltipMessage.isEmpty) return r;
       return Tooltip(
@@ -2045,9 +2050,9 @@ class _AccountState extends State<_Account> {
             margin: const EdgeInsets.fromLTRB(8, 4, 8, 10),
             padding: const EdgeInsets.all(13),
             decoration: BoxDecoration(
-              color: C.surface,
+              color: C.of(context).surface,
               borderRadius: C.rounded,
-              border: Border.all(color: C.hairline),
+              border: Border.all(color: C.of(context).hairline),
             ),
             child: Builder(builder: (context) {
               final avatarWidget = _buildUserAvatar();
@@ -2063,7 +2068,7 @@ class _AccountState extends State<_Account> {
                           gFFI.userModel.displayNameOrUserName,
                           maxLines: 1,
                           overflow: TextOverflow.ellipsis,
-                          style: C.h2(),
+                          style: C.of(context).h2(),
                         ),
                         const SizedBox(height: 3),
                         SelectionArea(
@@ -2071,7 +2076,8 @@ class _AccountState extends State<_Account> {
                             '@${gFFI.userModel.userName.value}',
                             maxLines: 1,
                             overflow: TextOverflow.ellipsis,
-                            style: C.data(size: 12, color: C.textMuted),
+                            style: C.of(context)
+                                .data(size: 12, color: C.of(context).textMuted),
                           ),
                         ),
                       ],
@@ -2231,7 +2237,7 @@ class __PrinterState extends State<_Printer> {
         Obx(
           () => failedMsg.value.isEmpty
               ? Offstage()
-              : SettingsNote(failedMsg.value, tone: C.bad),
+              : SettingsNote(failedMsg.value, tone: C.of(context).bad),
         ),
         _Button('Install {$appName} Printer', () {
           failedMsg.value = '';
@@ -2368,9 +2374,9 @@ class _AboutState extends State<_About> {
             margin: const EdgeInsets.fromLTRB(8, 14, 8, 0),
             padding: const EdgeInsets.all(16),
             decoration: BoxDecoration(
-              color: C.surface,
+              color: C.of(context).surface,
               borderRadius: C.rounded,
-              border: Border.all(color: C.hairline),
+              border: Border.all(color: C.of(context).hairline),
             ),
             child: SelectionArea(
               child: Column(
@@ -2378,10 +2384,10 @@ class _AboutState extends State<_About> {
                 children: [
                   Text(
                     'Copyright © ${DateTime.now().toString().substring(0, 4)} LabDesk contributors. Based on RustDesk, © Purslane Tech Pte. Ltd.\n$license',
-                    style: C.small(color: C.textMuted),
+                    style: C.of(context).small(color: C.of(context).textMuted),
                   ),
                   const SizedBox(height: 8),
-                  Text(translate('Slogan_tip'), style: C.body()),
+                  Text(translate('Slogan_tip'), style: C.of(context).body()),
                 ],
               ),
             ),
@@ -2638,7 +2644,8 @@ class _WaylandCardState extends State<WaylandCard> {
       Obx(
         () => _clearShortcutsInhibitorFailedMsg.value.isEmpty
             ? Offstage()
-            : SettingsNote(_clearShortcutsInhibitorFailedMsg.value, tone: C.bad),
+            : SettingsNote(_clearShortcutsInhibitorFailedMsg.value,
+                tone: C.of(context).bad),
       ),
       _Button(
         'Reset keyboard shortcuts permission',
@@ -2679,7 +2686,8 @@ class _InlineRadio extends StatelessWidget {
             LdRadioMark(selected: selected, enabled: enabled),
             const SizedBox(width: 8),
             Text(label,
-                style: C.body(color: SettingsSkin.label(enabled))),
+                style: C.of(context)
+                    .body(color: SettingsSkin.label(enabled, context))),
           ]),
         ),
       ),
@@ -2690,11 +2698,13 @@ class _InlineRadio extends StatelessWidget {
 /// A directory on this machine, which is data, so it is set in the data face.
 /// It opens the folder when there is one to open and says nothing when there
 /// is not, exactly as before.
-Widget _directoryPath(String dir, bool exists) {
+Widget _directoryPath(BuildContext context, String dir, bool exists) {
   final text = Text(
     dir,
     softWrap: true,
-    style: C.data(size: 12, color: exists ? C.text : C.textFaint),
+    style: C.of(context).data(
+        size: 12,
+        color: exists ? C.of(context).text : C.of(context).textFaint),
   );
   if (!exists) return text;
   return MouseRegion(
@@ -3081,7 +3091,7 @@ List<SettingsPageInfo> settingsPages() {
   const labels = {
     SettingsTabKey.general: ('General', Icons.settings_outlined),
     SettingsTabKey.safety: ('Security', Icons.enhanced_encryption_outlined),
-    SettingsTabKey.network: ('Network', Icons.link_outlined),
+    SettingsTabKey.network: ('Advanced connections', Icons.link_outlined),
     SettingsTabKey.display: ('Display', Icons.desktop_windows_outlined),
     SettingsTabKey.plugin: ('Plugin', Icons.extension_outlined),
     SettingsTabKey.account: ('Account', Icons.person_outline),
