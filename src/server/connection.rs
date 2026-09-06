@@ -91,7 +91,10 @@ lazy_static::lazy_static! {
     static ref WAKELOCK_KEEP_AWAKE_OPTION: Arc::<Mutex<Option<bool>>> = Default::default();
     // Connect tickets (src/labdesk/ticket.rs): on every build, unlike the switch-sides map below.
     static ref PENDING_TICKETS: Arc::<Mutex<Vec<PendingTicket>>> = Default::default();
-    #[cfg(test)]
+}
+
+#[cfg(test)]
+lazy_static::lazy_static! {
     static ref SPENT_TICKETS: Mutex<ResultType<crate::labdesk::ticket::SpentTickets>> = Mutex::new({
         let path = std::env::temp_dir().join(format!("labdesk-spent-{}.json", uuid::Uuid::new_v4()));
         crate::labdesk::ticket::SpentTickets::load(path)
