@@ -101,6 +101,11 @@ impl AgentIdentity {
         Self::load_or_create_at(&Self::path())
     }
 
+    /// Read-only reload for background workers; only enrollment creates keys.
+    pub fn load_existing() -> ResultType<Option<Self>> {
+        Self::load_from(&Self::path())
+    }
+
     fn load_or_create_at(path: &Path) -> ResultType<Self> {
         if let Some(identity) = Self::load_from(path)? {
             return Ok(identity);

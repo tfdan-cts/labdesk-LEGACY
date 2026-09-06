@@ -143,7 +143,7 @@ void showServerSettingsWithValue(
     return CustomAlertDialog(
       title: Row(
         children: [
-          Expanded(child: Text(translate('ID/Relay Server'))),
+            Expanded(child: Text(translate('RustDesk ID/Relay Server'))),
           ...ServerConfigImportExportWidgets(controllers, errMsgs),
         ],
       ),
@@ -152,8 +152,16 @@ void showServerSettingsWithValue(
         child: Form(
           child: Obx(() => Column(
                 mainAxisSize: MainAxisSize.min,
-                children: [
-                  buildField(translate('ID Server'), idCtrl, idServerMsg.value,
+                  children: [
+                    const Padding(
+                      padding: EdgeInsets.only(bottom: 16),
+                      child: Text(
+                        'These settings control RustDesk connections. Empty fields '
+                        'use the built-in RustDesk servers. To join labnet, add this '
+                        'machine to your organization and enable labnet in the console.',
+                      ),
+                    ),
+                    buildField(translate('ID Server'), idCtrl, idServerMsg.value,
                       autofocus: true),
                   SizedBox(height: 8),
                   if (!isIOS && !isWeb) ...[

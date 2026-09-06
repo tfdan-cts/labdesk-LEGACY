@@ -47,13 +47,22 @@ class LabDeskMachineLink {
   /// The link to a peer, opened if there is none. Null when it could not be
   /// authenticated in time; the reason is whatever the far side wanted, and
   /// the caller says so rather than guessing.
-  static Future<FFI?> open(String peerId) {
+  static Future<FFI?> open(String peerId,
+      {Future<String?> Function()? beforeOpen}) {
     final existing = _links[peerId];
     if (existing != null && !existing.closed) {
       if (existing.ffiModel.pi.isSet.value) return Future.value(existing);
     }
     return _opening.putIfAbsent(peerId, () async {
       try {
+        // All headless RMM tools use this same admission point. A prepared
+        // labnet ticket must exist before FFI starts its connection, and a
+        // failure must not silently fall through to another provider.
+        final admissionError = await beforeOpen?.call();
+        if (admissionError != null) {
+          lastFailure[peerId] = admissionError;
+          return null;
+        }
         _links[peerId]?.close();
         final ffi = FFI(null);
         _links[peerId] = ffi;
@@ -84,6 +93,10 @@ class LabDeskMachineLink {
           return null;
         }
         return ffi;
+      } catch (e) {
+        lastFailure[peerId] = '$e';
+        _links.remove(peerId)?.close();
+        return null;
       } finally {
         _opening.remove(peerId);
       }

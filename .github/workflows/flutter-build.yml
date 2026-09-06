@@ -9,6 +9,9 @@ on:
       upload-tag:
         type: string
         default: "nightly"
+      publish-release:
+        type: boolean
+        default: true
 
 # NOTE: F-Droid builder script 'flutter/build_fdroid.sh' reads environment
 # variables from this workflow!
@@ -94,7 +97,7 @@ jobs:
 
       - name: Publish Release
         uses: softprops/action-gh-release@de2c0eb89ae2a093876385947365aca7b0e5f844 # v1
-        if: env.UPLOAD_ARTIFACT == 'true'
+        if: (env.UPLOAD_ARTIFACT == 'true') && inputs.publish-release
         with:
           prerelease: ${{ !startsWith(env.TAG_NAME, 'v') || contains(env.TAG_NAME, '-') }}
           tag_name: ${{ env.TAG_NAME }}
@@ -355,6 +358,15 @@ jobs:
               Write-Host "Ingore the printer driver error."
           }
 
+      - name: Test Labnet and ticket authentication
+        if: matrix.job.arch == 'x86_64'
+        shell: pwsh
+        run: |
+          foreach ($filter in @('labdesk::', 'overlay_hint_tests', 'ticket')) {
+            cargo test --release --lib --features flutter,hwcodec,vram $filter -- --test-threads=1
+            if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          }
+
       - name: find Runner.res
         # Windows: find Runner.res (compiled from ./flutter/windows/runner/Runner.rc), copy to ./Runner.res
         # Runner.rc does not contain actual version, but Runner.res does
@@ -440,7 +452,7 @@ jobs:
 
       - name: Publish Release
         uses: softprops/action-gh-release@de2c0eb89ae2a093876385947365aca7b0e5f844 # v1
-        if: env.UPLOAD_ARTIFACT == 'true'
+        if: (env.UPLOAD_ARTIFACT == 'true') && inputs.publish-release
         with:
           prerelease: ${{ !startsWith(env.TAG_NAME, 'v') || contains(env.TAG_NAME, '-') }}
           tag_name: ${{ env.TAG_NAME }}
@@ -604,7 +616,7 @@ jobs:
 
       - name: Publish Release
         uses: softprops/action-gh-release@de2c0eb89ae2a093876385947365aca7b0e5f844 # v1
-        if: env.UPLOAD_ARTIFACT == 'true'
+        if: (env.UPLOAD_ARTIFACT == 'true') && inputs.publish-release
         with:
           prerelease: ${{ !startsWith(env.TAG_NAME, 'v') || contains(env.TAG_NAME, '-') }}
           tag_name: ${{ env.TAG_NAME }}
@@ -964,7 +976,7 @@ jobs:
           done
 
       - name: Publish DMG package
-        if: env.UPLOAD_ARTIFACT == 'true'
+        if: (env.UPLOAD_ARTIFACT == 'true') && inputs.publish-release
         uses: softprops/action-gh-release@de2c0eb89ae2a093876385947365aca7b0e5f844 # v1
         with:
           prerelease: ${{ !startsWith(env.TAG_NAME, 'v') || contains(env.TAG_NAME, '-') }}
@@ -1010,6 +1022,7 @@ jobs:
           tar czf labdesk-${{ env.VERSION }}-unsigned.tar.gz *.dmg windows-x86_64 windows-x86
 
       - name: Publish unsigned app
+        if: inputs.publish-release
         uses: softprops/action-gh-release@de2c0eb89ae2a093876385947365aca7b0e5f844 # v1
         with:
           prerelease: ${{ !startsWith(env.TAG_NAME, 'v') || contains(env.TAG_NAME, '-') }}
@@ -1306,7 +1319,7 @@ jobs:
           path: ${{steps.sign-rustdesk.outputs.signedReleaseFile}}
 
       - name: Publish signed apk package
-        if: env.ANDROID_SIGNING_KEY != null && env.UPLOAD_ARTIFACT == 'true'
+        if: (env.ANDROID_SIGNING_KEY != null && env.UPLOAD_ARTIFACT == 'true') && inputs.publish-release
         uses: softprops/action-gh-release@de2c0eb89ae2a093876385947365aca7b0e5f844 # v1
         with:
           prerelease: ${{ !startsWith(env.TAG_NAME, 'v') || contains(env.TAG_NAME, '-') }}
@@ -1316,7 +1329,7 @@ jobs:
             ${{steps.sign-rustdesk.outputs.signedReleaseFile}}
 
       - name: Publish unsigned apk package
-        if: env.ANDROID_SIGNING_KEY == null && env.UPLOAD_ARTIFACT == 'true'
+        if: (env.ANDROID_SIGNING_KEY == null && env.UPLOAD_ARTIFACT == 'true') && inputs.publish-release
         uses: softprops/action-gh-release@de2c0eb89ae2a093876385947365aca7b0e5f844 # v1
         with:
           prerelease: ${{ !startsWith(env.TAG_NAME, 'v') || contains(env.TAG_NAME, '-') }}
@@ -1494,7 +1507,7 @@ jobs:
           path: ${{steps.sign-rustdesk.outputs.signedReleaseFile}}
 
       - name: Publish signed apk package
-        if: env.ANDROID_SIGNING_KEY != null && env.UPLOAD_ARTIFACT == 'true'
+        if: (env.ANDROID_SIGNING_KEY != null && env.UPLOAD_ARTIFACT == 'true') && inputs.publish-release
         uses: softprops/action-gh-release@de2c0eb89ae2a093876385947365aca7b0e5f844 # v1
         with:
           prerelease: ${{ !startsWith(env.TAG_NAME, 'v') || contains(env.TAG_NAME, '-') }}
@@ -1504,7 +1517,7 @@ jobs:
             ${{steps.sign-rustdesk.outputs.signedReleaseFile}}
 
       - name: Publish unsigned apk package
-        if: env.ANDROID_SIGNING_KEY == null && env.UPLOAD_ARTIFACT == 'true'
+        if: (env.ANDROID_SIGNING_KEY == null && env.UPLOAD_ARTIFACT == 'true') && inputs.publish-release
         uses: softprops/action-gh-release@de2c0eb89ae2a093876385947365aca7b0e5f844 # v1
         with:
           prerelease: ${{ !startsWith(env.TAG_NAME, 'v') || contains(env.TAG_NAME, '-') }}
@@ -1818,7 +1831,7 @@ jobs:
             done
 
       - name: Publish debian/rpm package
-        if: env.UPLOAD_ARTIFACT == 'true'
+        if: (env.UPLOAD_ARTIFACT == 'true') && inputs.publish-release
         uses: softprops/action-gh-release@de2c0eb89ae2a093876385947365aca7b0e5f844 # v1
         with:
           prerelease: ${{ !startsWith(env.TAG_NAME, 'v') || contains(env.TAG_NAME, '-') }}
@@ -1855,7 +1868,7 @@ jobs:
             cd res && HBB=`pwd`/.. FLUTTER=1 makepkg -f && for f in rustdesk-*.zst; do mv "$f" "labdesk-${f#rustdesk-}"; done
 
       - name: Publish archlinux package
-        if: matrix.job.arch == 'x86_64' && env.UPLOAD_ARTIFACT == 'true'
+        if: (matrix.job.arch == 'x86_64' && env.UPLOAD_ARTIFACT == 'true') && inputs.publish-release
         uses: softprops/action-gh-release@de2c0eb89ae2a093876385947365aca7b0e5f844 # v1
         with:
           prerelease: ${{ !startsWith(env.TAG_NAME, 'v') || contains(env.TAG_NAME, '-') }}
@@ -2126,7 +2139,7 @@ jobs:
         shell: bash
 
       - name: Publish debian package
-        if: env.UPLOAD_ARTIFACT == 'true'
+        if: (env.UPLOAD_ARTIFACT == 'true') && inputs.publish-release
         uses: softprops/action-gh-release@de2c0eb89ae2a093876385947365aca7b0e5f844 # v1
         with:
           prerelease: ${{ !startsWith(env.TAG_NAME, 'v') || contains(env.TAG_NAME, '-') }}
@@ -2359,7 +2372,7 @@ jobs:
           done
 
       - name: Publish debian package
-        if: env.UPLOAD_ARTIFACT == 'true'
+        if: (env.UPLOAD_ARTIFACT == 'true') && inputs.publish-release
         uses: softprops/action-gh-release@de2c0eb89ae2a093876385947365aca7b0e5f844 # v1
         with:
           prerelease: ${{ !startsWith(env.TAG_NAME, 'v') || contains(env.TAG_NAME, '-') }}
@@ -2418,7 +2431,7 @@ jobs:
           sudo appimage-builder --skip-tests --recipe ./AppImageBuilder-${{ matrix.job.arch }}.yml
 
       - name: Publish appimage package
-        if: env.UPLOAD_ARTIFACT == 'true'
+        if: (env.UPLOAD_ARTIFACT == 'true') && inputs.publish-release
         uses: softprops/action-gh-release@de2c0eb89ae2a093876385947365aca7b0e5f844 # v1
         with:
           prerelease: ${{ !startsWith(env.TAG_NAME, 'v') || contains(env.TAG_NAME, '-') }}
@@ -2505,6 +2518,7 @@ jobs:
             flatpak build-bundle ./repo labdesk-${{ env.VERSION }}-${{ matrix.job.arch }}${{ matrix.job.suffix }}.flatpak com.rustdesk.RustDesk
 
       - name: Publish flatpak package
+        if: inputs.publish-release
         uses: softprops/action-gh-release@de2c0eb89ae2a093876385947365aca7b0e5f844 # v1
         with:
           prerelease: ${{ !startsWith(env.TAG_NAME, 'v') || contains(env.TAG_NAME, '-') }}
@@ -2537,7 +2551,7 @@ jobs:
       - build-rustdesk-android-universal
       - build-appimage
       - build-flatpak
-    if: always() && inputs.upload-artifact
+    if: always() && inputs.upload-artifact && inputs.publish-release
     runs-on: ubuntu-latest
     steps:
       - name: Compute and publish SHA256SUMS
@@ -2650,7 +2664,7 @@ jobs:
           popd
 
       - name: Publish web
-        if: env.UPLOAD_ARTIFACT == 'true'
+        if: (env.UPLOAD_ARTIFACT == 'true') && inputs.publish-release
         uses: softprops/action-gh-release@de2c0eb89ae2a093876385947365aca7b0e5f844 # v1
         with:
           prerelease: ${{ !startsWith(env.TAG_NAME, 'v') || contains(env.TAG_NAME, '-') }}

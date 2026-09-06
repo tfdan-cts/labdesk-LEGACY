@@ -85,9 +85,7 @@ class OverlayBrokerException implements Exception {
   /// (`src/worker/org.ts`), and the answer is this one sentence. The console
   /// signs in again and retries rather than telling the operator to restart.
   bool get needsFreshSignIn =>
-      status == 403 &&
-      !machinePlane &&
-      message.startsWith('Sign in again');
+      status == 403 && !machinePlane && message.startsWith('Sign in again');
 
   @override
   String toString() => message;
@@ -245,7 +243,8 @@ class OverlayBroker {
 
   static Future<(int, String)> _httpClient(
       String method, Uri url, Map<String, String> headers, String? body) async {
-    final client = HttpClient()..connectionTimeout = const Duration(seconds: 10);
+    final client = HttpClient()
+      ..connectionTimeout = const Duration(seconds: 10);
     try {
       final req = await client.openUrl(method, url);
       headers.forEach(req.headers.set);
@@ -351,12 +350,25 @@ class OverlayBroker {
         ticket: ticket is Map ? '${ticket['secret'] ?? ''}' : '');
   }
 
+  /// True only after the target's privileged agent installed the one-time
+  /// ticket in its listener. A WireGuard connection alone cannot prove this.
+  Future<bool> sessionReady(String id) async =>
+      (await _human('GET',
+              '/console/overlay/session/${Uri.encodeComponent(id)}/ready'))[
+          'ready'] ==
+      true;
+
   /// Best effort: a session that is over is over whether or not the release
   /// lands; the server sweeps what a dead client leaves behind.
-  Future<void> endSession(String id) async {
+  Future<bool> endSession(String id) async {
     try {
       await _human('DELETE', '/console/overlay/session/$id');
-    } catch (_) {}
+      return true;
+    } on OverlayBrokerException catch (e) {
+      return e.status == 404 || e.status == 410;
+    } catch (_) {
+      return false;
+    }
   }
 
   /// The organization's machines (`GET /console/org/machines`,
@@ -414,6 +426,32 @@ class OverlayBroker {
       for (final f in _rows(j['fleets']))
         OrgFleet(id: _str(f['id']), name: _str(f['name'])),
     ];
+  }
+
+  Future<String> organizationRole() async =>
+      _str((await _human('GET', '/console/org'))['role']);
+
+  Future<OrgFleet> createFleet(String name) async {
+    final j = await _human('POST', '/console/org/fleets', {'name': name});
+    final id = _str(j['id']);
+    if (id.isEmpty) {
+      throw const OverlayBrokerException(
+          502, 'The server did not return the new fleet.');
+    }
+    return OrgFleet(
+        id: id, name: _str(j['name']).isEmpty ? name : _str(j['name']));
+  }
+
+  Future<String> mintEnrolmentToken({String? fleetId}) async {
+    final j = await _human('POST', '/console/org/enrol-token', {
+      if (fleetId != null && fleetId.isNotEmpty) 'fleetId': fleetId,
+    });
+    final token = _str(j['token']);
+    if (token.isEmpty) {
+      throw const OverlayBrokerException(
+          502, 'The server did not return an enrollment token.');
+    }
+    return token;
   }
 
   /// The caller's own standing. `fleetIds` is null for an actor who sees the
@@ -476,8 +514,9 @@ class OverlayBroker {
                 LabnetMember(
                   deviceId: _str(m['machineId']),
                   status: _str(m['status']),
-                  overlayIp:
-                      m['overlayIp'] is String ? m['overlayIp'] as String : null,
+                  overlayIp: m['overlayIp'] is String
+                      ? m['overlayIp'] as String
+                      : null,
                 ),
             ],
           ),
@@ -529,17 +568,15 @@ class OverlayBroker {
   /// [machineId] is a `machine.id`, which is what `actor()` resolves the
   /// invited machine against, and it is what [machines] hands the console to
   /// offer. A peer id here is answered "No such machine."
-  Future<void> invite(String labnetId, String machineId) =>
-      _human('POST', '/console/overlay/labnets/$labnetId/invite',
-          {'machine': machineId});
+  Future<void> invite(String labnetId, String machineId) => _human('POST',
+      '/console/overlay/labnets/$labnetId/invite', {'machine': machineId});
 
   /// The invited machine decides for itself, which is why this is on the
   /// machine plane: the owner who sent the invitation holds a console
   /// credential, and a console credential answering for a machine is exactly
   /// what plan section 0.4 removes.
-  Future<void> decide(String labnetId, {required bool approve}) =>
-      _machine('POST', '/agent/overlay/invites/$labnetId/decide',
-          {'approve': approve});
+  Future<void> decide(String labnetId, {required bool approve}) => _machine(
+      'POST', '/agent/overlay/invites/$labnetId/decide', {'approve': approve});
 
   Future<void> leave(String labnetId) =>
       _machine('POST', '/agent/overlay/labnets/$labnetId/leave', {});

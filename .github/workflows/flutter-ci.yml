@@ -40,6 +40,7 @@ jobs:
     uses: ./.github/workflows/flutter-build.yml
     with:
       upload-artifact: false
+      publish-release: false
 
   # The Dart tests and the analyzer, which nothing else runs. Kept out of
   # flutter-build.yml so it reports in minutes instead of waiting on a build

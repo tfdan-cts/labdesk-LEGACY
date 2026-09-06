@@ -96,6 +96,8 @@ class _FileManagerTabPageState extends State<FileManagerTabPage> {
               forceRelay: args['forceRelay'],
               connToken: args['connToken'],
             )));
+      } else if (call.method == kWindowEventGetRemoteList) {
+        return tabController.state.value.tabs.map((tab) => tab.key).join(',');
       } else if (call.method == "onDestroy") {
         tabController.clear();
       } else if (call.method == kWindowActionRebuild) {

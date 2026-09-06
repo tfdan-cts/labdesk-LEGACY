@@ -66,7 +66,11 @@ impl std::fmt::Debug for LabnetRequest {
                 .field("path", path)
                 .finish_non_exhaustive(),
             Self::Enrol { .. } => formatter.debug_struct("Enrol").finish_non_exhaustive(),
-            Self::Daemon { action, management_url, .. } => formatter
+            Self::Daemon {
+                action,
+                management_url,
+                ..
+            } => formatter
                 .debug_struct("Daemon")
                 .field("action", action)
                 .field("management_url", management_url)
@@ -143,10 +147,7 @@ pub fn serve_here_or_over_ipc(request: LabnetRequest) -> Result<String, String> 
 #[cfg(not(any(target_os = "android", target_os = "ios")))]
 pub fn sign_here(method: &str, path: &str, body: &[u8]) -> Result<String, String> {
     use super::identity::AgentIdentity;
-    if !AgentIdentity::path().exists() {
-        return Err("No agent identity in this process".to_owned());
-    }
-    let identity = AgentIdentity::load_or_create().map_err(|err| err.to_string())?;
+    let identity = AgentIdentity::load_existing().map_err(|err| err.to_string())?;
     if identity.machine_id().is_empty() {
         return Err("This machine is not enrolled".to_owned());
     }
@@ -193,9 +194,11 @@ fn netbird_binary() -> Result<PathBuf, String> {
 
 #[cfg(not(any(target_os = "android", target_os = "ios")))]
 fn bundled_netbird(exe_dir: &Path) -> PathBuf {
-    exe_dir
-        .join("netbird")
-        .join(if cfg!(windows) { "netbird.exe" } else { "netbird" })
+    exe_dir.join("netbird").join(if cfg!(windows) {
+        "netbird.exe"
+    } else {
+        "netbird"
+    })
 }
 
 /// Where the daemon keeps its keys and profile, apart from any NetBird the user
@@ -224,11 +227,17 @@ fn daemon_addr() -> &'static str {
 /// it, and a local user can relay anything, so the daemon checks rather than trusts.
 #[cfg(not(any(target_os = "android", target_os = "ios")))]
 pub fn management_url_is_ours(url: &str) -> bool {
-    let Some(rest) = url.strip_prefix("https://") else {
+    let Ok(url) = url::Url::parse(url) else {
         return false;
     };
-    let host = rest.split(['/', ':']).next().unwrap_or_default();
-    host.eq_ignore_ascii_case(MANAGEMENT_HOST)
+    url.scheme() == "https"
+        && url.host_str() == Some(MANAGEMENT_HOST)
+        && url.port_or_known_default() == Some(443)
+        && url.username().is_empty()
+        && url.password().is_none()
+        && url.path() == "/"
+        && url.query().is_none()
+        && url.fragment().is_none()
 }
 
 /// The fixed argument list for one daemon action, or `None` for an action that does not
@@ -256,10 +265,15 @@ pub fn netbird_args(
             s("--management-url"),
             s(management_url),
             s("--disable-update-settings"),
+            s("--config"),
+            state_dir.join("default.json").display().to_string(),
+            s("--log-file"),
+            state_dir.join("client.log").display().to_string(),
             s("--service-env"),
             format!("NB_STATE_DIR={}", state_dir.display()),
         ],
         "start" => vec![s("service"), s("start"), s("--service"), s(SERVICE_NAME)],
+        "service-status" => vec![s("service"), s("status"), s("--service"), s(SERVICE_NAME)],
         "up" => vec![
             s("up"),
             s("--setup-key-file"),
@@ -268,6 +282,11 @@ pub fn netbird_args(
             s(management_url),
             s("--hostname"),
             s(hostname),
+            s("--interface-name"),
+            s("labdesk0"),
+            s("--wireguard-port"),
+            s("51821"),
+            s("--disable-auto-connect=false"),
         ],
         "down" => vec![s("down")],
         "status" => vec![s("status"), s("--json")],
@@ -276,6 +295,52 @@ pub fn netbird_args(
     args.push(s("--daemon-addr"));
     args.push(s(daemon_addr));
     Some(args)
+}
+
+/// NetBird otherwise imports /etc/netbird/config.json on first start, even
+/// with a different NB_STATE_DIR. Seed only a new owned profile; NetBird fills
+/// its missing keys and defaults. Keep it offline until the explicit up call.
+#[cfg(not(any(target_os = "android", target_os = "ios")))]
+fn seed_owned_profile(dir: &Path) -> Result<(), String> {
+    use std::io::Write;
+    let mut directories = std::fs::DirBuilder::new();
+    directories.recursive(true);
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::DirBuilderExt;
+        directories.mode(0o700);
+    }
+    directories.create(dir).map_err(|err| err.to_string())?;
+    let path = dir.join("default.json");
+    let mut options = std::fs::OpenOptions::new();
+    options.write(true).create_new(true);
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::OpenOptionsExt;
+        options.mode(0o600);
+    }
+    let mut file = match options.open(&path) {
+        Ok(file) => file,
+        Err(err) if err.kind() == std::io::ErrorKind::AlreadyExists => return Ok(()),
+        Err(err) => return Err(err.to_string()),
+    };
+    let seed = serde_json::json!({
+        "ManagementURL": { "Scheme": "https", "Host": MANAGEMENT_HOST },
+        "DisableAutoConnect": true,
+        "WgIface": "labdesk0",
+        "WgPort": 51821,
+    });
+    let written = file.write_all(seed.to_string().as_bytes())
+        .and_then(|_| file.sync_all());
+    drop(file);
+    if let Err(err) = written {
+        std::fs::remove_file(&path).ok();
+        return Err(err.to_string());
+    }
+    #[cfg(windows)]
+    crate::platform::set_path_permission_for_portable_service_shmem_file(&path)
+        .map_err(|err| err.to_string())?;
+    Ok(())
 }
 
 /// A one-off credential on disk for as long as one netbird call runs, in the daemon's
@@ -324,10 +389,44 @@ impl Drop for KeyFile {
 
 #[cfg(not(any(target_os = "android", target_os = "ios")))]
 fn daemon(action: &str, setup_key: &str, management_url: &str) -> Result<String, String> {
+    // This is served only after the privileged-process check in `serve`. It
+    // lets onboarding verify that its IPC service exists before minting a token.
+    if action == "agent-status" {
+        return Ok("ready".to_owned());
+    }
     if matches!(action, "install" | "up") && !management_url_is_ours(management_url) {
-        return Err(format!("Refusing a control plane other than {}", MANAGEMENT_HOST));
+        return Err(format!(
+            "Refusing a control plane other than {}",
+            MANAGEMENT_HOST
+        ));
     }
     let binary = netbird_binary()?;
+    let mut reconfigure = false;
+    // An unanswered socket can also mean an installed service is stopped. Do not
+    // try to install over it; the caller starts it after ensuring installation.
+    if matches!(action, "install" | "start") {
+        let args = netbird_args(
+            "service-status",
+            "",
+            Path::new(""),
+            "",
+            &state_dir(),
+            daemon_addr(),
+        )
+        .ok_or("Missing service status command")?;
+        if let Ok(status) = run_netbird(&binary, &args) {
+            if action == "install" {
+                // Earlier installations persisted the ordinary NetBird config
+                // path. Repair this owned service during explicit enable.
+                reconfigure = true;
+            } else if status.trim() == "NetBird service status: Running" {
+                return Ok(status);
+            }
+        }
+    }
+    if action == "install" {
+        seed_owned_profile(&state_dir())?;
+    }
     let key_dir = super::identity::AgentIdentity::path()
         .parent()
         .map(Path::to_path_buf)
@@ -337,7 +436,7 @@ fn daemon(action: &str, setup_key: &str, management_url: &str) -> Result<String,
     } else {
         None
     };
-    let args = netbird_args(
+    let mut args = netbird_args(
         action,
         management_url,
         key_file.as_ref().map_or(Path::new(""), |k| k.0.as_path()),
@@ -346,6 +445,9 @@ fn daemon(action: &str, setup_key: &str, management_url: &str) -> Result<String,
         daemon_addr(),
     )
     .ok_or_else(|| format!("Unknown daemon action '{}'", action))?;
+    if reconfigure {
+        args[1] = "reconfigure".to_owned();
+    }
     let result = run_netbird(&binary, &args);
     // Dropped here, so the key is gone before the answer is returned.
     drop(key_file);
@@ -356,28 +458,254 @@ fn daemon(action: &str, setup_key: &str, management_url: &str) -> Result<String,
 /// flags. Stdout on exit zero; the daemon's own words otherwise.
 #[cfg(not(any(target_os = "android", target_os = "ios")))]
 fn run_netbird(binary: &Path, args: &[String]) -> Result<String, String> {
+    use std::io::Read;
+    use std::process::Stdio;
+    use std::time::{Duration, Instant};
     let mut command = std::process::Command::new(binary);
     command.args(args);
     for (key, _) in std::env::vars_os() {
-        if key.to_string_lossy().to_ascii_uppercase().starts_with("NB_") {
+        if key
+            .to_string_lossy()
+            .to_ascii_uppercase()
+            .starts_with("NB_")
+        {
             command.env_remove(key);
         }
     }
+    // The CLI itself loads and persists service.json and computes --config
+    // defaults. --service-env alone only isolates the later daemon process.
+    command.env("NB_STATE_DIR", state_dir());
     #[cfg(windows)]
     {
         use std::os::windows::process::CommandExt;
         const CREATE_NO_WINDOW: u32 = 0x0800_0000;
         command.creation_flags(CREATE_NO_WINDOW);
     }
-    let out = command
-        .output()
+    let mut child = command
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped())
+        .spawn()
         .map_err(|err| format!("{}: {}", binary.display(), err))?;
-    let stdout = String::from_utf8_lossy(&out.stdout).trim().to_owned();
-    if out.status.success() {
+    let mut stdout = child.stdout.take().ok_or("No daemon stdout")?;
+    let mut stderr = child.stderr.take().ok_or("No daemon stderr")?;
+    let (out_tx, out_rx) = std::sync::mpsc::channel();
+    std::thread::spawn(move || {
+        let mut bytes = Vec::new();
+        let result = stdout.read_to_end(&mut bytes).map(|_| bytes);
+        out_tx.send(result).ok();
+    });
+    let (err_tx, err_rx) = std::sync::mpsc::channel();
+    std::thread::spawn(move || {
+        let mut bytes = Vec::new();
+        let result = stderr.read_to_end(&mut bytes).map(|_| bytes);
+        err_tx.send(result).ok();
+    });
+    let timeout = Duration::from_secs(if args.first().map(String::as_str) == Some("status")
+        || (args.first().map(String::as_str) == Some("service")
+            && args.get(1).map(String::as_str) == Some("status")) {
+        10
+    } else {
+        90
+    });
+    let started = Instant::now();
+    let status = loop {
+        match child.try_wait() {
+            Ok(Some(status)) => break Ok(status),
+            Ok(None) if started.elapsed() < timeout => {
+                std::thread::sleep(Duration::from_millis(50))
+            }
+            result => {
+                child.kill().ok();
+                child.wait().ok();
+                break Err(match result {
+                    Err(err) => format!("Waiting for labnet service: {}", err),
+                    _ => format!(
+                        "Labnet command timed out after {} seconds",
+                        timeout.as_secs()
+                    ),
+                });
+            }
+        }
+    };
+    // A service helper may leave a descendant holding its pipes open after
+    // exiting. Do not join a blocking reader beyond the command deadline.
+    let status = status?;
+    let stdout = out_rx
+        .recv_timeout(timeout.saturating_sub(started.elapsed()))
+        .map_err(|_| "Labnet stdout did not close before the command deadline")?
+        .map_err(|err| err.to_string())?;
+    let stderr = err_rx
+        .recv_timeout(timeout.saturating_sub(started.elapsed()))
+        .map_err(|_| "Labnet stderr did not close before the command deadline")?
+        .map_err(|err| err.to_string())?;
+    let stdout = String::from_utf8_lossy(&stdout).trim().to_owned();
+    if status.success() {
         return Ok(stdout);
     }
-    let stderr = String::from_utf8_lossy(&out.stderr).trim().to_owned();
+    let stderr = String::from_utf8_lossy(&stderr).trim().to_owned();
     Err(if stderr.is_empty() { stdout } else { stderr })
+}
+
+/// Run in the RustDesk server, which receives live option changes and keeps running
+/// when the Flutter window closes. On Unix it asks the privileged service to sign
+/// and operate NetBird; the machine credential never moves into the desktop process.
+#[cfg(not(any(target_os = "android", target_os = "ios")))]
+pub fn start() {
+    use hbb_common::{config::Config, log};
+    use std::sync::Once;
+    use std::time::Duration;
+    static START: Once = Once::new();
+    START.call_once(|| {
+        if let Err(err) = std::thread::Builder::new()
+            .name("labdesk-labnet".into())
+            .spawn(|| {
+                let mut reported = None;
+                let mut last_error = String::new();
+                loop {
+                    if wants_labnet(
+                        &Config::get_option("labdesk-labnet-enabled"),
+                        &Config::get_option("labdesk-direct-bind"),
+                    ) {
+                        match reconcile(&mut reported) {
+                            Ok(()) => last_error.clear(),
+                            Err(err) => {
+                                reported = None;
+                                Config::set_option("direct-server".into(), "N".into());
+                                if last_error != err {
+                                    log::warn!("[labnet] {}", err);
+                                    last_error = err;
+                                }
+                            }
+                        }
+                    } else {
+                        if !Config::get_option("labdesk-direct-bind").is_empty() {
+                            Config::set_option("direct-server".into(), "N".into());
+                        }
+                        reported = None;
+                    }
+                    std::thread::sleep(Duration::from_secs(15));
+                }
+            })
+        {
+            log::error!("[labnet] Could not start reconciliation: {}", err);
+        }
+    });
+}
+
+#[cfg(not(any(target_os = "android", target_os = "ios")))]
+fn wants_labnet(enabled: &str, previous_bind: &str) -> bool {
+    enabled == "Y" || (enabled.is_empty() && !previous_bind.is_empty())
+}
+
+#[cfg(not(any(target_os = "android", target_os = "ios")))]
+fn connected_address(status: &serde_json::Value) -> Option<String> {
+    if status["daemonStatus"].as_str()? != "Connected" {
+        return None;
+    }
+    let ip = status["netbirdIp"].as_str()?.split('/').next()?;
+    let address: std::net::Ipv4Addr = ip.parse().ok()?;
+    let octets = address.octets();
+    // This bounds a bind address, not proof of the network provider. The status
+    // comes from our owned daemon; the Worker checks its actual NetBird group.
+    (octets[0] == 100
+        && (64..=127).contains(&octets[1])
+        && !status["publicKey"].as_str()?.is_empty())
+    .then(|| address.to_string())
+}
+
+#[cfg(not(any(target_os = "android", target_os = "ios")))]
+fn reconcile(reported: &mut Option<String>) -> Result<(), String> {
+    use hbb_common::config::Config;
+    let request = |action: &str| {
+        serve_here_or_over_ipc(LabnetRequest::Daemon {
+            action: action.to_owned(),
+            setup_key: String::new(),
+            management_url: String::new(),
+        })
+    };
+    let text = match request("status") {
+        Ok(text) => text,
+        Err(err) => {
+            // Only restart an existing owned service. Enrollment and installation
+            // still require the explicit product flow and its setup key.
+            if wants_labnet(&Config::get_option("labdesk-labnet-enabled"), &Config::get_option("labdesk-direct-bind")) {
+                request("start")?;
+            }
+            return Err(format!("Restarting the labnet service after: {}", err));
+        }
+    };
+    let status: serde_json::Value = serde_json::from_str(&text).map_err(|err| err.to_string())?;
+    let Some(ip) = connected_address(&status) else {
+        *reported = None;
+        Config::set_option("direct-server".into(), "N".into());
+        return Err("Waiting for the owned labnet daemon to connect".to_owned());
+    };
+    let port = Config::get_option("direct-access-port")
+        .parse::<u16>()
+        .ok()
+        .filter(|port| *port != 0)
+        .unwrap_or((hbb_common::config::RENDEZVOUS_PORT + 2) as u16);
+    let body = serde_json::json!({
+        "overlayIp": ip,
+        "publicKey": status["publicKey"],
+        "idPk": crate::encode64(Config::get_key_pair().1),
+        "directPort": port,
+    })
+    .to_string();
+    if reported.as_deref() != Some(body.as_str()) {
+        let path = "/agent/overlay/self";
+        let headers = serve_here_or_over_ipc(LabnetRequest::Sign {
+            method: "POST".into(),
+            path: path.into(),
+            body: body.clone(),
+        })?;
+        let headers: serde_json::Value =
+            serde_json::from_str(&headers).map_err(|err| err.to_string())?;
+        let url = format!("{}{}", crate::LABDESK_SITE, path);
+        let response = crate::hbbs_http::create_http_client_with_url_strict(&url)
+            .map_err(|err| err.to_string())?
+            .post(&url)
+            .header("Content-Type", "application/json")
+            .header(
+                "X-LD-Machine",
+                headers["machine"]
+                    .as_str()
+                    .ok_or("Missing machine signature")?,
+            )
+            .header(
+                "X-LD-Ts",
+                headers["ts"]
+                    .as_str()
+                    .ok_or("Missing signature timestamp")?,
+            )
+            .header(
+                "X-LD-Sig",
+                headers["sig"].as_str().ok_or("Missing signature")?,
+            )
+            .timeout(std::time::Duration::from_secs(20))
+            .body(body.clone())
+            .send()
+            .map_err(|err| err.to_string())?;
+        if !response.status().is_success() {
+            Config::set_option("direct-server".into(), "N".into());
+            return Err(format!(
+                "Labnet identity registration refused: {}",
+                response.status()
+            ));
+        }
+        *reported = Some(body);
+    }
+    // Disable may have arrived while the network request was running.
+    if wants_labnet(
+        &Config::get_option("labdesk-labnet-enabled"),
+        &Config::get_option("labdesk-direct-bind"),
+    ) {
+        Config::set_option("labdesk-direct-bind".into(), ip);
+        Config::set_option("direct-server".into(), "Y".into());
+    } else {
+        *reported = None;
+    }
+    Ok(())
 }
 
 #[cfg(test)]
@@ -410,8 +738,10 @@ mod tests {
         let text = serde_json::to_string(&request).unwrap();
         match serde_json::from_str::<LabnetRequest>(&text).unwrap() {
             LabnetRequest::Sign { method, path, body } => {
-                assert_eq!((method.as_str(), path.as_str(), body.as_str()),
-                    ("POST", "/agent/overlay/self", "{\"a\":1}"));
+                assert_eq!(
+                    (method.as_str(), path.as_str(), body.as_str()),
+                    ("POST", "/agent/overlay/self", "{\"a\":1}")
+                );
             }
             other => panic!("{:?}", other),
         }
@@ -449,10 +779,17 @@ mod tests {
     #[test]
     fn test_signature_json_reports_the_timestamp_it_signed() {
         let mut signed = Vec::new();
-        let json = signature_json("m-1", "POST", "/agent/x", "1700000000".to_owned(), b"{}", |msg| {
-            signed = msg.to_vec();
-            Ok("sig".to_owned())
-        })
+        let json = signature_json(
+            "m-1",
+            "POST",
+            "/agent/x",
+            "1700000000".to_owned(),
+            b"{}",
+            |msg| {
+                signed = msg.to_vec();
+                Ok("sig".to_owned())
+            },
+        )
         .unwrap();
         let answer: serde_json::Value = serde_json::from_str(&json).unwrap();
         assert_eq!(answer["machine"], "m-1");
@@ -466,10 +803,12 @@ mod tests {
 
     #[test]
     fn test_signature_json_is_an_error_when_the_key_will_not_sign() {
-        assert!(signature_json("m-1", "POST", "/agent/x", "1".to_owned(), b"", |_| {
-            hbb_common::bail!("no key")
-        })
-        .is_err());
+        assert!(
+            signature_json("m-1", "POST", "/agent/x", "1".to_owned(), b"", |_| {
+                hbb_common::bail!("no key")
+            })
+            .is_err()
+        );
     }
 
     #[cfg(not(any(target_os = "android", target_os = "ios")))]
@@ -480,10 +819,54 @@ mod tests {
         assert!(management_url_is_ours("https://nb.lab-desk.net:443"));
         assert!(management_url_is_ours("https://NB.lab-desk.net"));
         assert!(!management_url_is_ours("http://nb.lab-desk.net"));
-        assert!(!management_url_is_ours("https://nb.lab-desk.net.evil.example"));
-        assert!(!management_url_is_ours("https://evil.example/nb.lab-desk.net"));
+        assert!(!management_url_is_ours(
+            "https://nb.lab-desk.net.evil.example"
+        ));
+        assert!(!management_url_is_ours(
+            "https://evil.example/nb.lab-desk.net"
+        ));
         assert!(!management_url_is_ours("https://api.netbird.io"));
         assert!(!management_url_is_ours(""));
+        for invalid in [
+            "https://nb.lab-desk.net:443@evil.example",
+            "https://nb.lab-desk.net:444",
+            "https://nb.lab-desk.net/path",
+            "https://nb.lab-desk.net/?redirect=evil",
+            "https://user@nb.lab-desk.net",
+        ] {
+            assert!(!management_url_is_ours(invalid), "{}", invalid);
+        }
+    }
+
+    #[cfg(not(any(target_os = "android", target_os = "ios")))]
+    #[test]
+    fn test_reconcile_requires_enable_or_a_previous_enrollment_and_respects_disable() {
+        assert!(!wants_labnet("", ""));
+        assert!(wants_labnet("Y", ""));
+        assert!(wants_labnet("", "100.70.0.1"));
+        assert!(!wants_labnet("N", "100.70.0.1"));
+        assert!(!wants_labnet("unexpected", "100.70.0.1"));
+    }
+
+    #[cfg(not(any(target_os = "android", target_os = "ios")))]
+    #[test]
+    fn test_reconcile_never_binds_an_unconnected_or_invalid_daemon_address() {
+        let mut status = serde_json::json!({"daemonStatus":"Connected", "netbirdIp":"100.70.0.8/16", "publicKey":"key"});
+        assert_eq!(connected_address(&status).as_deref(), Some("100.70.0.8"));
+        status["daemonStatus"] = "Idle".into();
+        assert!(connected_address(&status).is_none());
+        status["daemonStatus"] = "Connected".into();
+        for ip in [
+            "0.0.0.0",
+            "10.1.10.110",
+            "100.128.0.1",
+            "100.63.0.1",
+            "::",
+            "garbage",
+        ] {
+            status["netbirdIp"] = ip.into();
+            assert!(connected_address(&status).is_none(), "{}", ip);
+        }
     }
 
     #[cfg(not(any(target_os = "android", target_os = "ios")))]
@@ -491,8 +874,17 @@ mod tests {
     fn test_netbird_args_are_fixed_per_action_and_unknown_actions_run_nothing() {
         let key = Path::new("/k/setup-key");
         let state = Path::new("/s");
+        let config_path = state.join("default.json").display().to_string();
+        let log_path = state.join("client.log").display().to_string();
         let args = |action: &str| {
-            netbird_args(action, "https://nb.lab-desk.net", key, "host-1", state, "unix:///d.sock")
+            netbird_args(
+                action,
+                "https://nb.lab-desk.net",
+                key,
+                "host-1",
+                state,
+                "unix:///d.sock",
+            )
         };
         assert_eq!(
             args("install").unwrap(),
@@ -504,6 +896,10 @@ mod tests {
                 "--management-url",
                 "https://nb.lab-desk.net",
                 "--disable-update-settings",
+                "--config",
+                &config_path,
+                "--log-file",
+                &log_path,
                 "--service-env",
                 "NB_STATE_DIR=/s",
                 "--daemon-addr",
@@ -512,7 +908,14 @@ mod tests {
         );
         assert_eq!(
             args("start").unwrap(),
-            ["service", "start", "--service", "labdesk-netbird", "--daemon-addr", "unix:///d.sock"]
+            [
+                "service",
+                "start",
+                "--service",
+                "labdesk-netbird",
+                "--daemon-addr",
+                "unix:///d.sock"
+            ]
         );
         assert_eq!(
             args("up").unwrap(),
@@ -524,11 +927,19 @@ mod tests {
                 "https://nb.lab-desk.net",
                 "--hostname",
                 "host-1",
+                "--interface-name",
+                "labdesk0",
+                "--wireguard-port",
+                "51821",
+                "--disable-auto-connect=false",
                 "--daemon-addr",
                 "unix:///d.sock",
             ]
         );
-        assert_eq!(args("down").unwrap(), ["down", "--daemon-addr", "unix:///d.sock"]);
+        assert_eq!(
+            args("down").unwrap(),
+            ["down", "--daemon-addr", "unix:///d.sock"]
+        );
         assert_eq!(
             args("status").unwrap(),
             ["status", "--json", "--daemon-addr", "unix:///d.sock"]
@@ -536,6 +947,23 @@ mod tests {
         for bad in ["", "uninstall", "ssh", "up; rm", "Up"] {
             assert!(args(bad).is_none(), "{}", bad);
         }
+    }
+
+    #[cfg(not(any(target_os = "android", target_os = "ios")))]
+    #[test]
+    fn test_owned_profile_is_offline_until_enrolled_and_never_overwritten() {
+        let dir = std::env::temp_dir().join(format!("labdesk-profile-{}-{}", std::process::id(), hbb_common::get_time()));
+        seed_owned_profile(&dir).unwrap();
+        let path = dir.join("default.json");
+        let seed: serde_json::Value = serde_json::from_str(&std::fs::read_to_string(&path).unwrap()).unwrap();
+        assert_eq!(seed["ManagementURL"]["Host"], MANAGEMENT_HOST);
+        assert_eq!(seed["DisableAutoConnect"], true);
+        assert_eq!(seed["WgIface"], "labdesk0");
+        std::fs::write(&path, "existing owned credential").unwrap();
+        seed_owned_profile(&dir).unwrap();
+        assert_eq!(std::fs::read_to_string(&path).unwrap(), "existing owned credential");
+        std::fs::remove_file(&path).unwrap();
+        std::fs::remove_dir(&dir).unwrap();
     }
 
     #[cfg(not(any(target_os = "android", target_os = "ios")))]

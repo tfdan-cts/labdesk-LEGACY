@@ -30,13 +30,14 @@ typedef ConsolePeer = ({
 /// would read as "just now".
 List<MachineRow> buildMachineRows({
   required Iterable<ConsolePeer> peers,
+  Iterable<ConsolePeer> organizationPeers = const [],
   required LabDeskPeerStatusStore store,
   required List<bool?> Function(String id) historyOf,
   String? Function(String id)? groupOf,
   LabDeskPeerStatus? Function(String id)? serverStatusOf,
 }) {
   final rows = <String, MachineRow>{};
-  for (final p in peers) {
+  for (final p in peers.followedBy(organizationPeers)) {
     if (p.id.isEmpty) continue;
     if (rows.containsKey(p.id)) continue;
     final state = store.stateOf(p.id);

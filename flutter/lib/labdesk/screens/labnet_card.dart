@@ -3,6 +3,36 @@ import 'package:flutter/material.dart';
 import '../services/overlay_enrolment.dart';
 import '../theme/console_theme.dart';
 
+/// An unavailable labnet path never silently changes connection providers.
+class LabnetConnectionFailure extends StatelessWidget {
+  const LabnetConnectionFailure({super.key, required this.detail});
+
+  final String detail;
+
+  @override
+  Widget build(BuildContext context) => AlertDialog(
+        title: Text('Labnet connection unavailable', style: C.h2()),
+        content: SizedBox(
+          width: 480,
+          child: Text(
+              '$detail\n\nYou can cancel and repair labnet, or explicitly '
+              'try the configured RustDesk ID and relay servers.',
+              style: C.body()),
+        ),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.pop(context, false),
+            child: Text('Cancel', style: C.small()),
+          ),
+          TextButton(
+            onPressed: () => Navigator.pop(context, true),
+            child:
+                Text('Use RustDesk instead', style: C.small(color: C.accent)),
+          ),
+        ],
+      );
+}
+
 /// The labnet card on This machine: whether this machine takes encrypted
 /// direct connections from the account's other machines, and the one switch.
 ///
@@ -26,24 +56,23 @@ class LabnetCard extends StatelessWidget {
       LabnetPhase.off => (
           C.idle,
           'Off',
-          'Other machines reach this one through the ID server. Turn this on '
-              'and machines on your account can open a direct encrypted path '
-              'to it instead.',
+          'Labnet uses NetBird to connect your enrolled machines. Add this '
+              'machine to your organization above, then turn labnet on.',
         ),
       LabnetPhase.working => (
           C.accent,
           state.detail,
-          'Setting up the encrypted direct path.',
+          'Setting up the encrypted NetBird connection.',
         ),
       LabnetPhase.on => (
           C.ok,
           'On at ${state.ip}',
-          'Machines on your account can open a direct encrypted path to this '
-              'one. Nothing else can reach it there.',
+          'NetBird is connected. Authorized machines use an encrypted tunnel, '
+              'directly when possible or through a relay when needed.',
         ),
       LabnetPhase.error => (
           C.bad,
-          'Could not turn on',
+          'Labnet needs attention',
           state.detail,
         ),
     };
@@ -63,7 +92,7 @@ class LabnetCard extends StatelessWidget {
       child: Column(
         crossAxisAlignment: CrossAxisAlignment.start,
         children: [
-          Text('Encrypted direct connections', style: C.h2()),
+          Text('Labnet', style: C.h2()),
           const SizedBox(height: 4),
           Text(subtitle, style: C.small()),
           const SizedBox(height: 16),
@@ -78,6 +107,10 @@ class LabnetCard extends StatelessWidget {
               Expanded(child: Text(label, style: C.body())),
               if (action.$1 != null && action.$2 != null)
                 _TextAction(label: action.$1!, onTap: action.$2!),
+              if (state.phase == LabnetPhase.error && onDisable != null) ...[
+                const SizedBox(width: 20),
+                _TextAction(label: 'Turn off', onTap: onDisable!),
+              ],
             ],
           ),
         ],
@@ -110,9 +143,9 @@ class _TextActionState extends State<_TextAction> {
         child: Text(
           widget.label,
           style: C.small(color: _hover ? C.accent : C.textMuted).copyWith(
-            decoration: TextDecoration.underline,
-            decorationColor: _hover ? C.accent : C.textFaint,
-          ),
+                decoration: TextDecoration.underline,
+                decorationColor: _hover ? C.accent : C.textFaint,
+              ),
         ),
       ),
     );

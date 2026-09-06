@@ -1057,7 +1057,7 @@ async fn handle(data: Data, stream: &mut Connection) {
             expires_at,
         } => {
             if !crate::server::insert_pending_ticket(id, controller_peer_id, secret_hash, expires_at) {
-                log::warn!("A connect ticket was delivered twice; keeping the first");
+                log::debug!("A connect ticket was redelivered; keeping the first");
             }
             allow_err!(stream.send(&Data::Empty).await);
         }

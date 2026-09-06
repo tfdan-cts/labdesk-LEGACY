@@ -73,7 +73,9 @@ class OverlayDaemon {
     }
     try {
       final json = jsonDecode(out!);
-      if (json is Map<String, dynamic>) return OverlayState.fromStatusJson(json);
+      if (json is Map<String, dynamic>) {
+        return OverlayState.fromStatusJson(json);
+      }
     } catch (_) {}
     return OverlayState(status: OverlayDaemonStatus.unknown, error: out!);
   }
@@ -85,6 +87,16 @@ class OverlayDaemon {
       _fail('install', managementUrl: managementUrl);
 
   Future<String?> start() => _fail('start');
+
+  /// This read-only IPC probe requires the privileged LabDesk process, even
+  /// before a machine identity or NetBird installation exists.
+  Future<String?> checkAgent() async {
+    final (output, error) = await _run('agent-status');
+    if (error != null) return error;
+    return output?.trim() == 'ready'
+        ? null
+        : 'The LabDesk service did not confirm that it is ready.';
+  }
 
   /// Registers with [managementUrl] using a one-off [setupKey] and connects.
   /// Returns the daemon's own words on failure, null on success.

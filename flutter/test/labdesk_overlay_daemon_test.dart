@@ -32,7 +32,8 @@ class _Fake {
   final calls = <(String, String, String)>[];
   String next = '{"output":""}';
 
-  Future<String> call(String action, String setupKey, String managementUrl) async {
+  Future<String> call(
+      String action, String setupKey, String managementUrl) async {
     calls.add((action, setupKey, managementUrl));
     return next;
   }
@@ -44,6 +45,18 @@ String _output(String s) => jsonEncode({'output': s});
 String _error(String s) => jsonEncode({'error': s});
 
 void main() {
+  test('agent service probe requires the privileged ready response', () async {
+    final actions = <String>[];
+    final daemon = OverlayDaemon(call: (action, _, __) async {
+      actions.add(action);
+      return '{"output":"ready"}';
+    });
+    expect(await daemon.checkAgent(), isNull);
+    expect(actions, ['agent-status']);
+    final absent = OverlayDaemon(
+        call: (_, __, ___) async => '{"error":"IPC unavailable"}');
+    expect(await absent.checkAgent(), 'IPC unavailable');
+  });
   group('OverlayState.fromStatusJson', () {
     test('reads the daemon status, this machine, and the peers it can reach',
         () {
@@ -80,8 +93,8 @@ void main() {
         'SomethingNew': OverlayDaemonStatus.unknown,
       };
       expected.forEach((word, status) {
-        expect(OverlayState.fromStatusJson({'daemonStatus': word}).status,
-            status,
+        expect(
+            OverlayState.fromStatusJson({'daemonStatus': word}).status, status,
             reason: word);
       });
     });
@@ -128,7 +141,8 @@ void main() {
       expect(s.error, 'garbage');
     });
 
-    test('a privileged process that cannot be reached is a failure, not a throw',
+    test(
+        'a privileged process that cannot be reached is a failure, not a throw',
         () async {
       final d = OverlayDaemon(call: (_, __, ___) => throw StateError('no ipc'));
       final s = await d.status();
@@ -141,8 +155,8 @@ void main() {
     test('up hands the key and the control plane to the privileged process',
         () async {
       final f = _Fake();
-      final err = await _daemon(f).up(
-          setupKey: 'SK-1', managementUrl: 'https://nb.lab-desk.net');
+      final err = await _daemon(f)
+          .up(setupKey: 'SK-1', managementUrl: 'https://nb.lab-desk.net');
       expect(err, isNull);
       expect(f.calls.single, ('up', 'SK-1', 'https://nb.lab-desk.net'));
     });

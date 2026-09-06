@@ -1,3 +1,5 @@
+import 'dart:async';
+
 import '../models/overlay_state.dart';
 import 'overlay_broker.dart';
 import 'overlay_daemon.dart';
@@ -6,6 +8,7 @@ import 'overlay_enrolment.dart' show OptionWriter, bareIp;
 /// What the client is told before a session so it dials the overlay first.
 const kOverlayAddrOption = 'labdesk-overlay-addr-';
 const kOverlayPkOption = 'labdesk-overlay-pk-';
+const kOverlayRequiredOption = 'labdesk-overlay-required-';
 
 /// The connect ticket's secret, read and cleared by `handle_hash` in
 /// `src/client.rs` on the connect, and cleared here with the other two.
@@ -17,8 +20,8 @@ const kOverlayTicketOption = 'labdesk-ticket-';
 /// target peer Connected (the rule has to be signalled and the WireGuard
 /// handshake completed before a socket can cross), then writes the address
 /// hint, the target's id key and the one-time connect ticket for the client.
-/// Anything short of that writes nothing, and the session goes the way it
-/// always has.
+/// Anything short of that clears stale hints and exposes the failure. A
+/// different connection provider requires an explicit choice in the console.
 ///
 /// `noteOpenSessions` is fed the ids of the sessions the console can see; a
 /// granted id that has gone is released and its hints cleared.
@@ -28,7 +31,7 @@ class OverlaySession {
     required this.daemon,
     required this.setOption,
     Future<void> Function(Duration) sleep = Future.delayed,
-    this.readyTimeout = const Duration(seconds: 10),
+    this.readyTimeout = const Duration(seconds: 30),
   }) : _sleep = sleep;
 
   final OverlayBroker broker;
@@ -38,7 +41,12 @@ class OverlaySession {
   final Future<void> Function(Duration) _sleep;
 
   /// Granted sessions by peer id, and whether the console has seen each open.
-  final _grants = <String, ({SessionGrant grant, bool seenOpen})>{};
+  final _grants = <String, ({List<SessionGrant> grants, bool seenOpen})>{};
+  final _preparing = <String>{};
+  final _pendingReleases = <String>{};
+
+  String lastError = '';
+  OverlayLinkType lastLink = OverlayLinkType.unknown;
 
   /// Polls a grant may sit unseen before it is treated as a connect that
   /// never happened and released. The console polls sessions every second
@@ -48,41 +56,95 @@ class OverlaySession {
 
   /// True when the client was handed the overlay address for [peerId].
   Future<bool> prepare(String peerId) async {
-    final SessionGrant grant;
+    if (!_preparing.add(peerId)) {
+      lastError =
+          'A labnet connection to this machine is already being prepared.';
+      return false;
+    }
+    SessionGrant? grant;
+    var prepared = false;
+    lastError = '';
+    lastStatus = null;
+    lastLink = OverlayLinkType.unknown;
     try {
       grant = await broker.session(peerId);
-    } catch (_) {
-      return false;
-    }
-    final ip = bareIp(grant.targetAddr.split(':').first);
-    var status = await daemon.status();
-    var ready = status.peerAt(ip)?.connected ?? false;
-    for (var i = 1; !ready && i < readyTimeout.inSeconds; i++) {
-      await _sleep(const Duration(seconds: 1));
-      status = await daemon.status();
-      ready = status.peerAt(ip)?.connected ?? false;
-    }
-    if (!ready) {
-      await broker.endSession(grant.id);
-      return false;
-    }
-    await setOption('$kOverlayAddrOption$peerId', grant.targetAddr);
-    await setOption('$kOverlayPkOption$peerId', grant.targetIdPk);
-    if (grant.ticket.isNotEmpty) {
+      if (grant.ticket.isEmpty ||
+          grant.id.isEmpty ||
+          grant.targetIdPk.isEmpty) {
+        lastError =
+            'The server did not provide a complete labnet session ticket.';
+        return false;
+      }
+      final ip = bareIp(grant.targetAddr.split(':').first);
+      final elapsed = Stopwatch()..start();
+      Duration remaining() => readyTimeout - elapsed.elapsed;
+      var ready = false;
+      var ticketReady = false;
+      for (var i = 0; i < readyTimeout.inSeconds; i++) {
+        if (i > 0) {
+          await _sleep(const Duration(seconds: 1)).timeout(remaining());
+        }
+        final status = lastStatus = await daemon.status().timeout(remaining());
+        final peer = status.peerAt(ip);
+        ticketReady = await broker.sessionReady(grant.id).timeout(remaining());
+        if (status.isUp && (peer?.connected ?? false) && ticketReady) {
+          lastLink = peer!.link;
+          ready = true;
+          break;
+        }
+      }
+      if (!ready) {
+        lastError = !ticketReady
+            ? 'The target has not confirmed that it is ready for this session. '
+                'Check that its LabDesk service is running and can reach lab-desk.net.'
+            : 'The labnet tunnel to this machine did not become ready. '
+                'Check labnet on both machines and try again.';
+        return false;
+      }
+      await setOption('$kOverlayAddrOption$peerId', grant.targetAddr);
+      await setOption('$kOverlayPkOption$peerId', grant.targetIdPk);
       await setOption('$kOverlayTicketOption$peerId', grant.ticket);
+      await setOption('$kOverlayRequiredOption$peerId', 'Y');
+      final previous = _grants[peerId];
+      _grants[peerId] = (
+        grants: [...?previous?.grants, grant],
+        seenOpen: previous?.seenOpen ?? false,
+      );
+      _unseenPolls[peerId] = 0;
+      grant = null; // The active-session tracker now owns its release.
+      prepared = true;
+      return true;
+    } on TimeoutException {
+      lastError = 'The labnet connection timed out while waiting for the '
+          'tunnel and target service. Check both machines and try again.';
+      return false;
+    } on OverlayBrokerException catch (e) {
+      lastError = e.message;
+      return false;
+    } catch (e) {
+      lastError = '$e';
+      return false;
+    } finally {
+      try {
+        if (!prepared) await _clearHints(peerId);
+      } finally {
+        try {
+          if (grant != null) await _endGrant(grant.id);
+        } finally {
+          _preparing.remove(peerId);
+        }
+      }
     }
-    _grants[peerId] = (grant: grant, seenOpen: false);
-    _unseenPolls[peerId] = 0;
-    return true;
   }
 
   /// The peer ids of sessions the console currently sees open.
   Future<void> noteOpenSessions(Iterable<String> open) async {
+    await _retryReleases();
     final openSet = open.toSet();
     for (final id in _grants.keys.toList()) {
       final g = _grants[id]!;
       if (openSet.contains(id)) {
-        _grants[id] = (grant: g.grant, seenOpen: true);
+        _grants[id] = (grants: g.grants, seenOpen: true);
         _unseenPolls.remove(id);
       } else if (g.seenOpen) {
         await release(id);
@@ -101,11 +163,49 @@ class OverlaySession {
     final g = _grants.remove(peerId);
     _unseenPolls.remove(peerId);
     if (g == null) return;
+    try {
+      await _clearHints(peerId);
+    } finally {
+      for (final grant in g.grants) {
+        await _endGrant(grant.id);
+      }
+    }
+  }
+
+  Future<void> _endGrant(String id) async {
+    _pendingReleases.add(id);
+    try {
+      // DELETE is idempotent. A late response can safely be ignored and the
+      // release retried, unlike session creation or publishing dial hints.
+      if (await broker.endSession(id).timeout(const Duration(seconds: 10),
+          onTimeout: () => false)) _pendingReleases.remove(id);
+    } catch (_) {
+      // A failed release remains owned here until the next session poll.
+    }
+  }
+
+  Future<void> _retryReleases() async {
+    for (final id in _pendingReleases.toList()) {
+      await _endGrant(id);
+    }
+  }
+
+  Future<void> _clearHints(String peerId) async {
     await setOption('$kOverlayAddrOption$peerId', '');
     await setOption('$kOverlayPkOption$peerId', '');
     await setOption('$kOverlayTicketOption$peerId', '');
-    await broker.endSession(g.grant.id);
+    await setOption('$kOverlayRequiredOption$peerId', '');
   }
+
+  Future<void> releaseAll() async {
+    for (final peerId in _grants.keys.toList()) {
+      await release(peerId);
+    }
+  }
+
+  /// Explicit fallback changes only the next dial, preserving any other open
+  /// session's WireGuard grant to the same machine.
+  Future<void> useRustDesk(String peerId) => _clearHints(peerId);
 
   bool get hasGrants => _grants.isNotEmpty;
 

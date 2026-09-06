@@ -91,6 +91,13 @@ lazy_static::lazy_static! {
     static ref WAKELOCK_KEEP_AWAKE_OPTION: Arc::<Mutex<Option<bool>>> = Default::default();
     // Connect tickets (src/labdesk/ticket.rs): on every build, unlike the switch-sides map below.
     static ref PENDING_TICKETS: Arc::<Mutex<Vec<PendingTicket>>> = Default::default();
+    static ref SPENT_TICKETS: Mutex<ResultType<crate::labdesk::ticket::SpentTickets>> = Mutex::new({
+        #[cfg(not(test))]
+        let path = Config::path("labdesk-spent-tickets.json");
+        #[cfg(test)]
+        let path = std::env::temp_dir().join(format!("labdesk-spent-{}.json", uuid::Uuid::new_v4()));
+        crate::labdesk::ticket::SpentTickets::load(path)
+    });
 }
 
 #[cfg(feature = "flutter")]
@@ -6247,11 +6254,36 @@ pub fn claim_pending_ticket(controller_peer_id: &str, matches: impl Fn(&str) -> 
     retain_live_tickets(&mut tickets);
     for t in tickets.iter_mut() {
         if t.controller_peer_id == controller_peer_id && !t.claimed && matches(&t.secret_hash) {
-            t.claimed = true;
-            return true;
+            return spend_pending_ticket(t, &mut SPENT_TICKETS.lock().unwrap());
         }
     }
     false
+}
+
+/// Persistence is part of authentication, not the later best-effort HTTP
+/// claim report. A process restart must not make a redelivered ticket usable.
+fn spend_pending_ticket(
+    ticket: &mut PendingTicket,
+    ledger: &mut ResultType<crate::labdesk::ticket::SpentTickets>,
+) -> bool {
+    let result = match ledger {
+        Ok(ledger) => ledger.spend(&ticket.id, ticket.expires_at, hbb_common::get_time() / 1000),
+        Err(_) => {
+            log::error!("[ticket] Spent-ticket storage unavailable; refusing ticket authentication");
+            return false;
+        }
+    };
+    match result {
+        Ok(first_claim) => {
+            // A recovered spend should also be reported again to the Worker.
+            ticket.claimed = true;
+            first_claim
+        }
+        Err(err) => {
+            log::error!("[ticket] Cannot persist ticket claim; refusing authentication: {}", err);
+            false
+        }
+    }
 }
 
 /// The ids of tickets claimed since the last ask, marked reported as they are
@@ -7282,6 +7314,36 @@ mod test {
             mine(take_claimed_tickets()).is_empty(),
             "reported once"
         );
+    }
+
+    #[test]
+    fn test_ticket_auth_requires_a_durable_spend() {
+        let path = std::env::temp_dir().join(format!("labdesk-claim-{}", uuid::Uuid::new_v4())).join("spent.json");
+        let mut ticket = PendingTicket {
+            id: "ticket".into(), controller_peer_id: "controller".into(), secret_hash: "hash".into(),
+            expires_at: hbb_common::get_time() / 1000 + 120, claimed: false, reported: false,
+        };
+        let mut ledger = crate::labdesk::ticket::SpentTickets::load(path.clone());
+        assert!(spend_pending_ticket(&mut ticket, &mut ledger));
+        // Simulate redelivery to a fresh --server after the claim HTTP failed.
+        ticket.claimed = false;
+        let mut restarted = crate::labdesk::ticket::SpentTickets::load(path.clone());
+        assert!(!spend_pending_ticket(&mut ticket, &mut restarted));
+        assert!(ticket.claimed, "a recovered spend is owed to the Worker again");
+        std::fs::remove_file(&path).unwrap();
+        std::fs::create_dir(&path).unwrap();
+        let mut unreadable = crate::labdesk::ticket::SpentTickets::load(path.clone());
+        ticket.claimed = false;
+        assert!(!spend_pending_ticket(&mut ticket, &mut unreadable));
+        assert!(!ticket.claimed);
+        std::fs::remove_dir(&path).unwrap();
+        let mut unwritable = crate::labdesk::ticket::SpentTickets::load(path.clone());
+        std::fs::create_dir(&path).unwrap();
+        assert!(!spend_pending_ticket(&mut ticket, &mut unwritable));
+        assert!(!ticket.claimed);
+        std::fs::remove_file(path.with_extension("tmp")).unwrap();
+        std::fs::remove_dir(&path).unwrap();
+        std::fs::remove_dir(path.parent().unwrap()).unwrap();
     }
 
     #[test]

@@ -845,11 +845,9 @@ fn get_direct_port() -> i32 {
 }
 
 /// labnet: how many times a literal bind is retried, one attempt a second, so
-/// about a minute, before the wait goes quiet. The overlay interface can take a
-/// moment to appear after a restart and the bind is tried again while it does.
-/// A failure that outlives that is not the interface, it is the port already
-/// being held, and retrying that forever would only fill the log, so the wait
-/// then holds for an option to change instead.
+/// about a minute, before retries slow to every fifteen seconds. The interface
+/// can return or a competing process can release the port without an option
+/// change; only the first failure is logged.
 const DIRECT_BIND_RETRIES: u32 = 60;
 
 /// labnet: the direct listener serves this machine's overlay address alone, so
@@ -918,7 +916,12 @@ async fn direct_server(server: ServerPtr) {
         let disabled = !option2bool(
             OPTION_DIRECT_SERVER,
             &Config::get_option(OPTION_DIRECT_SERVER),
-        ) || option2bool("stop-service", &Config::get_option("stop-service"));
+        ) || option2bool("stop-service", &Config::get_option("stop-service"))
+            || (!Config::get_option("labdesk-direct-bind").is_empty()
+                && Config::get_option("labdesk-labnet-enabled") == "N");
+        if disabled {
+            failures = 0;
+        }
         if !disabled && listener.is_none() {
             let next_port = get_direct_port();
             let next_bind = Config::get_option("labdesk-direct-bind");
@@ -962,15 +965,13 @@ async fn direct_server(server: ServerPtr) {
                         );
                     }
                     loop {
-                        sleep(1.).await;
-                        // The address can arrive after the service starts, when
-                        // the overlay interface comes up, so a literal bind is
-                        // tried again for as long as that can take. Every other
-                        // failure needs an option to change before another
-                        // attempt could go differently.
-                        if (bind_ip.is_some() && failures <= DIRECT_BIND_RETRIES)
+                        sleep(if bind_ip.is_some() && failures > DIRECT_BIND_RETRIES { 15. } else { 1. }).await;
+                        if bind_ip.is_some()
                             || port != get_direct_port()
                             || bind != Config::get_option("labdesk-direct-bind")
+                            || Config::get_option("labdesk-labnet-enabled") == "N"
+                            || !option2bool(OPTION_DIRECT_SERVER, &Config::get_option(OPTION_DIRECT_SERVER))
+                            || option2bool("stop-service", &Config::get_option("stop-service"))
                         {
                             break;
                         }
