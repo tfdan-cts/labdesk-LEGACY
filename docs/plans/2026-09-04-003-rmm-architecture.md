@@ -124,6 +124,25 @@ wrong, the correction is recorded here rather than left to be rediscovered.
     check found the first `net.adapters` attribute of a run written with no MAC address and zero
     traffic, because the flush offset is shorter than one sample cadence and the sampler's
     interface list was still empty; the constructor seeds it.
+
+13. The connect ticket's 120 second life (section 12 step 2, and the schema comment on
+    `connect_ticket.expires_at`). The target is handed a ticket only in the answer to its own
+    `POST /agent/batch`, and the default `flushSeconds` is 300, so a row that expired after 120
+    seconds was almost always gone before the batch that would have carried it: the delivery
+    select filters on `claimed_at` null and `expires_at` in the future and found nothing. The
+    half of the design this document spends the most words on therefore almost never ran. As
+    built, `ticketLife()` in the site's `src/worker/routes/overlay.ts` is
+    `max(120, 2 * flushSeconds)`, keeping the 120 second floor for a machine that flushes faster.
+    The claim leg is still unproven end to end: a ticket was minted and delivered on
+    homebox-devserver 2026-09-05 with `claimed_at` null, and claiming one needs a controller and a
+    target both signed in, which needs an enrolment token only the owner mints in production.
+
+14. Every capability in the grant table is now requested by a route (section 2). The table named
+    six, and for most of phase 1 only four were asked for by any handler, so `machine:write` and
+    `job:request` were granted to a role and reachable by nobody. `POST /org/jobs` asks for
+    `job:request`, the machine label and tag edit and the alert acknowledgement ask for
+    `machine:write`, and the grant table is what a role can actually do rather than what was
+    intended.
 -->
 
 <!--

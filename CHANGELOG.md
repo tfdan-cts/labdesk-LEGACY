@@ -25,11 +25,6 @@ past that release:
   lands pending and cannot sign in until an admin approves it) and an overview of the
   organizations, machines and open labnet sessions, and the private-phase Access wall came
   down. The `/console` prefix this build speaks stays served.
-- lab-desk.net is public since 2026-09-05. The Cloudflare zone was hardened and every setting
-  read back live, the site's admin gained a registration switch (default off: a self sign-up
-  lands pending and cannot sign in until an admin approves it) and an overview of the
-  organizations, machines and open labnet sessions, and the private-phase Access wall came
-  down. The `/console` prefix this build speaks stays served.
 - The direct listener signs its identity when bound to the overlay address, so a direct session
   completes instead of falling back to the relay every time, and a peer whose key the broker has
   not yet learned is reported as unproven and falls through rather than being called an
@@ -60,10 +55,52 @@ past that release:
 - Labnets can be renamed, a technician who works across several fleets is asked which fleet a new
   labnet belongs to instead of being refused, and a change lab-desk.net wants a fresh sign-in for
   asks for it and then goes through rather than failing.
+- Tools and jobs. A technician asks lab-desk.net to run one of the tools in the compiled
+  catalog on one machine. The request is checked against that tool's own parameter rules and
+  against the machine's platform before it is stored, a tool that runs as the system waits for a
+  second owner's approval, and the machine collects the job on its next uplink, runs it as the
+  right user, and returns the exit code and the first 16 KiB of its output. Nine tools ship in
+  the first catalog, and the same `tools.json` compiles into both halves of the product so
+  neither can drift from the other.
+- A connect ticket, not a password. When a technician opens a labnet path to a machine, the
+  server mints a one-time credential and hands the plaintext to the console alone; the target
+  learns only its hash, inside the answer to its own signed uplink, accepts it once, and reports
+  it spent. The ticket is never written to the remembered password for that peer and never
+  reaches an address book. A ticket lives for two of the target's flushes and never less than
+  120 seconds, because a shorter life expired before the uplink that had to carry it.
+- Drive health runs against real drives. The disk module had never been asked a question by
+  anything but a byte fixture; on 2026-09-05 it read a Micron 3400 NVMe and a Seagate
+  ST1000VX008 on real hardware, and both refused without root as unreadable rather than
+  reporting a healthy disk nobody had asked. Two readings the plan had wrong were corrected
+  against those drives: the ATA power-on hours field carries a second counter in its upper
+  bytes, and the NVMe hwmon node sits on the controller rather than under its device.
+- Linux receives unattended updates, through a helper the packages actually ship. `build.py`
+  stages `labdesk-helper` and the polkit action on both deb paths and in both rpm specs, the
+  root service asks the desktop process whether a session is live before it installs, and the
+  install is handed to the helper through `systemd-run` so that stopping the service mid-upgrade
+  cannot kill dpkg. The helper refuses a package that is not newer than the installed one and
+  refuses any bytes whose digest lab-desk.net has not published, so the console's own button and
+  the unattended loop install through one gate.
+- lab-desk.net gains the web console: fleet, one machine, people, enrolment, rules, jobs, alerts
+  and updates, each fed by its own route, with an owner able to invite a second person into the
+  organization and that invitation able to be accepted. The machine page shows a day of stored
+  history, every drive with its verdict and what read it, the jobs and the alerts for that
+  machine, and the labels beside the agent's own read-only attributes.
+- The first end-to-end run on a real machine, 2026-09-05, found five defects no test could see,
+  and they are fixed: a machine never reported its own platform, so no really enrolled machine
+  could ever be given a job; an urgent job's result still waited a full cadence, because the
+  early flush had no line to carry it; a server with no labnet configured blanked the whole
+  console, because one read had been paired with the organization's machines; the health board
+  rendered the technician's own peers instead of the organization's fleet; and the console never
+  recognised itself, because it compared against the formatted machine id the box displays.
 
 Known open at this commit: no session has been opened over a labnet address from the product;
 the field test is the owner's. The aarch64 Windows and iOS jobs of the `labnet-ready` dispatch
-failed, so no ARM64 Windows or iOS build of this commit exists.
+failed, so no ARM64 Windows or iOS build of this commit exists. A connect ticket has been minted
+and delivered to a real machine but never claimed, because claiming it needs two signed-in
+consoles and an enrolment token only the owner mints in production. The console still reads no
+health events, and its automation rules are still its own rather than the organization's, because
+the server has no create or delete route for a rule yet.
 
 ## 1.2.4 (2026-09-04)
 

@@ -355,7 +355,9 @@ password, and the target's service then reports the claim to lab-desk.net so the
 records that the one-time credential was spent. The controller holds the secret in its options
 file only for the seconds between the grant and the connect, and it is cleared on use and again
 when the grant is released; the
-target keeps the hash in memory only. A ticket expires in two minutes. The ticket password
+target keeps the hash in memory only. A ticket lives for two of the target's flushes and never
+less than two minutes, because the target is handed it only in the answer to its own uplink and
+the default flush is five minutes, so a two minute ticket expired before it could be delivered. The ticket password
 is never written to the peer's remembered password and never synced to the personal address
 book, even when that peer already has a remembered password (`PasswordSource::is_storable`
 in `src/client.rs`, the same rule a shared address book password follows).
@@ -371,8 +373,12 @@ book routes. What the console has no surface for is managing the organization. C
 
 * **The organization is managed on lab-desk.net, not here.** Owner, technician and viewer roles,
   fleets as groups inside an organization, and enrolment tokens live in `src/worker/org.ts` and
-  on the `/org` page of the `labdesk-site` repository. This client spends a token and lists the
-  organization's machines; it has no page that creates a fleet or changes a role. The console's
+  on the web console of the `labdesk-site` repository, which since 2026-09-05 is eight pages:
+  `/fleet`, `/machine/:id`, `/people`, `/enrol`, `/rules`, `/jobs`, `/alerts` and `/updates`,
+  beside the `/org` page that creates the organization and its fleets. That is where a person is
+  invited, a role is changed, a job is approved and an alert is acknowledged. This client spends
+  a token and lists the organization's machines; it has no page that creates a fleet or changes a
+  role. The console's
   **Fleet** section is a different thing wearing the same word: this client's own machine list and
   its reachability, held locally.
 * **The health engine's own events are not read yet.** `GET /console/org/events` and the

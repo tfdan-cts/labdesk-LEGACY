@@ -475,3 +475,88 @@ and every place that needed this machine's own peer id read the formatted id the
 console never recognised itself. A sixth, smaller: a Linux tunnel whose `operstate` is `unknown`
 read as down, and the first adapter attribute of every run was written before the sampler had ever
 listed an interface, so it carried no MAC address and no traffic.
+
+## Site lane, WEB CONSOLE (WP17), round 1 (2026-09-05)
+
+Two commits on the site's `feat/wp17-console`, `ff2b4d6` and `ead4d4c`, both picked by the critic
+in one round. The first builds the eight pages of the architecture's section 8.1 in the shell and
+the visual system that `/org` and `/account` already use, each fed by its own data route: `/fleet`
+lists every machine with its hot row and filters by fleet and by name, ID or tag; `/machine/:id`
+carries the state, a day of stored history, every drive with its verdict and what read it, the
+labels beside the agent's own read-only attributes, the jobs, the alerts and the open sessions;
+`/people` shows the members and their fleet scope and lets an owner change a role; `/enrol` mints
+the single use token and prints the exact line to run on the machine; `/rules` shows what the
+minute cron watches for and the switch that stops one; `/jobs` shows who asked, who approved,
+which tool with which parameters, and the exit code and output; `/alerts` shows what the health
+engine raised and the acknowledgement that closes it; `/updates` shows the published release
+against the version every machine reports.
+
+Two route files came with the pages. `GET /api/org/members` answers each member's fleet scope and
+`POST /api/org/members/:id/role` is owner only, needs a fresh sign in, and runs the same labnet
+teardown the plugin hook runs when a role loses `session:open`. `src/worker/routes/rules.ts` is
+new and carries `GET /api/org/rules` and `PATCH /api/org/rules/:id`, where a rule on the whole
+organization is an owner's and a member narrowed to fleets never sees another fleet's rules. All
+four answer at `/console/...` as well, because `index.ts` mounts the new router in the same loop.
+
+The second commit closes a hole the first left: the people page could change a role and remove a
+member and nothing anywhere could add one, because the organization plugin's invitation endpoints
+were mounted with no `sendInvitationEmail`, so an invitation would have written a row nobody ever
+heard about and the only member row any code path created was the founder's. An organization could
+therefore never have a second person in it. The hook now carries the link to
+`/accept-invitation?id=`, a new application route where the invited person joins with the role the
+invitation names, and the people page gains the owner-only form that sends it.
+`test/invitation.test.ts` holds the path end to end.
+
+Verified: `npx vitest run --no-file-parallelism` green, `tsc --noEmit` clean, and all eight routes
+measured at 390 px through the mobile emulator harness with no horizontal pan. Evidence
+`gauntlet-evidence/p1-web-console/round-1/`. Open at the end of the round: the branch is `dev` plus
+these two commits and has not been merged, so none of it is live; nothing has been exercised
+against a signed-in console in production, because no account exists there for the program to use.
+
+## Contracts, round 4 (2026-09-05)
+
+Verification only, no change. The contract both lanes build against is the same git blob
+`a8cf75b99574c2e13ff3b36214462edd5dfaf87f` in both repositories, 846 lines: client
+`docs/plans/2026-09-05-002-phase1-contracts.md` at `e7ece5827673bb874eda920f1a600e1cc438be40` on
+`feat/labnet`, site `docs/phase1-contracts.md` at `81eeea87bbd041417f9222ea2cdddbf51198520b` on
+both `dev` and `feat/labnet-broker`. Both commit ids were confirmed against the real remotes with
+`git ls-remote` rather than read from remote-tracking refs. Its twelve sections cover the shared
+tool catalog, the job outbox and result wire, the connect ticket, the address book rules, the
+health and telemetry read routes, the per adapter network view, the self-healing switch, the
+technician presets, the labnet stage 2 routes, the per lane verifiers, the client lane's
+corrections, and what is built against what is not. Evidence
+`gauntlet-evidence/p1-contracts/round-4/verify.txt`.
+
+## Smoothing pass, both lanes (2026-09-05)
+
+Documentation brought level with the code at the end of phase 1, plus one stale source comment,
+and nothing else.
+
+Client repository, on `feat/labnet`. `CHANGELOG.md` carried the same paragraph about the site going
+public twice; the duplicate is gone, and the Unreleased section gains the phase 1 work it had no
+entry for: tools and jobs, the connect ticket that replaces a password, drive health run against
+real drives, the Linux unattended update through the packaged helper, the web console on
+lab-desk.net, and the five defects the first end-to-end run on a real machine found. Its known open
+list now names the unclaimed ticket, the health events the console does not read, and the automation
+rules that are still the console's own. `docs/CONSOLE.md` said a ticket expires in two minutes,
+which stopped being true when the site made a ticket outlive the flush that has to carry it, and it
+pointed at a single `/org` page where there are now nine. The architecture's corrections block gains
+items 13 and 14: the ticket lifetime, and the two capabilities in the grant table that were
+reachable by nobody until the jobs and machine edit routes asked for them. The production program's
+phase 1 row now records every package with its evidence path, the two branch heads, the open items
+and the next action.
+
+Site repository, on `feat/wp17-console`, which had `origin/dev` merged into it first so the branch
+is `dev` plus the console. `README.md` had two paragraphs the code had overtaken: it said only four
+of the six capabilities were asked for by a route, and it said nothing under `src/worker/` writes
+`disk_sample`, `machine_job` or `connect_ticket`, so three of the five idempotency guards the replay
+decision trades for had no route to guard. Both are now what the code does. The console block
+counted twenty-eight dual-mounted routes and named three routers; it is thirty-two and four. The
+known gaps gain the connect ticket's unproven claim leg. The one code change is the comment in
+`src/worker/agent-auth.ts` that still said none of the five guards existed: all five do, every one
+inside the single `db.batch()` in `agent-ingest.ts`, and the comment now says which route owns each
+and that a new write on that plane owes the same treatment.
+
+Verified: site `tsc --noEmit` clean and `npx vitest run --no-file-parallelism` green. No Rust or
+Dart source was touched, so neither gate was rerun.
+
