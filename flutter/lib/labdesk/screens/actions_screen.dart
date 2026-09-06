@@ -99,9 +99,9 @@ class ActionsScreen extends StatelessWidget {
           mainAxisSize: MainAxisSize.min,
           children: [
             // The set's own bolt, which is the mark the Actions tab carries.
-            const LdIcon(LdIcons.actions, size: 26, color: C.textFaint),
+            LdIcon(LdIcons.actions, size: 26, color: C.of(context).textFaint),
             const SizedBox(height: 14),
-            Text('No machine selected', style: C.h2()),
+            Text('No machine selected', style: C.of(context).h2()),
             const SizedBox(height: 6),
             // Fixed height, matching the health and terminal screens: see the
             // note on HealthScreen's empty state.
@@ -111,7 +111,7 @@ class ActionsScreen extends StatelessWidget {
               child: Text(
                 'Choose a machine on the Fleet screen to act on it.',
                 textAlign: TextAlign.center,
-                style: C.small(color: C.textFaint),
+                style: C.of(context).small(color: C.of(context).textFaint),
               ),
             ),
           ],
@@ -131,7 +131,7 @@ class ActionsScreen extends StatelessWidget {
             child: Column(
               children: [
                 for (var i = 0; i < kMachineActions.length; i++) ...[
-                  if (i > 0) Divider(height: 1, thickness: 1, color: C.hairline),
+                  if (i > 0) Divider(height: 1, thickness: 1, color: C.of(context).hairline),
                   _ActionRow(
                     action: kMachineActions[i],
                     enabled: !kMachineActions[i].requiresSession || connected,
@@ -187,7 +187,7 @@ class _ActionRowState extends State<_ActionRow> {
   Widget build(BuildContext context) {
     final a = widget.action;
     final enabled = widget.enabled && widget.onRun != null && !widget.busy;
-    final fg = enabled ? C.text : C.textFaint;
+    final fg = enabled ? C.of(context).text : C.of(context).textFaint;
 
     return MouseRegion(
       cursor: enabled ? SystemMouseCursors.click : SystemMouseCursors.basic,
@@ -198,32 +198,32 @@ class _ActionRowState extends State<_ActionRow> {
         child: AnimatedContainer(
           duration: C.fast,
           padding: const EdgeInsets.symmetric(horizontal: 18, vertical: 14),
-          color: _hover && enabled ? C.surfaceHi : Colors.transparent,
+          color: _hover && enabled ? C.of(context).surfaceHi : Colors.transparent,
           child: Row(
             children: [
-              LdIcon(a.glyph, size: 17, color: a.destructive && enabled ? C.bad : fg),
+              LdIcon(a.glyph, size: 17, color: a.destructive && enabled ? C.of(context).bad : fg),
               const SizedBox(width: 14),
               Expanded(
                 child: Column(
                   crossAxisAlignment: CrossAxisAlignment.start,
                   children: [
-                    Text(a.label, style: C.body(color: fg)),
+                    Text(a.label, style: C.of(context).body(color: fg)),
                     const SizedBox(height: 2),
                     Text(
                       enabled || !a.requiresSession
                           ? a.description
                           : '${a.description} Needs an open session.',
-                      style: C.small(color: C.textFaint),
+                      style: C.of(context).small(color: C.of(context).textFaint),
                     ),
                   ],
                 ),
               ),
               const SizedBox(width: 16),
               if (widget.busy)
-                const LdSpinner(size: 14, color: C.accent)
+                LdSpinner(size: 14, color: C.of(context).accent)
               else
                 LdIcon(LdIcons.chevronRight,
-                    size: 18, color: enabled ? C.textMuted : C.textFaint),
+                    size: 18, color: enabled ? C.of(context).textMuted : C.of(context).textFaint),
             ],
           ),
         ),
@@ -241,10 +241,10 @@ class _ConfirmDialog extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     return Dialog(
-      backgroundColor: C.surface,
+      backgroundColor: C.of(context).surface,
       shape: RoundedRectangleBorder(
         borderRadius: C.rounded,
-        side: const BorderSide(color: C.hairline),
+        side: BorderSide(color: C.of(context).hairline),
       ),
       child: ConstrainedBox(
         constraints: const BoxConstraints(maxWidth: 400),
@@ -254,12 +254,12 @@ class _ConfirmDialog extends StatelessWidget {
             mainAxisSize: MainAxisSize.min,
             crossAxisAlignment: CrossAxisAlignment.start,
             children: [
-              Text(action.label, style: C.h2()),
+              Text(action.label, style: C.of(context).h2()),
               const SizedBox(height: 8),
               Text(
                 'This restarts $machineName. Any open session ends and the machine '
                 'is unreachable until it comes back.',
-                style: C.small(color: C.textMuted),
+                style: C.of(context).small(color: C.of(context).textMuted),
               ),
               const SizedBox(height: 20),
               Row(
@@ -311,11 +311,11 @@ class _DangerButtonState extends State<_DangerButton> {
           padding: const EdgeInsets.symmetric(horizontal: 14),
           alignment: Alignment.center,
           decoration: BoxDecoration(
-            color: _hover ? C.bad : C.bad.withOpacity(0.85),
+            color: _hover ? C.of(context).bad : C.of(context).bad.withOpacity(0.85),
             borderRadius: C.roundedSm,
           ),
           child: Text(widget.label,
-              style: C.small(color: const Color(0xFF1A0B0B), w: FontWeight.w700)),
+              style: C.of(context).small(color: const Color(0xFF1A0B0B), w: FontWeight.w700)),
         ),
       ),
     );

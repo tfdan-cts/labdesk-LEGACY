@@ -6,41 +6,46 @@ import '../models/machine_metrics.dart';
 import '../models/machine_row.dart';
 import '../theme/console_theme.dart';
 
-/// Health for the whole fleet at once: one card per machine.
-///
-/// The figures are the machine's own. Every enrolled machine's agent takes them
-/// on its own flush and sends them to lab-desk.net, and the console reads them
-/// back with the fleet: no session, no terminal channel and nobody watching is
-/// needed for a reading to exist (WP18). A machine the organization has not
-/// enrolled has no readings at all, and the card says so rather than showing
-/// four dashes with no reason.
-///
-/// Presentational: it takes rows and health per row. Nothing here touches the
-/// client.
+LabDeskPeerStatus _status(
+    MachineRow machine, MachineHealth health, DateTime now) {
+  final state = health.state;
+  if (state == null) return machine.status;
+  return switch (state.statusAt(now)) {
+    'online' => LabDeskPeerStatus.online,
+    'offline' => LabDeskPeerStatus.offline,
+    _ => LabDeskPeerStatus.unknown,
+  };
+}
+
+String _age(int seconds) {
+  if (seconds < 60) return '${seconds}s';
+  if (seconds < 3600) return '${seconds ~/ 60}m';
+  if (seconds < 86400) return '${seconds ~/ 3600}h';
+  return '${seconds ~/ 86400}d';
+}
+
+/// Collector readings with their source age, grouped by current reachability.
 class HealthBoard extends StatelessWidget {
   const HealthBoard({
     super.key,
     required this.machines,
     required this.healthFor,
     this.now,
+    this.footer,
   });
 
   final List<MachineRow> machines;
   final MachineHealth Function(String machineId) healthFor;
   final DateTime? now;
+  final Widget? footer;
 
   @override
   Widget build(BuildContext context) {
-    if (machines.isEmpty) {
-      return Center(
-        child: Text('No machines yet.', style: C.small(color: C.textFaint)),
-      );
-    }
-    // The product's one triplet, kept apart on the board as well as in the
-    // caption: a machine nobody has had an answer for is not a machine that
-    // is down, so it never sits under a heading that says it is.
-    List<MachineRow> of(LabDeskPeerStatus s) =>
-        machines.where((m) => m.status == s).toList(growable: false);
+    final snapshot = now ?? DateTime.now();
+    final health = {for (final m in machines) m.id: healthFor(m.id)};
+    List<MachineRow> of(LabDeskPeerStatus s) => machines
+        .where((m) => _status(m, health[m.id]!, snapshot) == s)
+        .toList(growable: false);
     final online = of(LabDeskPeerStatus.online);
     final offline = of(LabDeskPeerStatus.offline);
     final unknown = of(LabDeskPeerStatus.unknown);
@@ -50,50 +55,49 @@ class HealthBoard extends StatelessWidget {
         crossAxisAlignment: CrossAxisAlignment.stretch,
         children: [
           Text(
-            'Every enrolled machine reports its own figures to lab-desk.net on '
-            'its flush, and the console reads them back with the fleet. A '
-            'machine that is not enrolled with your organization reports '
-            'nothing, and reads as such.',
-            style: C.small(color: C.textMuted),
+            'Machine readings, with the age of their last report.',
+            style: C.of(context).small(color: C.of(context).textMuted),
           ),
           const SizedBox(height: 16),
-          _grid(context, online),
-          if (offline.isNotEmpty) ...[
-            const SizedBox(height: 22),
-            Text('Offline', style: C.micro()),
-            const SizedBox(height: 10),
-            _grid(context, offline),
-          ],
-          if (unknown.isNotEmpty) ...[
-            const SizedBox(height: 22),
-            Text('Unknown', style: C.micro()),
-            const SizedBox(height: 10),
-            _grid(context, unknown),
+          if (machines.isEmpty)
+            Text('No machines yet.', style: C.of(context).small())
+          else if (online.isEmpty)
+            Text('Nothing is online.', style: C.of(context).small())
+          else
+            _grid(context, online, health, snapshot),
+          for (final section in [
+            ('Offline', offline),
+            ('Unknown', unknown),
+          ])
+            if (section.$2.isNotEmpty) ...[
+              const SizedBox(height: 22),
+              Text(section.$1, style: C.of(context).micro()),
+              const SizedBox(height: 10),
+              _grid(context, section.$2, health, snapshot),
+            ],
+          if (footer != null) ...[
+            const SizedBox(height: 24),
+            footer!,
           ],
         ],
       ),
     );
   }
 
-  Widget _grid(BuildContext context, List<MachineRow> rows) {
-    if (rows.isEmpty) {
-      return Text('Nothing is online.', style: C.small(color: C.textFaint));
-    }
-    return LayoutBuilder(builder: (context, c) {
-      final columns = (c.maxWidth / 420).floor().clamp(1, 4);
-      final width = (c.maxWidth - (columns - 1) * 16) / columns;
+  Widget _grid(BuildContext context, List<MachineRow> rows,
+      Map<String, MachineHealth> health, DateTime snapshot) {
+    return LayoutBuilder(builder: (context, constraints) {
+      final columns = (constraints.maxWidth / 420).floor().clamp(1, 4);
+      final width = (constraints.maxWidth - (columns - 1) * 24) / columns;
       return Wrap(
-        spacing: 16,
-        runSpacing: 16,
+        spacing: 24,
+        runSpacing: 24,
         children: [
           for (final m in rows)
             SizedBox(
               width: width,
-              child: HealthCard(
-                machine: m,
-                health: healthFor(m.id),
-                now: now,
-              ),
+              child:
+                  HealthCard(machine: m, health: health[m.id]!, now: snapshot),
             ),
         ],
       );
@@ -115,25 +119,49 @@ class HealthCard extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
-    final statusColor = switch (machine.status) {
-      LabDeskPeerStatus.online => C.ok,
-      LabDeskPeerStatus.offline => C.bad,
-      LabDeskPeerStatus.unknown => C.idle,
-    };
+    final snapshot = now ?? DateTime.now();
+    final status = _status(machine, health, snapshot);
+    final state = health.state;
+    final current = state?.statusAt(snapshot) == 'online';
+    final age = state?.seenAt == null
+        ? null
+        : snapshot.millisecondsSinceEpoch ~/ 1000 - state!.seenAt!;
+    // An absent or future source timestamp cannot establish a report's age.
+    final hasSource = age != null && age >= 0;
     final remote = {for (final m in health.remote) m.label: m};
-    final session = {for (final m in health.session) m.label: m};
-    final history = health.history;
-    // Sparklines appear for every tile at once or not at all, so the four
-    // never sit at different heights while the first samples arrive.
-    final showHistory = history != null && history.samples.length >= 2;
-    List<MetricPoint>? trail(MetricKind k) =>
-        showHistory ? history.series(k) : null;
+    final session = health.session
+        .where((m) =>
+            m.isAvailable && (m.label == 'Round trip' || m.label == 'Codec'))
+        .toList();
+    final statusColor = switch (status) {
+      LabDeskPeerStatus.online => C.of(context).ok,
+      LabDeskPeerStatus.offline => C.of(context).bad,
+      LabDeskPeerStatus.unknown => C.of(context).idle,
+    };
+    final samples = health.history?.samples
+            .where((s) => !s.at.isAfter(snapshot))
+            .toList() ??
+        <MetricSample>[];
+    samples.sort((a, b) => a.at.compareTo(b.at));
+    final showHistory = samples.length >= 2;
+    List<MetricPoint>? trail(MetricKind kind) => showHistory
+        ? [
+            for (final sample in samples)
+              if (sample.of(kind) != null && sample.of(kind)!.isFinite)
+                MetricPoint(sample.at, sample.of(kind)!),
+          ]
+        : null;
+    final source = !hasSource
+        ? (age != null && age < 0
+            ? 'Report timestamp is in the future. Current readings unavailable.'
+            : 'No dated collector report available. Current readings unavailable.')
+        : current
+            ? 'Collector report ${_age(age)} ago. Current readings.'
+            : 'Last collector report ${_age(age)} ago. Cached readings; not current.';
     return Container(
-      padding: const EdgeInsets.fromLTRB(16, 14, 16, 14),
+      padding: const EdgeInsets.symmetric(vertical: 16),
       decoration: BoxDecoration(
-        color: C.surface,
-        borderRadius: C.rounded,
-        border: Border.all(color: C.hairline),
+        border: Border(top: BorderSide(color: C.of(context).hairline)),
       ),
       child: Column(
         crossAxisAlignment: CrossAxisAlignment.stretch,
@@ -148,170 +176,134 @@ class HealthCard extends StatelessWidget {
               ),
               const SizedBox(width: 10),
               Expanded(
-                child: Column(
-                  crossAxisAlignment: CrossAxisAlignment.start,
-                  children: [
-                    Text(machine.displayName,
-                        maxLines: 1,
-                        overflow: TextOverflow.ellipsis,
-                        style: C.h2()),
-                    const SizedBox(height: 2),
-                    Text(
-                      '${machine.id}  ·  ${machine.platform}',
-                      style: C.data(size: 11, color: C.textFaint),
-                    ),
-                  ],
-                ),
+                child: Text(machine.displayName,
+                    maxLines: 2,
+                    overflow: TextOverflow.ellipsis,
+                    style: C.of(context).h2()),
               ),
-              if (health.state?.worstDisk != null)
-                _DriveChip(verdict: health.state!.worstDisk!),
             ],
           ),
-          const SizedBox(height: 14),
-          Row(
-            children: [
-              _tile(remote['CPU'], 'CPU', trail(MetricKind.cpu)),
-              const SizedBox(width: 10),
-              _tile(remote['Memory'], 'Memory', trail(MetricKind.memory)),
-              const SizedBox(width: 10),
-              _tile(remote['Disk'], 'Disk', trail(MetricKind.disk)),
-              const SizedBox(width: 10),
-              _tile(remote['Uptime'], 'Uptime', showHistory ? const [] : null),
-            ],
-          ),
-          const SizedBox(height: 12),
-          Text(
-            _footer(session),
-            style: C.small(color: C.textFaint),
-          ),
-        ],
-      ),
-    );
-  }
-
-  /// One caption per state, and three states rather than two. A machine
-  /// LabDesk has had no answer about is rendered as unknown, never as offline
-  /// with a last-seen time it did not earn.
-  String _footer(Map<String, Metric> session) {
-    switch (machine.status) {
-      case LabDeskPeerStatus.offline:
-        return machine.lastSeenOnline == null
-            ? 'Offline. Not seen online this session.'
-            : 'Offline. Last seen ${machine.sinceSeen(now: now)} ago.';
-      case LabDeskPeerStatus.unknown:
-        return machine.lastSeenOnline == null
-            ? 'Unknown. LabDesk has had no answer for this machine, which is '
-                'not a report that it is down.'
-            : 'Unknown. No answer since it was last seen '
-                '${machine.sinceSeen(now: now)} ago, which is not a report '
-                'that it is down.';
-      case LabDeskPeerStatus.online:
-        break;
-    }
-    final rtt = session['Round trip'];
-    final codec = session['Codec'];
-    final parts = <String>[];
-    if (rtt != null && rtt.isAvailable) parts.add('${rtt.value} ms round trip');
-    if (codec != null && codec.isAvailable) parts.add('${codec.value}');
-    if (parts.isNotEmpty) return 'Desktop session: ${parts.join(', ')}.';
-    final state = health.state;
-    if (state == null) {
-      return 'Not enrolled with your organization, so it reports no figures.';
-    }
-    final said = <String>[];
-    if (state.loggedInUser != null) said.add('${state.loggedInUser} signed in');
-    if (state.agentVersion != null) said.add('agent ${state.agentVersion}');
-    if (said.isEmpty) {
-      return health.remote.any((m) => m.isAvailable)
-          ? 'Reported by the machine itself.'
-          : 'Enrolled; no readings sent yet.';
-    }
-    return 'Reported by the machine itself: ${said.join(', ')}.';
-  }
-
-  /// [trail] is null when the card shows no history row, and empty for a
-  /// tile that has a row but nothing to draw in it (uptime).
-  Widget _tile(Metric? m, String label, List<MetricPoint>? trail) {
-    final available = m != null && m.isAvailable;
-    return Expanded(
-      child: Column(
-        crossAxisAlignment: CrossAxisAlignment.start,
-        children: [
-          Text(label, style: C.micro()),
           const SizedBox(height: 4),
-          Row(
-            crossAxisAlignment: CrossAxisAlignment.baseline,
-            textBaseline: TextBaseline.alphabetic,
-            children: [
-              Text(available ? m.value! : '--',
-                  style: C.data(
-                      size: 16,
-                      color: available ? C.text : C.textFaint)),
-              if (available && m.unit != null) ...[
-                const SizedBox(width: 3),
-                Text(m.unit!, style: C.small(color: C.textFaint)),
-              ],
-            ],
-          ),
-          const SizedBox(height: 6),
-          Container(
-            height: 3,
-            decoration: BoxDecoration(
-              color: C.hairline,
-              borderRadius: BorderRadius.circular(2),
-            ),
-            child: available && m.ratio != null
-                ? Align(
-                    alignment: Alignment.centerLeft,
-                    child: FractionallySizedBox(
-                      widthFactor: m.ratio!.clamp(0.0, 1.0),
-                      child: Container(
-                        decoration: BoxDecoration(
-                          color: m.ratio! > 0.9 ? C.bad : C.ok,
-                          borderRadius: BorderRadius.circular(2),
-                        ),
-                      ),
-                    ),
-                  )
-                : null,
-          ),
-          if (trail != null) ...[
-            const SizedBox(height: 22),
-            SizedBox(
-              height: 26,
-              child: MetricSparkline(points: trail, label: label),
-            ),
+          Text('${machine.id}  ·  ${machine.platform}',
+              style:
+                  C.of(context).data(size: 11, color: C.of(context).textFaint)),
+          const SizedBox(height: 10),
+          Text(source,
+              style: C.of(context).small(color: C.of(context).textMuted)),
+          const SizedBox(height: 14),
+          LayoutBuilder(builder: (context, constraints) {
+            final scale = MediaQuery.textScalerOf(context).scale(1);
+            final columns =
+                (constraints.maxWidth / (92 * scale)).floor().clamp(1, 4);
+            final width = (constraints.maxWidth - (columns - 1) * 12) / columns;
+            return Wrap(spacing: 12, runSpacing: 16, children: [
+              for (final entry in [
+                ('CPU', trail(MetricKind.cpu)),
+                ('Memory', trail(MetricKind.memory)),
+                ('Disk', trail(MetricKind.disk)),
+                ('Uptime', null),
+              ])
+                SizedBox(
+                    width: width,
+                    child: _tile(context, hasSource ? remote[entry.$1] : null,
+                        entry.$1, entry.$2, current)),
+            ]);
+          }),
+          if (showHistory) ...[
+            const SizedBox(height: 10),
+            Text(
+                'Recorded history · latest sample ${_age(snapshot.difference(samples.last.at).inSeconds)} ago.',
+                style: C.of(context).small(color: C.of(context).textFaint)),
+          ],
+          if (hasSource && state?.worstDisk != null) ...[
+            const SizedBox(height: 12),
+            _DriveLabel(verdict: state!.worstDisk!, current: current),
+          ],
+          const SizedBox(height: 12),
+          Text(_footer(status),
+              style: C.of(context).small(color: C.of(context).textFaint)),
+          if (health.connected && session.isNotEmpty) ...[
+            const SizedBox(height: 6),
+            Text(
+                'Desktop session: ${session.map((m) => '${m.label}: ${m.value}${m.unit == null ? '' : ' ${m.unit}'}').join(', ')}',
+                style: C.of(context).small(color: C.of(context).textFaint)),
           ],
         ],
       ),
     );
   }
+
+  String _footer(LabDeskPeerStatus status) => switch (status) {
+        LabDeskPeerStatus.offline => machine.lastSeenOnline == null
+            ? 'Offline. No recent connection confirmed.'
+            : 'Offline. Last seen ${machine.sinceSeen(now: now)} ago.',
+        LabDeskPeerStatus.unknown => machine.lastSeenOnline == null
+            ? 'Unknown. Current reachability is not confirmed.'
+            : 'Unknown. No answer since it was last seen ${machine.sinceSeen(now: now)} ago.',
+        LabDeskPeerStatus.online => 'Online.',
+      };
+
+  Widget _tile(BuildContext context, Metric? metric, String label,
+      List<MetricPoint>? trail, bool current) {
+    final available = metric != null && metric.isAvailable;
+    final colour = current ? C.of(context).text : C.of(context).textMuted;
+    return Column(
+      crossAxisAlignment: CrossAxisAlignment.start,
+      children: [
+        Text(label, style: C.of(context).micro()),
+        const SizedBox(height: 4),
+        Text(
+            available
+                ? '${metric.value}${metric.unit == null ? '' : ' ${metric.unit}'}'
+                : '--',
+            style: C.of(context).data(
+                size: 16, color: available ? colour : C.of(context).textFaint)),
+        const SizedBox(height: 6),
+        Container(
+          height: 3,
+          color: C.of(context).hairline,
+          child: available && metric.ratio != null && metric.ratio!.isFinite
+              ? Align(
+                  alignment: Alignment.centerLeft,
+                  child: FractionallySizedBox(
+                    widthFactor: metric.ratio!.clamp(0.0, 1.0),
+                    child: ColoredBox(
+                        color: !current
+                            ? C.of(context).textFaint
+                            : metric.ratio! > 0.9
+                                ? C.of(context).bad
+                                : C.of(context).ok),
+                  ),
+                )
+              : null,
+        ),
+        if (trail != null) ...[
+          const SizedBox(height: 16),
+          SizedBox(
+              height: 26,
+              child: MetricSparkline(points: trail, label: '$label recorded')),
+        ],
+      ],
+    );
+  }
 }
 
-/// The worst verdict over the machine's drives, in the one place on the card
-/// that carries a colour of its own. `unreadable` is not green: a drive nobody
-/// could read is not a drive that is fine (plan section 8.2).
-class _DriveChip extends StatelessWidget {
-  const _DriveChip({required this.verdict});
-
+class _DriveLabel extends StatelessWidget {
+  const _DriveLabel({required this.verdict, required this.current});
   final String verdict;
+  final bool current;
 
   @override
   Widget build(BuildContext context) {
     final (label, colour) = switch (verdict) {
-      'ok' => ('Drives ok', C.ok),
-      'warn' => ('Drive warning', C.accent),
-      'failing' => ('Drive failing', C.bad),
-      _ => ('Drives unreadable', C.idle),
+      'ok' => ('Drives ok', C.of(context).ok),
+      'warn' => ('Drive warning', C.of(context).accent),
+      'failing' => ('Drive failing', C.of(context).bad),
+      _ => ('Drives unreadable', C.of(context).idle),
     };
-    return Container(
-      padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 4),
-      decoration: BoxDecoration(
-        color: colour.withOpacity(0.14),
-        borderRadius: C.roundedSm,
-        border: Border.all(color: colour.withOpacity(0.4)),
-      ),
-      child: Text(label, style: C.small(color: colour)),
-    );
+    return Text(current ? label : 'Last drive report: ${label.toLowerCase()}',
+        style: C
+            .of(context)
+            .small(color: current ? colour : C.of(context).textMuted));
   }
 }

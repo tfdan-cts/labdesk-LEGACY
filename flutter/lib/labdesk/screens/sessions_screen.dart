@@ -153,7 +153,7 @@ class _SessionsScreenState extends State<SessionsScreen> {
                               'Nothing said yet. Anything typed here reaches '
                               'the session\'s own chat window as well.',
                               textAlign: TextAlign.center,
-                              style: C.small(color: C.textFaint),
+                              style: C.of(context).small(color: C.of(context).textFaint),
                             ),
                           )
                         : Scrollbar(
@@ -167,7 +167,7 @@ class _SessionsScreenState extends State<SessionsScreen> {
                             ),
                           ),
                   ),
-                  Divider(height: 1, thickness: 1, color: C.hairline),
+                  Divider(height: 1, thickness: 1, color: C.of(context).hairline),
                   _Compose(
                     controller: _input,
                     focus: _focus,
@@ -220,8 +220,8 @@ class _SessionRowState extends State<_SessionRow> {
           padding: const EdgeInsets.symmetric(horizontal: 10),
           decoration: BoxDecoration(
             color: widget.selected
-                ? C.accent.withOpacity(0.13)
-                : (_hover ? C.surfaceHi : Colors.transparent),
+                ? C.of(context).accent.withOpacity(0.13)
+                : (_hover ? C.of(context).surfaceHi : Colors.transparent),
             borderRadius: C.roundedSm,
           ),
           child: Row(
@@ -232,7 +232,7 @@ class _SessionRowState extends State<_SessionRow> {
               LdIcon(
                 s.isOutgoing ? LdIcons.arrowRight : LdIcons.arrowDown,
                 size: 16,
-                color: lit ? C.accent : C.textFaint,
+                color: lit ? C.of(context).accent : C.of(context).textFaint,
               ),
               const SizedBox(width: 10),
               Expanded(
@@ -243,13 +243,13 @@ class _SessionRowState extends State<_SessionRow> {
                     Text(
                       s.peerLabel,
                       overflow: TextOverflow.ellipsis,
-                      style: C.small(
-                          color: lit ? C.text : C.textMuted,
+                      style: C.of(context).small(
+                          color: lit ? C.of(context).text : C.of(context).textMuted,
                           w: FontWeight.w600),
                     ),
                     Text(
                       s.isOutgoing ? 'Outgoing' : 'Incoming',
-                      style: C.micro(),
+                      style: C.of(context).micro(),
                     ),
                   ],
                 ),
@@ -259,11 +259,11 @@ class _SessionRowState extends State<_SessionRow> {
                 Container(
                   padding: const EdgeInsets.symmetric(horizontal: 6, vertical: 2),
                   decoration: BoxDecoration(
-                    color: C.accent,
+                    color: C.of(context).accent,
                     borderRadius: BorderRadius.circular(9),
                   ),
                   child: Text('${s.unread}',
-                      style: C.micro(color: C.primaryFg)
+                      style: C.of(context).micro(color: C.of(context).primaryFg)
                           .copyWith(fontWeight: FontWeight.w700)),
                 ),
               ],
@@ -294,17 +294,17 @@ class _Line extends StatelessWidget {
             width: 46,
             child: Text(
               line.isMine ? 'You' : 'Them',
-              style: C.micro(color: line.isMine ? C.accent : C.textFaint),
+              style: C.of(context).micro(color: line.isMine ? C.of(context).accent : C.of(context).textFaint),
             ),
           ),
           Expanded(
             child: SelectableText(
               line.text,
-              style: C.body(color: line.isMine ? C.text : C.textMuted),
+              style: C.of(context).body(color: line.isMine ? C.of(context).text : C.of(context).textMuted),
             ),
           ),
           const SizedBox(width: 10),
-          Text(_clock(line.at), style: C.micro()),
+          Text(_clock(line.at), style: C.of(context).micro()),
         ],
       ),
     );
@@ -341,8 +341,8 @@ class _Compose extends StatelessWidget {
               focusNode: focus,
               enabled: enabled,
               onSubmitted: (_) => onSubmit(),
-              style: C.body(),
-              cursorColor: C.accent,
+              style: C.of(context).body(),
+              cursorColor: C.of(context).accent,
               cursorWidth: 1.6,
               decoration: InputDecoration(
                 isDense: true,
@@ -350,7 +350,7 @@ class _Compose extends StatelessWidget {
                 hintText: enabled
                     ? 'Write a message'
                     : 'This session cannot be written to',
-                hintStyle: C.small(color: C.textFaint),
+                hintStyle: C.of(context).small(color: C.of(context).textFaint),
               ),
             ),
           ),
@@ -374,9 +374,9 @@ class _Empty extends StatelessWidget {
         child: Column(
           mainAxisSize: MainAxisSize.min,
           children: [
-            const LdIcon(LdIcons.chat, size: 26, color: C.textFaint),
+            LdIcon(LdIcons.chat, size: 26, color: C.of(context).textFaint),
             const SizedBox(height: 14),
-            Text('No session is active', style: C.h2()),
+            Text('No session is active', style: C.of(context).h2()),
             const SizedBox(height: 6),
             SizedBox(
               width: 340,
@@ -385,7 +385,7 @@ class _Empty extends StatelessWidget {
                 'Connect to a machine from Connect, or wait for somebody to '
                 'connect to this one. Chat appears here while a session is open.',
                 textAlign: TextAlign.center,
-                style: C.small(color: C.textFaint),
+                style: C.of(context).small(color: C.of(context).textFaint),
               ),
             ),
           ],

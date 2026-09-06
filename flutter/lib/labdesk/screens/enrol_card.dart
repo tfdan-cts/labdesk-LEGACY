@@ -51,6 +51,7 @@ class MachineEnrolCard extends StatefulWidget {
     this.signedIn = false,
     this.machineId = '',
     this.signIn,
+    this.refreshBroker,
     this.checkService,
     this.repairService,
     this.onEnrolled,
@@ -61,12 +62,22 @@ class MachineEnrolCard extends StatefulWidget {
   final bool signedIn;
   final String machineId;
   final Future<bool> Function()? signIn;
+
+  /// Returns refreshed credentials only after verifying the initiating user
+  /// and organization. A cancelled or changed context returns null.
+  final Future<OverlayBroker?> Function()? refreshBroker;
   final Future<void> Function()? checkService;
   final VoidCallback? repairService;
   final Future<void> Function()? onEnrolled;
 
   @override
   State<MachineEnrolCard> createState() => _MachineEnrolCardState();
+}
+
+class _EnrolRequest {
+  _EnrolRequest(this.broker, this.epoch);
+  OverlayBroker? broker;
+  final int epoch;
 }
 
 class _MachineEnrolCardState extends State<MachineEnrolCard> {
@@ -112,34 +123,52 @@ class _MachineEnrolCardState extends State<MachineEnrolCard> {
     super.dispose();
   }
 
-  Future<T> _authenticated<T>(Future<T> Function() action) async {
+  bool _current(_EnrolRequest request) =>
+      mounted &&
+      request.epoch == _accountEpoch &&
+      request.broker?.token() == widget.broker?.token() &&
+      request.broker?.organizationId?.call() ==
+          widget.broker?.organizationId?.call();
+
+  Future<T> _authenticated<T>(
+      _EnrolRequest request, Future<T> Function(OverlayBroker) action) async {
+    if (!_current(request)) {
+      throw StateError('Organization changed. Try again.');
+    }
     try {
-      return await action();
+      return await action(request.broker!);
     } on OverlayBrokerException catch (e) {
       if ((e.signInAgain || e.needsFreshSignIn) &&
-          mounted &&
-          widget.signIn != null &&
-          await widget.signIn!()) {
-        return action();
+          _current(request) &&
+          widget.refreshBroker != null) {
+        final broker = await widget.refreshBroker!();
+        if (broker != null) {
+          final refreshed = broker.captureScope();
+          if (refreshed.organizationId?.call() !=
+              request.broker!.organizationId?.call()) rethrow;
+          request.broker = refreshed;
+          if (_current(request)) return action(refreshed);
+        }
       }
       rethrow;
     }
   }
 
   Future<void> _loadOrganization() async {
-    final broker = widget.broker;
+    final broker = widget.broker?.captureScope();
     if (broker == null || _busy || widget.machineId.isNotEmpty) return;
-    final epoch = _accountEpoch;
+    final request = _EnrolRequest(broker, _accountEpoch);
     setState(() {
       _busy = true;
       _loadFailed = false;
       _outcome = null;
     });
     try {
-      final role = await _authenticated(broker.organizationRole);
-      final fleets =
-          role == 'owner' ? await _authenticated(broker.fleets) : <OrgFleet>[];
-      if (!mounted || epoch != _accountEpoch) return;
+      final role = await _authenticated(request, (b) => b.organizationRole());
+      final fleets = role == 'owner'
+          ? await _authenticated(request, (b) => b.fleets())
+          : <OrgFleet>[];
+      if (!_current(request)) return;
       setState(() {
         _role = role;
         _fleets = fleets;
@@ -147,14 +176,14 @@ class _MachineEnrolCardState extends State<MachineEnrolCard> {
         _creatingFleet = fleets.isEmpty;
       });
     } catch (e) {
-      if (mounted) {
+      if (_current(request)) {
         setState(() {
           _loadFailed = true;
           _outcome = EnrolOutcome(error: '$e');
         });
       }
     } finally {
-      if (mounted) setState(() => _busy = false);
+      if (_current(request)) setState(() => _busy = false);
     }
   }
 
@@ -163,6 +192,9 @@ class _MachineEnrolCardState extends State<MachineEnrolCard> {
     setState(() => _busy = true);
     try {
       final signedIn = await widget.signIn!();
+      // The parent replaces the keyed card after account verification. Wait
+      // for that frame before reading through this card's captured broker.
+      if (signedIn) await WidgetsBinding.instance.endOfFrame;
       if (!mounted) return;
       setState(() => _busy = false);
       if (signedIn) await _loadOrganization();
@@ -176,9 +208,10 @@ class _MachineEnrolCardState extends State<MachineEnrolCard> {
     }
   }
 
-  Future<void> _enrol(String token) async {
+  Future<void> _enrol(String token, _EnrolRequest request) async {
+    if (!_current(request)) return;
     final answer = await widget.enrol(token);
-    if (!mounted) return;
+    if (!_current(request)) return;
     final outcome = EnrolOutcome.decode(answer);
     setState(() => _outcome = outcome);
     if (outcome.machineId.isEmpty) return;
@@ -188,7 +221,7 @@ class _MachineEnrolCardState extends State<MachineEnrolCard> {
     try {
       await widget.onEnrolled?.call();
     } catch (e) {
-      if (mounted) {
+      if (_current(request)) {
         setState(() =>
             _followupError = 'Machine added. Labnet setup needs attention: $e');
       }
@@ -213,7 +246,8 @@ class _MachineEnrolCardState extends State<MachineEnrolCard> {
       _followupError = '';
       _serviceProblem = false;
     });
-    final epoch = _accountEpoch;
+    final request = _EnrolRequest(widget.broker?.captureScope(), _accountEpoch);
+    final fleetName = _fleetName.text.trim();
     try {
       // This probes privileged IPC, not RustDesk's rendezvous start/stop flag.
       // Do it before creating a fleet or spending any enrollment token.
@@ -222,13 +256,12 @@ class _MachineEnrolCardState extends State<MachineEnrolCard> {
         await widget.checkService!();
         _serviceProblem = false;
       }
-      if (!mounted || epoch != _accountEpoch) return;
+      if (!_current(request)) return;
       if (fromAccount) {
-        final broker = widget.broker!;
         if (_creatingFleet) {
-          final fleet = await _authenticated(
-              () => broker.createFleet(_fleetName.text.trim()));
-          if (!mounted || epoch != _accountEpoch) return;
+          final fleet =
+              await _authenticated(request, (b) => b.createFleet(fleetName));
+          if (!_current(request)) return;
           // Remember a committed fleet even if the following mint/enrol step
           // fails, so retry cannot create another fleet with the same name.
           setState(() {
@@ -238,34 +271,36 @@ class _MachineEnrolCardState extends State<MachineEnrolCard> {
           });
         }
         final minted = await _authenticated(
-            () => broker.mintEnrolmentToken(fleetId: _fleetId));
-        if (!mounted || epoch != _accountEpoch) return;
-        await _enrol(minted);
+            request, (b) => b.mintEnrolmentToken(fleetId: _fleetId));
+        if (!_current(request)) return;
+        await _enrol(minted, request);
       } else {
-        await _enrol(token);
+        await _enrol(token, request);
       }
     } catch (e) {
-      if (mounted) setState(() => _outcome = EnrolOutcome(error: '$e'));
+      if (_current(request)) {
+        setState(() => _outcome = EnrolOutcome(error: '$e'));
+      }
     } finally {
-      if (mounted) setState(() => _busy = false);
+      if (_current(request)) setState(() => _busy = false);
     }
   }
 
   InputDecoration _fieldDecoration(String hint) => InputDecoration(
         isDense: true,
         filled: true,
-        fillColor: C.bg,
+        fillColor: C.of(context).bg,
         contentPadding:
             const EdgeInsets.symmetric(horizontal: 12, vertical: 12),
         enabledBorder: OutlineInputBorder(
             borderRadius: C.roundedSm,
-            borderSide: const BorderSide(color: C.hairline)),
+            borderSide: BorderSide(color: C.of(context).hairline)),
         border: OutlineInputBorder(borderRadius: C.roundedSm),
         focusedBorder: OutlineInputBorder(
             borderRadius: C.roundedSm,
-            borderSide: const BorderSide(color: C.accent)),
+            borderSide: BorderSide(color: C.of(context).accent)),
         hintText: hint,
-        hintStyle: C.body(color: C.textMuted),
+        hintStyle: C.of(context).body(color: C.of(context).textMuted),
       );
 
   List<Widget> _accountFields() {
@@ -290,11 +325,12 @@ class _MachineEnrolCardState extends State<MachineEnrolCard> {
       return [
         Text(
             'Ask an organization owner for an enrolment token to add this machine.',
-            style: C.body(color: C.textMuted)),
+            style: C.of(context).body(color: C.of(context).textMuted)),
       ];
     }
     return [
-      Text(_creatingFleet ? 'New fleet' : 'Fleet', style: C.small()),
+      Text(_creatingFleet ? 'New fleet' : 'Fleet',
+          style: C.of(context).small()),
       const SizedBox(height: 6),
       if (_creatingFleet)
         TextField(
@@ -302,7 +338,7 @@ class _MachineEnrolCardState extends State<MachineEnrolCard> {
           controller: _fleetName,
           enabled: !_busy,
           maxLength: 64,
-          style: C.body(),
+          style: C.of(context).body(),
           decoration: _fieldDecoration('Fleet name').copyWith(counterText: ''),
           onChanged: (_) => setState(() {}),
           onSubmitted: (_) => _submit(fromAccount: true),
@@ -312,10 +348,11 @@ class _MachineEnrolCardState extends State<MachineEnrolCard> {
           key: const Key('enrol-fleet'),
           value: _fleetId,
           isExpanded: true,
-          dropdownColor: C.surface,
-          style: C.body(),
+          dropdownColor: C.of(context).surface,
+          style: C.of(context).body(),
           decoration: _fieldDecoration('Choose a fleet'),
-          hint: Text('Choose a fleet', style: C.body(color: C.textMuted)),
+          hint: Text('Choose a fleet',
+              style: C.of(context).body(color: C.of(context).textMuted)),
           items: [
             for (final f in _fleets)
               DropdownMenuItem(
@@ -329,11 +366,11 @@ class _MachineEnrolCardState extends State<MachineEnrolCard> {
         FilledButton(
           key: const Key('enrol-submit'),
           style: FilledButton.styleFrom(
-            backgroundColor: C.primaryFill,
-            foregroundColor: C.primaryFg,
-            disabledBackgroundColor: C.surfaceHi,
-            disabledForegroundColor: C.textFaint,
-            textStyle: C.small(),
+            backgroundColor: C.of(context).primaryFill,
+            foregroundColor: C.of(context).primaryFg,
+            disabledBackgroundColor: C.of(context).surfaceHi,
+            disabledForegroundColor: C.of(context).textFaint,
+            textStyle: C.of(context).small(),
             minimumSize: const Size(0, 36),
             padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 10),
             shape: RoundedRectangleBorder(borderRadius: C.roundedSm),
@@ -373,15 +410,15 @@ class _MachineEnrolCardState extends State<MachineEnrolCard> {
     final added = outcome?.machineId.isNotEmpty == true;
     return Container(
       decoration: BoxDecoration(
-        color: C.surface,
+        color: C.of(context).surface,
         borderRadius: C.rounded,
-        border: Border.all(color: C.hairline),
+        border: Border.all(color: C.of(context).hairline),
       ),
       padding: const EdgeInsets.fromLTRB(20, 18, 20, 20),
       child: Column(
         crossAxisAlignment: CrossAxisAlignment.start,
         children: [
-          Text('Organization', style: C.h2()),
+          Text('Organization', style: C.of(context).h2()),
           const SizedBox(height: 4),
           Text(
             accountFlow
@@ -390,7 +427,7 @@ class _MachineEnrolCardState extends State<MachineEnrolCard> {
                 : 'Paste an enrolment token from your organization to put this '
                     'machine under it. A token is used once and expires after fifteen '
                     'minutes.',
-            style: C.small(),
+            style: C.of(context).small(),
           ),
           const SizedBox(height: 16),
           if (accountFlow && !added) ...[
@@ -413,17 +450,17 @@ class _MachineEnrolCardState extends State<MachineEnrolCard> {
                     height: 32,
                     padding: const EdgeInsets.symmetric(horizontal: 10),
                     decoration: BoxDecoration(
-                      color: C.bg,
+                      color: C.of(context).bg,
                       borderRadius: C.roundedSm,
-                      border: Border.all(color: C.hairline),
+                      border: Border.all(color: C.of(context).hairline),
                     ),
                     child: Center(
                       child: TextField(
                         key: const Key('enrol-token'),
                         controller: _token,
                         enabled: !_busy,
-                        style: C.data(size: 12.5),
-                        cursorColor: C.accent,
+                        style: C.of(context).data(size: 12.5),
+                        cursorColor: C.of(context).accent,
                         cursorWidth: 1.6,
                         onSubmitted: (_) => _submit(),
                         decoration: InputDecoration(
@@ -431,7 +468,9 @@ class _MachineEnrolCardState extends State<MachineEnrolCard> {
                           contentPadding: EdgeInsets.zero,
                           border: InputBorder.none,
                           hintText: 'Enrolment token',
-                          hintStyle: C.data(size: 12.5, color: C.textFaint),
+                          hintStyle: C
+                              .of(context)
+                              .data(size: 12.5, color: C.of(context).textFaint),
                         ),
                       ),
                     ),
@@ -450,24 +489,28 @@ class _MachineEnrolCardState extends State<MachineEnrolCard> {
             if (outcome.machineId.isNotEmpty)
               SelectableText.rich(
                 TextSpan(
-                  style: C.body(color: C.textMuted),
+                  style: C.of(context).body(color: C.of(context).textMuted),
                   children: [
                     const TextSpan(text: 'Enrolled as machine '),
                     TextSpan(
                       text: outcome.machineId,
-                      style:
-                          C.data(size: 14, color: C.text, w: FontWeight.w700),
+                      style: C.of(context).data(
+                          size: 14,
+                          color: C.of(context).text,
+                          w: FontWeight.w700),
                     ),
                     const TextSpan(text: '.'),
                   ],
                 ),
               )
             else
-              SelectableText(outcome.error, style: C.body(color: C.bad)),
+              SelectableText(outcome.error,
+                  style: C.of(context).body(color: C.of(context).bad)),
           ],
           if (_followupError.isNotEmpty) ...[
             const SizedBox(height: 12),
-            SelectableText(_followupError, style: C.body(color: C.bad)),
+            SelectableText(_followupError,
+                style: C.of(context).body(color: C.of(context).bad)),
           ],
           if (_serviceProblem && widget.repairService != null) ...[
             const SizedBox(height: 12),

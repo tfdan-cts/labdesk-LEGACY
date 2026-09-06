@@ -22,6 +22,7 @@ class LdIcons {
 
   // ---- console navigation ------------------------------------------------
 
+
   /// Connect: a plug going in. It used to be a screen with a signal leaving
   /// it, which made it the fourth rounded-rectangle monitor in a set that only
   /// needs one — and at 16 the arcs that carried the whole meaning were the

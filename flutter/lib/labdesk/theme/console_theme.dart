@@ -1,4 +1,5 @@
 import 'package:flutter/material.dart';
+import 'package:flutter/services.dart';
 
 import 'ld_icons.dart';
 
@@ -22,20 +23,19 @@ class C {
 
   // Surfaces. A cool near-black, never pure black, with a separate slightly
   // cooler layer for the chrome so the content plane reads as the subject.
-  static const bg = Color(0xFF0E0E12);
-  static const chrome = Color(0xFF121217);
-  static const surface = Color(0xFF16161C);
-  static const surfaceHi = Color(0xFF1D1D25);
-  static const hairline = Color(0xFF262630);
+  static const bg = Color(0xFF11171B);
+  static const chrome = Color(0xFF0C1115);
+  static const surface = Color(0xFF172127);
+  static const surfaceHi = Color(0xFF1C282E);
+  static const hairline = Color(0xFF2B363E);
 
-  static const text = Color(0xFFEDEDF2);
-  static const textMuted = Color(0xFF9C9CAB);
-  static const textFaint = Color(0xFF6B6B7A);
+  static const text = Color(0xFFEAF2F4);
+  static const textMuted = Color(0xFF9FACB5);
+  static const textFaint = Color(0xFF85959F);
 
-  /// LabDesk's purple, pulled back from the branding to something that can sit
-  /// behind data all day. Primary actions and current selection only.
-  static const accent = Color(0xFF8B7DF7);
-  static const accentDim = Color(0xFF5B4FBE);
+  /// Pale cyan ties active navigation, controls and telemetry together.
+  static const accent = Color(0xFFA5DCE7);
+  static const accentDim = Color(0xFF729CAE);
 
   /// The filled primary button. One tint, one foreground, everywhere.
   ///
@@ -50,14 +50,15 @@ class C {
   /// the connection manager, the file manager's Send — should switch to these
   /// four values rather than pick its own.
   static const primaryFill = accent;
-  static const primaryFillHover = Color(0xFF9C90F8);
+  static const primaryFillHover = Color(0xFFBEE9F1);
   static const primaryFillDown = accentDim;
   static const primaryFg = bg;
 
   /// Semantic status. Never used as decoration.
-  static const ok = Color(0xFF3FCF8E);
-  static const bad = Color(0xFFF06A6A);
-  static const idle = Color(0xFF6B6B7A);
+  static const ok = Color(0xFF88D4B0);
+  static const bad = Color(0xFFE79B9B);
+  static const warning = Color(0xFFECC181);
+  static const idle = Color(0xFF85959F);
 
   /// One focus ring for the whole console, on buttons and on marks alike.
   ///
@@ -98,7 +99,8 @@ class C {
   /// Manrope is bundled as its variable cut, so a weight has to be requested on
   /// the wght axis as well as declared. Setting only [FontWeight] would render
   /// every weight at the axis default.
-  static List<FontVariation> _wght(FontWeight w) => [FontVariation('wght', w.value.toDouble())];
+  static List<FontVariation> _wght(FontWeight w) =>
+      [FontVariation('wght', w.value.toDouble())];
 
   static TextStyle _sansStyle({
     required double fontSize,
@@ -122,19 +124,31 @@ class C {
   // A fixed scale with a tight ratio. Product UI is viewed at a consistent
   // size, so fluid type would only add noise.
   static TextStyle h1() => _sansStyle(
-      fontSize: 20, fontWeight: FontWeight.w700, color: text, letterSpacing: -0.4, height: 1.2);
+      fontSize: 20,
+      fontWeight: FontWeight.w700,
+      color: text,
+      letterSpacing: -0.4,
+      height: 1.2);
   static TextStyle h2() => _sansStyle(
-      fontSize: 15, fontWeight: FontWeight.w600, color: text, letterSpacing: -0.2, height: 1.3);
+      fontSize: 15,
+      fontWeight: FontWeight.w600,
+      color: text,
+      letterSpacing: -0.2,
+      height: 1.3);
   static TextStyle body({Color color = text}) => _sansStyle(
       fontSize: 13.5, fontWeight: FontWeight.w500, color: color, height: 1.45);
-  static TextStyle small({Color color = textMuted, FontWeight w = FontWeight.w500}) =>
+  static TextStyle small(
+          {Color color = textMuted, FontWeight w = FontWeight.w500}) =>
       _sansStyle(fontSize: 12, fontWeight: w, color: color, height: 1.4);
   static TextStyle micro({Color color = textFaint}) => _sansStyle(
       fontSize: 11, fontWeight: FontWeight.w600, color: color, height: 1.3);
 
   /// Identifiers, timestamps, measured values. Tabular so a column of figures
   /// does not jitter as it updates.
-  static TextStyle data({double size = 12.5, Color color = text, FontWeight w = FontWeight.w500}) =>
+  static TextStyle data(
+          {double size = 12.5,
+          Color color = text,
+          FontWeight w = FontWeight.w500}) =>
       TextStyle(
         fontFamily: _mono,
         fontSize: size,
@@ -154,40 +168,244 @@ class C {
         fontFeatures: const [FontFeature.tabularFigures()],
       );
 
-  static ThemeData theme() {
-    final base = ThemeData(brightness: Brightness.dark, useMaterial3: true);
+  static ConsolePalette of(BuildContext context) =>
+      Theme.of(context).brightness == Brightness.dark
+          ? ConsolePalette.dark
+          : ConsolePalette.light;
+
+  static ThemeData theme({Brightness brightness = Brightness.dark}) {
+    final p = brightness == Brightness.dark
+        ? ConsolePalette.dark
+        : ConsolePalette.light;
+    final base = ThemeData(
+        brightness: brightness, useMaterial3: true, fontFamily: _sans);
+    final input = InputDecorationTheme(
+      filled: true,
+      fillColor: p.surface,
+      labelStyle: p.small(),
+      hintStyle: p.body(color: p.textFaint),
+      helperStyle: p.small(),
+      errorStyle: p.small(color: p.bad),
+      contentPadding: const EdgeInsets.symmetric(horizontal: 12, vertical: 12),
+      border: OutlineInputBorder(borderRadius: roundedSm),
+      enabledBorder: OutlineInputBorder(
+          borderRadius: roundedSm, borderSide: BorderSide(color: p.textFaint)),
+      disabledBorder: OutlineInputBorder(
+          borderRadius: roundedSm,
+          borderSide: BorderSide(color: p.disabledBorder)),
+      focusedBorder: OutlineInputBorder(
+          borderRadius: roundedSm,
+          borderSide: BorderSide(color: p.focusRing, width: focusRingWidth)),
+      errorBorder: OutlineInputBorder(
+          borderRadius: roundedSm, borderSide: BorderSide(color: p.bad)),
+      focusedErrorBorder: OutlineInputBorder(
+          borderRadius: roundedSm,
+          borderSide: BorderSide(color: p.bad, width: focusRingWidth)),
+    );
+    final menu = MenuStyle(
+      backgroundColor: WidgetStatePropertyAll(p.surfaceHi),
+      surfaceTintColor: const WidgetStatePropertyAll(Colors.transparent),
+      side: WidgetStatePropertyAll(BorderSide(color: p.hairline)),
+      shape: WidgetStatePropertyAll(
+          RoundedRectangleBorder(borderRadius: roundedSm)),
+    );
+    ButtonStyle button({bool filled = false, bool outlined = false}) =>
+        ButtonStyle(
+          minimumSize: const WidgetStatePropertyAll(Size(40, 40)),
+          padding: const WidgetStatePropertyAll(
+              EdgeInsets.symmetric(horizontal: 14, vertical: 10)),
+          shape: WidgetStatePropertyAll(
+              RoundedRectangleBorder(borderRadius: roundedSm)),
+          textStyle: WidgetStatePropertyAll(p.small(w: FontWeight.w600)),
+          animationDuration: fast,
+          foregroundColor: WidgetStateProperty.resolveWith(
+              (states) => states.contains(WidgetState.disabled)
+                  ? p.textFaint
+                  : filled
+                      ? p.primaryFg
+                      : p.accent),
+          backgroundColor: WidgetStateProperty.resolveWith((states) {
+            if (!filled || states.contains(WidgetState.disabled)) {
+              return Colors.transparent;
+            }
+            if (states.contains(WidgetState.pressed)) return p.primaryFillDown;
+            return states.contains(WidgetState.hovered)
+                ? p.primaryFillHover
+                : p.primaryFill;
+          }),
+          overlayColor: WidgetStateProperty.resolveWith((states) =>
+              states.contains(WidgetState.focused) ||
+                      states.contains(WidgetState.pressed)
+                  ? p.accent.withOpacity(.16)
+                  : states.contains(WidgetState.hovered)
+                      ? p.accent.withOpacity(.08)
+                      : Colors.transparent),
+          side: WidgetStateProperty.resolveWith((states) =>
+              states.contains(WidgetState.disabled)
+                  ? BorderSide(
+                      color: outlined ? p.disabledBorder : Colors.transparent)
+                  : states.contains(WidgetState.focused)
+                      ? BorderSide(
+                          color: filled ? p.text : p.focusRing,
+                          width: focusRingWidth)
+                      : BorderSide(
+                          color: outlined ? p.textFaint : Colors.transparent)),
+        );
     return base.copyWith(
-      scaffoldBackgroundColor: bg,
-      canvasColor: bg,
-      dividerColor: hairline,
-      colorScheme: base.colorScheme.copyWith(
-        surface: surface,
-        primary: accent,
-        error: bad,
-        outline: hairline,
+      scaffoldBackgroundColor: p.bg,
+      canvasColor: p.surface,
+      dividerColor: p.hairline,
+      disabledColor: p.textFaint,
+      focusColor: p.accent.withOpacity(.16),
+      hoverColor: p.accent.withOpacity(.08),
+      iconTheme: IconThemeData(color: p.textMuted),
+      textTheme: base.textTheme
+          .apply(bodyColor: p.text, displayColor: p.text)
+          .copyWith(
+            titleLarge: p.h1(),
+            titleMedium: p.h2(),
+            bodyLarge: p.body().copyWith(fontSize: 15),
+            bodyMedium: p.body(),
+            bodySmall: p.small(),
+            labelLarge: p.small(w: FontWeight.w600),
+            labelMedium: p.small(),
+            labelSmall: p.micro(),
+          ),
+      colorScheme:
+          ColorScheme.fromSeed(seedColor: p.accent, brightness: brightness)
+              .copyWith(
+        surface: p.surface,
+        onSurface: p.text,
+        onSurfaceVariant: p.textMuted,
+        surfaceContainerHighest: p.surfaceHi,
+        primary: p.accent,
+        onPrimary: p.primaryFg,
+        primaryContainer: p.surfaceHi,
+        onPrimaryContainer: p.text,
+        secondary: p.accentDim,
+        onSecondary: p.primaryFg,
+        secondaryContainer: p.surfaceHi,
+        onSecondaryContainer: p.text,
+        error: p.bad,
+        onError: p.primaryFg,
+        outline: p.textFaint,
+        outlineVariant: p.hairline,
       ),
+      inputDecorationTheme: input,
+      textSelectionTheme: TextSelectionThemeData(
+          cursorColor: p.accent,
+          selectionColor: p.accent.withOpacity(.28),
+          selectionHandleColor: p.accent),
+      filledButtonTheme: FilledButtonThemeData(style: button(filled: true)),
+      elevatedButtonTheme: ElevatedButtonThemeData(
+          style: button(filled: true)
+              .copyWith(elevation: const WidgetStatePropertyAll(0))),
+      outlinedButtonTheme:
+          OutlinedButtonThemeData(style: button(outlined: true)),
+      textButtonTheme: TextButtonThemeData(style: button()),
+      menuTheme: MenuThemeData(style: menu),
+      menuButtonTheme: MenuButtonThemeData(
+          style: button().copyWith(
+              foregroundColor: WidgetStateProperty.resolveWith((states) =>
+                  states.contains(WidgetState.disabled)
+                      ? p.textFaint
+                      : p.text))),
+      dropdownMenuTheme: DropdownMenuThemeData(
+          textStyle: p.body(), inputDecorationTheme: input, menuStyle: menu),
+      popupMenuTheme: PopupMenuThemeData(
+          color: p.surfaceHi,
+          surfaceTintColor: Colors.transparent,
+          textStyle: p.body(),
+          shape: RoundedRectangleBorder(
+              borderRadius: roundedSm, side: BorderSide(color: p.hairline))),
+      tabBarTheme: TabBarTheme(
+          labelColor: p.accent,
+          unselectedLabelColor: p.textMuted,
+          labelStyle: p.body().copyWith(
+              fontWeight: FontWeight.w600,
+              fontVariations: _wght(FontWeight.w600)),
+          unselectedLabelStyle: p.body(),
+          dividerColor: p.hairline,
+          indicator: UnderlineTabIndicator(
+              borderSide: BorderSide(color: p.accent, width: 2))),
+      dialogTheme: DialogTheme(
+          backgroundColor: p.surface,
+          surfaceTintColor: Colors.transparent,
+          titleTextStyle: p.h1(),
+          contentTextStyle: p.body()),
       tooltipTheme: TooltipThemeData(
         waitDuration: const Duration(milliseconds: 400),
         decoration: BoxDecoration(
-          color: surfaceHi,
+          color: p.surfaceHi,
           borderRadius: roundedSm,
-          border: Border.all(color: hairline),
+          border: Border.all(color: p.hairline),
           // Depth carries an offset and a soft blur; a zero-offset halo is
           // decoration, not elevation.
           boxShadow: const [
-            BoxShadow(color: Color(0x66000000), blurRadius: 16, offset: Offset(0, 6)),
+            BoxShadow(
+                color: Color(0x66000000), blurRadius: 16, offset: Offset(0, 6)),
           ],
         ),
-        textStyle: small(color: text),
+        textStyle: p.small(color: p.text),
         padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 8),
       ),
       scrollbarTheme: ScrollbarThemeData(
-        thumbColor: WidgetStatePropertyAll(hairline),
+        thumbColor: WidgetStatePropertyAll(p.textFaint),
         thickness: const WidgetStatePropertyAll(8),
         radius: const Radius.circular(4),
       ),
     );
   }
+}
+
+/// Immutable per-subtree colors. Legacy C constants always remain dark.
+class ConsolePalette {
+  const ConsolePalette._(this.brightness);
+  static const dark = ConsolePalette._(Brightness.dark);
+  static const light = ConsolePalette._(Brightness.light);
+  final Brightness brightness;
+  bool get isDark => brightness == Brightness.dark;
+
+  Color get bg => isDark ? C.bg : const Color(0xfff4f7f7);
+  Color get chrome => isDark ? C.chrome : const Color(0xffe9eeee);
+  Color get surface => isDark ? C.surface : const Color(0xfffafdfe);
+  Color get surfaceHi => isDark ? C.surfaceHi : const Color(0xffe3ebed);
+  Color get hairline => isDark ? C.hairline : const Color(0xffcbd6da);
+  Color get text => isDark ? C.text : const Color(0xff18272c);
+  Color get textMuted => isDark ? C.textMuted : const Color(0xff52636d);
+  Color get textFaint => isDark ? C.textFaint : const Color(0xff5b6c75);
+  Color get accent => isDark ? C.accent : const Color(0xff256578);
+  Color get accentDim => isDark ? C.accentDim : const Color(0xff427285);
+  Color get primaryFill => accent;
+  Color get primaryFillHover =>
+      isDark ? C.primaryFillHover : const Color(0xff1e5668);
+  Color get primaryFillDown =>
+      isDark ? C.primaryFillDown : const Color(0xff194a59);
+  Color get primaryFg => isDark ? C.primaryFg : Colors.white;
+  Color get ok => isDark ? C.ok : const Color(0xff27704e);
+  Color get bad => isDark ? C.bad : const Color(0xff9b4141);
+  Color get warning => isDark ? C.warning : const Color(0xff8b5d17);
+  Color get idle => textFaint;
+  Color get focusRing => accent;
+  Color get disabledBorder => hairline.withOpacity(.6);
+  double get focusRingWidth => C.focusRingWidth;
+  double get radius => C.radius;
+  double get radiusSm => C.radiusSm;
+  BorderRadius get rounded => C.rounded;
+  BorderRadius get roundedSm => C.roundedSm;
+  Duration get fast => C.fast;
+  Duration get medium => C.medium;
+
+  TextStyle h1() => C.h1().copyWith(color: text);
+  TextStyle h2() => C.h2().copyWith(color: text);
+  TextStyle body({Color? color}) => C.body(color: color ?? text);
+  TextStyle small({Color? color, FontWeight w = FontWeight.w500}) =>
+      C.small(color: color ?? textMuted, w: w);
+  TextStyle micro({Color? color}) => C.micro(color: color ?? textFaint);
+  TextStyle data(
+          {double size = 12.5, Color? color, FontWeight w = FontWeight.w500}) =>
+      C.data(size: size, color: color ?? text, w: w);
+  TextStyle metric({Color? color}) => C.metric(color: color ?? text);
 }
 
 /// A titled panel. The structural unit of the console.
@@ -216,11 +434,12 @@ class Panel extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
+    final p = C.of(context);
     return DecoratedBox(
       decoration: BoxDecoration(
-        color: C.surface,
+        color: p.surface,
         borderRadius: C.rounded,
-        border: Border.all(color: C.hairline),
+        border: Border.all(color: p.hairline),
       ),
       child: Column(
         crossAxisAlignment: CrossAxisAlignment.stretch,
@@ -241,10 +460,10 @@ class Panel extends StatelessWidget {
                     crossAxisAlignment: CrossAxisAlignment.start,
                     mainAxisSize: MainAxisSize.min,
                     children: [
-                      Text(title, style: C.h2()),
+                      Text(title, style: p.h2()),
                       if (subtitle != null) ...[
                         const SizedBox(height: 3),
-                        Text(subtitle!, style: C.small(color: C.textFaint)),
+                        Text(subtitle!, style: p.small(color: p.textFaint)),
                       ],
                     ],
                   ),
@@ -253,7 +472,7 @@ class Panel extends StatelessWidget {
               ],
             ),
           ),
-          Divider(height: 1, thickness: 1, color: C.hairline),
+          Divider(height: 1, thickness: 1, color: p.hairline),
           if (fill)
             Expanded(child: Padding(padding: padding, child: child))
           else
@@ -265,7 +484,7 @@ class Panel extends StatelessWidget {
 }
 
 /// A quiet secondary button with the full state set.
-class GhostButton extends StatefulWidget {
+class GhostButton extends StatelessWidget {
   const GhostButton({
     super.key,
     required this.label,
@@ -286,59 +505,32 @@ class GhostButton extends StatefulWidget {
   final bool busy;
 
   @override
-  State<GhostButton> createState() => _GhostButtonState();
-}
-
-class _GhostButtonState extends State<GhostButton> {
-  bool _hover = false;
-  bool _down = false;
-
-  @override
   Widget build(BuildContext context) {
-    final enabled = widget.onPressed != null && !widget.busy;
-    final fg = !enabled ? C.textFaint : (_hover ? C.text : C.textMuted);
-
-    return MouseRegion(
-      cursor: enabled ? SystemMouseCursors.click : SystemMouseCursors.basic,
-      onEnter: (_) => setState(() => _hover = true),
-      onExit: (_) => setState(() => _hover = false),
-      child: GestureDetector(
-        onTapDown: enabled ? (_) => setState(() => _down = true) : null,
-        onTapUp: enabled ? (_) => setState(() => _down = false) : null,
-        onTapCancel: enabled ? () => setState(() => _down = false) : null,
-        onTap: enabled ? widget.onPressed : null,
-        child: AnimatedContainer(
-          duration: C.fast,
-          curve: Curves.easeOut,
-          transform: Matrix4.translationValues(0, _down ? 1 : 0, 0),
-          height: 30,
-          padding: const EdgeInsets.symmetric(horizontal: 11),
-          decoration: BoxDecoration(
-            color: _hover && enabled ? C.surfaceHi : Colors.transparent,
-            borderRadius: C.roundedSm,
-            border: Border.all(color: _hover && enabled ? C.hairline : C.hairline.withOpacity(0.6)),
-          ),
-          child: Row(
-            mainAxisSize: MainAxisSize.min,
-            children: [
-              if (widget.busy)
-                SizedBox(
-                  width: 12,
-                  height: 12,
-                  child: CircularProgressIndicator(strokeWidth: 1.6, color: C.accent),
-                )
-              else if (widget.glyph != null)
-                LdIcon(widget.glyph!, size: 15, color: fg)
-              else if (widget.icon != null)
-                Icon(widget.icon, size: 14, color: fg),
-              if (widget.busy || widget.glyph != null || widget.icon != null)
-                const SizedBox(width: 7),
-              Text(widget.label, style: C.small(color: fg, w: FontWeight.w600)),
-            ],
-          ),
-        ),
-      ),
-    );
+    final p = C.of(context);
+    final enabled = onPressed != null && !busy;
+    final fg = enabled ? p.textMuted : p.textFaint;
+    return OutlinedButton(
+        onPressed: enabled ? onPressed : null,
+        style: OutlinedButton.styleFrom(
+            foregroundColor: p.textMuted,
+            disabledForegroundColor: p.textFaint,
+            textStyle: p.small(w: FontWeight.w600),
+            minimumSize: const Size(40, 40),
+            shape: RoundedRectangleBorder(borderRadius: C.roundedSm)),
+        child: Row(mainAxisSize: MainAxisSize.min, children: [
+          if (busy)
+            SizedBox(
+                width: 12,
+                height: 12,
+                child: CircularProgressIndicator(
+                    strokeWidth: 1.6, color: p.textFaint))
+          else if (glyph != null)
+            LdIcon(glyph!, size: 15, color: fg)
+          else if (icon != null)
+            Icon(icon, size: 14, color: fg),
+          if (busy || glyph != null || icon != null) const SizedBox(width: 7),
+          Text(label),
+        ]));
   }
 }
 
@@ -384,19 +576,22 @@ class LdToggle extends StatefulWidget {
 
 class _LdToggleState extends State<LdToggle> {
   bool _hover = false;
+  bool _focused = false;
 
   @override
   Widget build(BuildContext context) {
+    final p = C.of(context);
     final enabled = widget.enabled;
     final tappable = widget.onChanged != null && enabled;
     final on = widget.value;
-    // [C.disabledBorder]'s rule: a locked toggle drops the fill entirely rather
+    // [p.disabledBorder]'s rule: a locked toggle drops the fill entirely rather
     // than dimming it. The knob's position is what still says which way it is.
-    final track = !enabled ? Colors.transparent : (on ? C.accent : C.surfaceHi);
-    final knob = !enabled ? C.textFaint : (on ? C.bg : C.textMuted);
+    final track = !enabled ? Colors.transparent : (on ? p.accent : p.surfaceHi);
+    final knob = !enabled ? p.textFaint : (on ? p.primaryFg : p.textMuted);
 
     Widget pill = AnimatedContainer(
-      duration: C.fast,
+      duration:
+          MediaQuery.of(context).disableAnimations ? Duration.zero : C.fast,
       curve: Curves.easeOut,
       width: 34,
       height: 20,
@@ -404,16 +599,20 @@ class _LdToggleState extends State<LdToggle> {
       decoration: BoxDecoration(
         color: track,
         borderRadius: BorderRadius.circular(10),
+        boxShadow: _focused && tappable
+            ? [BoxShadow(color: p.focusRing, spreadRadius: 3)]
+            : null,
         border: Border.all(
           color: !enabled
-              ? C.disabledBorder
+              ? p.disabledBorder
               : on
                   ? Colors.transparent
-                  : (_hover && tappable ? C.textFaint : C.hairline),
+                  : (_hover && tappable ? p.textFaint : p.hairline),
         ),
       ),
       child: AnimatedAlign(
-        duration: C.fast,
+        duration:
+            MediaQuery.of(context).disableAnimations ? Duration.zero : C.fast,
         curve: Curves.easeOut,
         alignment: on ? Alignment.centerRight : Alignment.centerLeft,
         child: Container(
@@ -436,11 +635,14 @@ class _LdToggleState extends State<LdToggle> {
               alignment: Alignment.centerRight,
               child: Text(
                 on ? 'ON' : 'OFF',
-                style: C.data(
-                  size: 10,
-                  w: FontWeight.w700,
-                  color: !enabled ? C.textFaint : (on ? C.text : C.textMuted),
-                ).copyWith(letterSpacing: 0.6),
+                style: p
+                    .data(
+                      size: 10,
+                      w: FontWeight.w700,
+                      color:
+                          !enabled ? p.textFaint : (on ? p.text : p.textMuted),
+                    )
+                    .copyWith(letterSpacing: 0.6),
               ),
             ),
           ),
@@ -450,13 +652,32 @@ class _LdToggleState extends State<LdToggle> {
       );
     }
 
-    return MouseRegion(
+    final control = MouseRegion(
       cursor: tappable ? SystemMouseCursors.click : MouseCursor.defer,
       onEnter: (_) => setState(() => _hover = true),
       onExit: (_) => setState(() => _hover = false),
       child: GestureDetector(
         onTap: tappable ? () => widget.onChanged!(!on) : null,
         child: pill,
+      ),
+    );
+    if (!tappable) return control;
+    return Semantics(
+      toggled: on,
+      enabled: true,
+      child: FocusableActionDetector(
+        onShowFocusHighlight: (value) => setState(() => _focused = value),
+        shortcuts: const {
+          SingleActivator(LogicalKeyboardKey.space): ActivateIntent(),
+          SingleActivator(LogicalKeyboardKey.enter): ActivateIntent(),
+        },
+        actions: {
+          ActivateIntent: CallbackAction<ActivateIntent>(onInvoke: (_) {
+            widget.onChanged!(!on);
+            return null;
+          }),
+        },
+        child: control,
       ),
     );
   }
@@ -492,19 +713,21 @@ class LdCheckbox extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
-    // [C.disabledBorder]'s rule, and the same 1.4 ring the radio carries so the
+    final p = C.of(context);
+    // [p.disabledBorder]'s rule, and the same 1.4 ring the radio carries so the
     // two marks are one family at one size.
-    final fill = on && enabled ? C.accent : Colors.transparent;
+    final fill = on && enabled ? p.accent : Colors.transparent;
     final border = !enabled
-        ? C.disabledBorder
+        ? p.disabledBorder
         : on
-            ? C.accent
+            ? p.accent
             : focused
-                ? C.focusRing
-                : (hover ? C.textFaint : C.hairline);
+                ? p.focusRing
+                : (hover ? p.textFaint : p.hairline);
 
     return AnimatedContainer(
-      duration: C.fast,
+      duration:
+          MediaQuery.of(context).disableAnimations ? Duration.zero : C.fast,
       curve: Curves.easeOut,
       width: size,
       height: size,
@@ -512,16 +735,15 @@ class LdCheckbox extends StatelessWidget {
         color: fill,
         borderRadius: BorderRadius.circular(5),
         border: Border.all(
-            color: border,
-            width: focused && enabled ? C.focusRingWidth : 1.4),
+            color: border, width: focused && enabled ? C.focusRingWidth : 1.4),
       ),
       // A locked option still has to say which way it is, so the tick survives
-      // being disabled — in [C.textFaint] on no fill, because the disabled rule
+      // being disabled — in [p.textFaint] on no fill, because the disabled rule
       // takes the accent away rather than dimming it.
       child: on
           ? Center(
               child: LdIcon(LdIcons.check,
-                  size: 12, color: enabled ? C.bg : C.textFaint))
+                  size: 12, color: enabled ? p.primaryFg : p.textFaint))
           : null,
     );
   }

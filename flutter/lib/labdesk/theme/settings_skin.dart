@@ -28,140 +28,70 @@ class SettingsSkin {
   /// The step used for a control that belongs to the row above it.
   static const indent = 26.0;
 
-  static Color label(bool enabled) => enabled ? C.text : C.textFaint;
+  static Color label(bool enabled, [BuildContext? context]) {
+    final p = context == null ? ConsolePalette.dark : C.of(context);
+    return enabled ? p.text : p.textFaint;
+  }
 }
 
 /// The theme the settings pages run under.
 ///
-/// The console does not wrap its body in [C.theme], so a Material control
-/// inside a settings page would otherwise be drawn by the application's own
-/// theme — which is where the blue checkboxes, the grey tooltip lozenges and
-/// the tinted dropdown sheets came from. Applied at the root of every page, it
-/// also catches the widgets these pages host but do not own: the quality
-/// slider, the trackpad speed control, the plugin cards, the audio input list.
+/// Both embedded and standalone settings inherit their surrounding appearance.
+/// The shared console theme also covers hosted Material controls and the
+/// dropdown routes they open; settings adds only its control-specific details.
 ThemeData settingsThemeData(BuildContext context) {
-  final base = Theme.of(context);
+  final p = C.of(context);
+  final base = C.theme(brightness: p.brightness);
   return base.copyWith(
-    canvasColor: C.surface,
-    scaffoldBackgroundColor: C.bg,
-    dividerColor: C.hairline,
-    shadowColor: const Color(0xB3000000),
-    hoverColor: C.surfaceHi,
-    splashColor: Colors.transparent,
-    highlightColor: Colors.transparent,
-    textTheme: base.textTheme.apply(
-      fontFamily: 'Manrope',
-      bodyColor: C.text,
-      displayColor: C.text,
-    ),
-    iconTheme: const IconThemeData(color: C.textMuted, size: 18),
-    colorScheme: base.colorScheme.copyWith(
-      primary: C.accent,
-      onPrimary: C.bg,
-      surface: C.surface,
-      onSurface: C.text,
-      surfaceContainerHighest: C.surfaceHi,
-      outline: C.hairline,
-      error: C.bad,
-    ),
-    dividerTheme: const DividerThemeData(space: 1, thickness: 1, color: C.hairline),
-    tooltipTheme: TooltipThemeData(
-      waitDuration: const Duration(milliseconds: 400),
-      decoration: BoxDecoration(
-        color: C.surfaceHi,
-        borderRadius: C.roundedSm,
-        border: Border.all(color: C.hairline),
-        boxShadow: const [
-          BoxShadow(color: Color(0x66000000), blurRadius: 16, offset: Offset(0, 6)),
-        ],
-      ),
-      textStyle: C.small(color: C.text),
-      padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 8),
-    ),
+    iconTheme: IconThemeData(color: p.textMuted, size: 18),
+    dividerTheme: DividerThemeData(space: 1, thickness: 1, color: p.hairline),
     checkboxTheme: CheckboxThemeData(
-      fillColor: WidgetStateProperty.resolveWith((s) =>
-          s.contains(WidgetState.selected) ? C.accent : Colors.transparent),
-      checkColor: const WidgetStatePropertyAll(C.bg),
-      side: const BorderSide(color: C.hairline),
+      fillColor: WidgetStateProperty.resolveWith(
+          (states) => states.contains(WidgetState.disabled)
+              ? Colors.transparent
+              : states.contains(WidgetState.selected)
+                  ? p.accent
+                  : Colors.transparent),
+      checkColor: WidgetStateProperty.resolveWith((states) =>
+          states.contains(WidgetState.disabled) ? p.textFaint : p.primaryFg),
+      side: BorderSide(color: p.textFaint),
       shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(5)),
-      overlayColor: const WidgetStatePropertyAll(Colors.transparent),
     ),
     radioTheme: RadioThemeData(
       fillColor: WidgetStateProperty.resolveWith(
-          (s) => s.contains(WidgetState.selected) ? C.accent : C.textFaint),
-      overlayColor: const WidgetStatePropertyAll(Colors.transparent),
+          (states) => states.contains(WidgetState.disabled)
+              ? p.textFaint
+              : states.contains(WidgetState.selected)
+                  ? p.accent
+                  : p.textFaint),
     ),
     switchTheme: SwitchThemeData(
       thumbColor: WidgetStateProperty.resolveWith(
-          (s) => s.contains(WidgetState.selected) ? C.text : C.textFaint),
+          (states) => states.contains(WidgetState.disabled)
+              ? p.textFaint
+              : states.contains(WidgetState.selected)
+                  ? p.primaryFg
+                  : p.textMuted),
       trackColor: WidgetStateProperty.resolveWith(
-          (s) => s.contains(WidgetState.selected) ? C.accent : C.surfaceHi),
-      trackOutlineColor: const WidgetStatePropertyAll(C.hairline),
-      overlayColor: const WidgetStatePropertyAll(Colors.transparent),
+          (states) => states.contains(WidgetState.disabled)
+              ? Colors.transparent
+              : states.contains(WidgetState.selected)
+                  ? p.accent
+                  : p.surfaceHi),
+      trackOutlineColor: WidgetStatePropertyAll(p.textFaint),
     ),
     sliderTheme: base.sliderTheme.copyWith(
-      activeTrackColor: C.accent,
-      inactiveTrackColor: C.hairline,
-      thumbColor: C.accent,
-      overlayColor: C.accent.withOpacity(0.12),
-      valueIndicatorColor: C.surfaceHi,
-      valueIndicatorTextStyle: C.small(color: C.text),
+      activeTrackColor: p.accent,
+      inactiveTrackColor: p.hairline,
+      thumbColor: p.accent,
+      overlayColor: p.accent.withOpacity(.12),
+      valueIndicatorColor: p.surfaceHi,
+      valueIndicatorTextStyle: p.small(color: p.text),
       trackHeight: 3,
     ),
-    inputDecorationTheme: InputDecorationTheme(
-      isDense: true,
-      filled: true,
-      fillColor: C.bg,
-      hintStyle: C.body(color: C.textFaint),
-      contentPadding: const EdgeInsets.symmetric(horizontal: 11, vertical: 11),
-      border: OutlineInputBorder(
-          borderRadius: C.roundedSm, borderSide: const BorderSide(color: C.hairline)),
-      enabledBorder: OutlineInputBorder(
-          borderRadius: C.roundedSm, borderSide: const BorderSide(color: C.hairline)),
-      disabledBorder: OutlineInputBorder(
-          borderRadius: C.roundedSm,
-          borderSide: BorderSide(color: C.hairline.withOpacity(0.6))),
-      focusedBorder: OutlineInputBorder(
-          borderRadius: C.roundedSm, borderSide: const BorderSide(color: C.accent)),
-      errorBorder: OutlineInputBorder(
-          borderRadius: C.roundedSm, borderSide: const BorderSide(color: C.bad)),
-      focusedErrorBorder: OutlineInputBorder(
-          borderRadius: C.roundedSm, borderSide: const BorderSide(color: C.bad)),
-      errorStyle: C.small(color: C.bad),
-    ),
-    textSelectionTheme: TextSelectionThemeData(
-      cursorColor: C.accent,
-      selectionColor: C.accent.withOpacity(0.3),
-      selectionHandleColor: C.accent,
-    ),
-    elevatedButtonTheme: ElevatedButtonThemeData(
-      style: ButtonStyle(
-        elevation: const WidgetStatePropertyAll(0),
-        backgroundColor: WidgetStateProperty.resolveWith((s) =>
-            s.contains(WidgetState.disabled) ? C.surface : C.surfaceHi),
-        foregroundColor: WidgetStateProperty.resolveWith(
-            (s) => s.contains(WidgetState.disabled) ? C.textFaint : C.text),
-        textStyle: WidgetStatePropertyAll(C.small(w: FontWeight.w600)),
-        overlayColor: const WidgetStatePropertyAll(Colors.transparent),
-        shape: WidgetStatePropertyAll(RoundedRectangleBorder(
-            borderRadius: C.roundedSm, side: const BorderSide(color: C.hairline))),
-        padding: const WidgetStatePropertyAll(
-            EdgeInsets.symmetric(horizontal: 12, vertical: 10)),
-      ),
-    ),
-    textButtonTheme: TextButtonThemeData(
-      style: ButtonStyle(
-        foregroundColor: const WidgetStatePropertyAll(C.accent),
-        textStyle: WidgetStatePropertyAll(C.small(w: FontWeight.w600)),
-        overlayColor: const WidgetStatePropertyAll(Colors.transparent),
-      ),
-    ),
-    listTileTheme: const ListTileThemeData(
-      textColor: C.text,
-      iconColor: C.textMuted,
-      selectedColor: C.accent,
-    ),
-    progressIndicatorTheme: const ProgressIndicatorThemeData(color: C.accent),
+    listTileTheme: ListTileThemeData(
+        textColor: p.text, iconColor: p.textMuted, selectedColor: p.accent),
+    progressIndicatorTheme: ProgressIndicatorThemeData(color: p.accent),
   );
 }
 
@@ -178,10 +108,11 @@ class SettingsPage extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
+    final p = C.of(context);
     return Theme(
       data: settingsThemeData(context),
       child: ColoredBox(
-        color: C.bg,
+        color: p.bg,
         child: Scrollbar(
           controller: controller,
           child: ListView(
@@ -191,7 +122,8 @@ class SettingsPage extends StatelessWidget {
               Align(
                 alignment: Alignment.topLeft,
                 child: ConstrainedBox(
-                  constraints: const BoxConstraints(maxWidth: SettingsSkin.contentWidth),
+                  constraints:
+                      const BoxConstraints(maxWidth: SettingsSkin.contentWidth),
                   child: Column(
                     crossAxisAlignment: CrossAxisAlignment.stretch,
                     children: children,
@@ -233,6 +165,7 @@ class SettingsGroup extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
+    final p = C.of(context);
     return Column(
       crossAxisAlignment: CrossAxisAlignment.stretch,
       children: [
@@ -246,10 +179,10 @@ class SettingsGroup extends StatelessWidget {
                   crossAxisAlignment: CrossAxisAlignment.start,
                   mainAxisSize: MainAxisSize.min,
                   children: [
-                    Text(title, style: C.h2()),
+                    Text(title, style: p.h2()),
                     if (explain != null) ...[
                       const SizedBox(height: 4),
-                      Text(explain!, style: C.small(color: C.textFaint)),
+                      Text(explain!, style: p.small(color: p.textFaint)),
                     ],
                   ],
                 ),
@@ -260,7 +193,7 @@ class SettingsGroup extends StatelessWidget {
         ),
         ...children,
         const SizedBox(height: 16),
-        const Divider(height: 1, thickness: 1, color: C.hairline),
+        Divider(height: 1, thickness: 1, color: p.hairline),
         const SizedBox(height: 20),
       ],
     );
@@ -311,6 +244,7 @@ class _SettingsRowState extends State<SettingsRow> {
 
   @override
   Widget build(BuildContext context) {
+    final p = C.of(context);
     // [enabled] colours the label; whether the row is a hit area is the
     // caller's decision, because a handful of rows in the pages this serves
     // stay tappable while their control is disabled.
@@ -320,18 +254,21 @@ class _SettingsRowState extends State<SettingsRow> {
       mainAxisSize: MainAxisSize.min,
       children: [
         Row(children: [
-          if (widget.leading != null) ...[widget.leading!, const SizedBox(width: 7)],
+          if (widget.leading != null) ...[
+            widget.leading!,
+            const SizedBox(width: 7)
+          ],
           Flexible(
             child: Text(
               widget.label,
               style: widget.labelStyle ??
-                  C.body(color: SettingsSkin.label(widget.enabled)),
+                  p.body(color: SettingsSkin.label(widget.enabled, context)),
             ),
           ),
         ]),
         if (widget.explain != null) ...[
           const SizedBox(height: 3),
-          Text(widget.explain!, style: C.small(color: C.textFaint)),
+          Text(widget.explain!, style: p.small(color: p.textFaint)),
         ],
       ],
     );
@@ -370,7 +307,7 @@ class _SettingsRowState extends State<SettingsRow> {
           constraints: const BoxConstraints(minHeight: 44),
           padding: EdgeInsets.fromLTRB(widget.indent + 8, 9, 8, 9),
           decoration: BoxDecoration(
-            color: _hover && tappable ? C.surface : Colors.transparent,
+            color: _hover && tappable ? p.surface : Colors.transparent,
             borderRadius: C.roundedSm,
           ),
           child: Align(alignment: Alignment.centerLeft, child: body),
@@ -431,6 +368,7 @@ class _LdRadioRowState extends State<LdRadioRow> {
 
   @override
   Widget build(BuildContext context) {
+    final p = C.of(context);
     final enabled = widget.onTap != null;
     return MouseRegion(
       cursor: enabled ? SystemMouseCursors.click : MouseCursor.defer,
@@ -444,7 +382,7 @@ class _LdRadioRowState extends State<LdRadioRow> {
           constraints: const BoxConstraints(minHeight: 36),
           padding: EdgeInsets.fromLTRB(widget.indent + 8, 7, 8, 7),
           decoration: BoxDecoration(
-            color: _hover && enabled ? C.surface : Colors.transparent,
+            color: _hover && enabled ? p.surface : Colors.transparent,
             borderRadius: C.roundedSm,
           ),
           child: Row(
@@ -463,11 +401,12 @@ class _LdRadioRowState extends State<LdRadioRow> {
                     Text(
                       widget.label,
                       overflow: widget.softWrap ? null : TextOverflow.ellipsis,
-                      style: C.body(color: SettingsSkin.label(enabled)),
+                      style:
+                          p.body(color: SettingsSkin.label(enabled, context)),
                     ),
                     if (widget.explain != null) ...[
                       const SizedBox(height: 3),
-                      Text(widget.explain!, style: C.small(color: C.textFaint)),
+                      Text(widget.explain!, style: p.small(color: p.textFaint)),
                     ],
                   ],
                 ),
@@ -494,6 +433,7 @@ class LdRadioMark extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
+    final p = C.of(context);
     return AnimatedContainer(
       duration: C.fast,
       width: LdCheckbox.size,
@@ -501,10 +441,9 @@ class LdRadioMark extends StatelessWidget {
       decoration: BoxDecoration(
         shape: BoxShape.circle,
         border: Border.all(
-          // [C.disabledBorder]'s rule: a locked radio keeps no accent at all.
-          color: !enabled
-              ? C.disabledBorder
-              : (selected ? C.accent : C.hairline),
+          // [p.disabledBorder]'s rule: a locked radio keeps no accent at all.
+          color:
+              !enabled ? p.disabledBorder : (selected ? p.accent : p.textFaint),
           width: 1.4,
         ),
       ),
@@ -517,7 +456,7 @@ class LdRadioMark extends StatelessWidget {
             shape: BoxShape.circle,
             color: !selected
                 ? Colors.transparent
-                : (enabled ? C.accent : C.textFaint),
+                : (enabled ? p.accent : p.textFaint),
           ),
         ),
       ),
@@ -549,10 +488,11 @@ class LdSelect extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
+    final p = C.of(context);
     var index = keys.indexOf(initialKey);
     if (index < 0) index = 0;
     if (values.isEmpty) return const SizedBox.shrink();
-    final fg = enabled ? C.text : C.textFaint;
+    final fg = enabled ? p.text : p.textFaint;
 
     // Aligned rather than sized alone: a settings page stretches its children
     // to the measure, and a select stretched to 720 pixels to hold the word
@@ -564,10 +504,9 @@ class LdSelect extends StatelessWidget {
         height: 34,
         padding: const EdgeInsets.only(left: 11, right: 8),
         decoration: BoxDecoration(
-          color: enabled ? C.bg : Colors.transparent,
+          color: enabled ? p.bg : Colors.transparent,
           borderRadius: C.roundedSm,
-          border:
-              Border.all(color: enabled ? C.hairline : C.hairline.withOpacity(0.6)),
+          border: Border.all(color: enabled ? p.textFaint : p.disabledBorder),
         ),
         child: DropdownButtonHideUnderline(
           child: DropdownButton<int>(
@@ -575,11 +514,11 @@ class LdSelect extends StatelessWidget {
             isExpanded: true,
             isDense: true,
             borderRadius: C.rounded,
-            dropdownColor: C.surface,
-            focusColor: Colors.transparent,
-            style: C.body(color: fg),
+            dropdownColor: p.surface,
+            focusColor: p.accent.withOpacity(.16),
+            style: p.body(color: fg),
             icon: LdIcon(LdIcons.chevronDown,
-                size: 15, color: enabled ? C.textMuted : C.textFaint),
+                size: 15, color: enabled ? p.textMuted : p.textFaint),
             onChanged: enabled
                 ? (i) {
                     if (i != null && i != index) onChanged(keys[i]);
@@ -590,7 +529,8 @@ class LdSelect extends StatelessWidget {
                 Align(
                   alignment: Alignment.centerLeft,
                   child: Text(v,
-                      overflow: TextOverflow.ellipsis, style: C.body(color: fg)),
+                      overflow: TextOverflow.ellipsis,
+                      style: p.body(color: fg)),
                 ),
             ],
             items: [
@@ -600,7 +540,7 @@ class LdSelect extends StatelessWidget {
                   child: Text(
                     values[i],
                     overflow: TextOverflow.ellipsis,
-                    style: C.body(color: i == index ? C.accent : C.text),
+                    style: p.body(color: i == index ? p.accent : p.text),
                   ),
                 ),
             ],
@@ -640,7 +580,8 @@ class LdTextField extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
-    final color = enabled ? C.text : C.textFaint;
+    final p = C.of(context);
+    final color = enabled ? p.text : p.textFaint;
     return SizedBox(
       width: width,
       child: TextField(
@@ -650,33 +591,37 @@ class LdTextField extends StatelessWidget {
         autocorrect: false,
         onChanged: onChanged,
         inputFormatters: inputFormatters,
-        cursorColor: C.accent,
+        cursorColor: p.accent,
         cursorWidth: 1.5,
-        style: mono ? C.data(size: 13, color: color) : C.body(color: color),
+        style: mono ? p.data(size: 13, color: color) : p.body(color: color),
         decoration: InputDecoration(
           hintText: hint,
           hintStyle: mono
-              ? C.data(size: 13, color: C.textFaint)
-              : C.body(color: C.textFaint),
+              ? p.data(size: 13, color: p.textFaint)
+              : p.body(color: p.textFaint),
           errorText: (errorText?.isEmpty ?? true) ? null : errorText,
-          errorStyle: C.small(color: C.bad),
+          errorStyle: p.small(color: p.bad),
           isDense: true,
           filled: true,
-          fillColor: enabled ? C.bg : Colors.transparent,
-          contentPadding: const EdgeInsets.symmetric(horizontal: 11, vertical: 10),
+          fillColor: enabled ? p.bg : Colors.transparent,
+          contentPadding:
+              const EdgeInsets.symmetric(horizontal: 11, vertical: 10),
           border: OutlineInputBorder(
-              borderRadius: C.roundedSm, borderSide: const BorderSide(color: C.hairline)),
+              borderRadius: C.roundedSm,
+              borderSide: BorderSide(color: p.hairline)),
           enabledBorder: OutlineInputBorder(
-              borderRadius: C.roundedSm, borderSide: const BorderSide(color: C.hairline)),
+              borderRadius: C.roundedSm,
+              borderSide: BorderSide(color: p.hairline)),
           disabledBorder: OutlineInputBorder(
               borderRadius: C.roundedSm,
-              borderSide: BorderSide(color: C.hairline.withOpacity(0.6))),
+              borderSide: BorderSide(color: p.hairline.withOpacity(0.6))),
           focusedBorder: OutlineInputBorder(
-              borderRadius: C.roundedSm, borderSide: const BorderSide(color: C.accent)),
+              borderRadius: C.roundedSm,
+              borderSide: BorderSide(color: p.accent)),
           errorBorder: OutlineInputBorder(
-              borderRadius: C.roundedSm, borderSide: const BorderSide(color: C.bad)),
+              borderRadius: C.roundedSm, borderSide: BorderSide(color: p.bad)),
           focusedErrorBorder: OutlineInputBorder(
-              borderRadius: C.roundedSm, borderSide: const BorderSide(color: C.bad)),
+              borderRadius: C.roundedSm, borderSide: BorderSide(color: p.bad)),
         ),
       ),
     );
@@ -718,31 +663,32 @@ class _LdButtonState extends State<LdButton> {
 
   @override
   Widget build(BuildContext context) {
+    final p = C.of(context);
     final enabled = widget.onPressed != null;
-    // [C.disabledBorder]'s rule, ahead of the kind: a disabled button of any
-    // rank is an empty frame at the hairline under [C.textFaint]. A disabled
+    // [p.disabledBorder]'s rule, ahead of the kind: a disabled button of any
+    // rank is an empty frame at the hairline under [p.textFaint]. A disabled
     // primary that kept a filled slab was still the loudest thing on the row.
     final (Color bg, Color fg, Color border) = !enabled
-        ? (Colors.transparent, C.textFaint, C.disabledBorder)
+        ? (Colors.transparent, p.textFaint, p.disabledBorder)
         : switch (widget.kind) {
             // The shared filled primary. One tint, one foreground, same as the
             // installer's confirm and Connect's go.
             LdButtonKind.primary => (
                 _down
-                    ? C.primaryFillDown
-                    : (_hover ? C.primaryFillHover : C.primaryFill),
-                C.primaryFg,
+                    ? p.primaryFillDown
+                    : (_hover ? p.primaryFillHover : p.primaryFill),
+                p.primaryFg,
                 Colors.transparent,
               ),
             LdButtonKind.danger => (
-                _hover ? C.bad.withOpacity(0.16) : Colors.transparent,
-                C.bad,
-                C.bad.withOpacity(0.5),
+                _hover ? p.bad.withOpacity(0.16) : Colors.transparent,
+                p.bad,
+                p.bad.withOpacity(0.5),
               ),
             LdButtonKind.quiet => (
-                _hover ? C.surfaceHi : Colors.transparent,
-                _hover ? C.text : C.textMuted,
-                _hover ? C.hairline : C.hairline.withOpacity(0.6),
+                _hover ? p.surfaceHi : Colors.transparent,
+                _hover ? p.text : p.textMuted,
+                _hover ? p.hairline : p.hairline.withOpacity(0.6),
               ),
           };
 
@@ -773,7 +719,7 @@ class _LdButtonState extends State<LdButton> {
                 LdIcon(widget.glyph!, size: 15, color: fg),
                 const SizedBox(width: 7),
               ],
-              Text(widget.label, style: C.small(color: fg, w: FontWeight.w600)),
+              Text(widget.label, style: p.small(color: fg, w: FontWeight.w600)),
             ],
           ),
         ),
@@ -789,7 +735,8 @@ class _LdButtonState extends State<LdButton> {
 /// A statement the page makes rather than a control: a path that is ready, a
 /// requirement the machine does not meet, a licence.
 class SettingsNote extends StatelessWidget {
-  const SettingsNote(this.text, {super.key, this.tone, this.indent = 0, this.selectable = false});
+  const SettingsNote(this.text,
+      {super.key, this.tone, this.indent = 0, this.selectable = false});
 
   final String text;
   final Color? tone;
@@ -798,7 +745,8 @@ class SettingsNote extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
-    final t = Text(text, style: C.body(color: tone ?? C.textMuted));
+    final p = C.of(context);
+    final t = Text(text, style: p.body(color: tone ?? p.textMuted));
     return Padding(
       padding: EdgeInsets.fromLTRB(indent + 8, 7, 8, 7),
       child: selectable ? SelectionArea(child: t) : t,
@@ -815,15 +763,18 @@ class SettingsFact extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
+    final p = C.of(context);
     return Padding(
       padding: const EdgeInsets.fromLTRB(8, 8, 8, 8),
       child: Row(
         crossAxisAlignment: CrossAxisAlignment.start,
         children: [
-          SizedBox(width: 160, child: Text(label, style: C.body(color: C.textMuted))),
+          SizedBox(
+              width: 160,
+              child: Text(label, style: p.body(color: p.textMuted))),
           Expanded(
             child: SelectionArea(
-              child: Text(value, style: C.data(size: 12.5, color: C.text)),
+              child: Text(value, style: p.data(size: 12.5, color: p.text)),
             ),
           ),
         ],
@@ -848,6 +799,7 @@ class _SettingsLinkState extends State<SettingsLink> {
 
   @override
   Widget build(BuildContext context) {
+    final p = C.of(context);
     return MouseRegion(
       cursor: SystemMouseCursors.click,
       onEnter: (_) => setState(() => _hover = true),
@@ -861,11 +813,11 @@ class _SettingsLinkState extends State<SettingsLink> {
             children: [
               Text(
                 widget.label,
-                style: C.body(color: _hover ? C.text : C.accent),
+                style: p.body(color: _hover ? p.text : p.accent),
               ),
               const SizedBox(width: 6),
               LdIcon(LdIcons.chevronRight,
-                  size: 14, color: _hover ? C.text : C.accent),
+                  size: 14, color: _hover ? p.text : p.accent),
             ],
           ),
         ),
@@ -880,7 +832,8 @@ class _SettingsLinkState extends State<SettingsLink> {
 /// The whole bar is the control, because the whole bar is the one thing it
 /// offers. Its [label] is the page's own unlock string, unchanged.
 class SettingsLockBar extends StatefulWidget {
-  const SettingsLockBar({super.key, required this.label, required this.onUnlock});
+  const SettingsLockBar(
+      {super.key, required this.label, required this.onUnlock});
 
   final String label;
   final VoidCallback onUnlock;
@@ -894,6 +847,7 @@ class _SettingsLockBarState extends State<SettingsLockBar> {
 
   @override
   Widget build(BuildContext context) {
+    final p = C.of(context);
     return MouseRegion(
       cursor: SystemMouseCursors.click,
       onEnter: (_) => setState(() => _hover = true),
@@ -906,22 +860,22 @@ class _SettingsLockBarState extends State<SettingsLockBar> {
           margin: const EdgeInsets.only(bottom: 24),
           padding: const EdgeInsets.fromLTRB(14, 13, 13, 13),
           decoration: BoxDecoration(
-            color: _hover ? C.surfaceHi : C.surface,
+            color: _hover ? p.surfaceHi : p.surface,
             borderRadius: C.rounded,
-            border: Border.all(color: C.hairline),
+            border: Border.all(color: p.hairline),
           ),
           child: Row(
             children: [
               LdIcon(LdIcons.lock,
-                  size: 17, color: _hover ? C.text : C.textMuted),
+                  size: 17, color: _hover ? p.text : p.textMuted),
               const SizedBox(width: 11),
               Expanded(
                 child: Text(widget.label,
-                    style: C.body(color: _hover ? C.text : C.textMuted)),
+                    style: p.body(color: _hover ? p.text : p.textMuted)),
               ),
               const SizedBox(width: 12),
               LdIcon(LdIcons.chevronRight,
-                  size: 15, color: _hover ? C.text : C.textFaint),
+                  size: 15, color: _hover ? p.text : p.textFaint),
             ],
           ),
         ),

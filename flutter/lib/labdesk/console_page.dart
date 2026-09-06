@@ -15,13 +15,14 @@ import 'package:flutter_hbb/common/labdesk_status_binding.dart';
 import 'package:flutter_hbb/common/widgets/labdesk_groups.dart';
 import 'package:flutter_hbb/common/widgets/login.dart' show loginDialog;
 import 'package:flutter_hbb/common/widgets/peer_card.dart' show showRdpDialog;
-import 'package:flutter_hbb/desktop/pages/connection_page.dart' show OnlineStatusWidget;
+import 'package:flutter_hbb/desktop/pages/connection_page.dart'
+    show OnlineStatusWidget;
 import 'package:flutter_hbb/desktop/pages/desktop_home_page.dart';
 import 'package:flutter_hbb/desktop/pages/desktop_setting_page.dart';
 import 'package:flutter_hbb/desktop/pages/labdesk_machine_link.dart';
 import 'package:flutter_hbb/desktop/pages/labdesk_terminal_rpc.dart';
-import 'package:flutter_hbb/desktop/widgets/server_profile_switcher.dart';
-import 'package:flutter_hbb/desktop/widgets/update_progress.dart' show handleUpdate;
+import 'package:flutter_hbb/desktop/widgets/update_progress.dart'
+    show handleUpdate;
 import 'package:flutter_hbb/models/state_model.dart';
 import 'package:get/get.dart';
 import 'package:flutter_hbb/models/peer_model.dart';
@@ -43,6 +44,11 @@ import 'screens/actions_screen.dart';
 import 'screens/automation_screen.dart';
 import 'screens/connect_screen.dart';
 import 'screens/console_shell.dart';
+import 'screens/home_dashboard.dart';
+import 'screens/adapters_card.dart';
+import 'screens/terms_dialog.dart';
+import 'screens/reporting_control.dart';
+import 'services/organization_context.dart';
 import 'screens/sessions_screen.dart';
 import 'screens/settings_screen.dart';
 import 'models/labnet.dart';
@@ -90,13 +96,12 @@ class LabDeskConsolePage extends StatefulWidget {
 class _LabDeskConsolePageState extends State<LabDeskConsolePage> {
   Timer? _tick;
   bool _refreshing = false;
-  DateTime? _lastRefreshed;
 
   /// Lets controls that mean "go to settings" move the console rather than
   /// open a second settings surface in its own tab.
-  final _sectionRequest = ConsoleSectionRequest(ConsoleSection.connect);
+  final _sectionRequest = ConsoleSectionRequest(ConsoleSection.home);
   var _settingsTab = SettingsTabKey.general;
-  var _section = ConsoleSection.connect;
+  var _section = ConsoleSection.home;
 
   /// The machine last connected to, so the id field opens where the operator
   /// left it. Read once, exactly as the page this replaces did.
@@ -113,6 +118,12 @@ class _LabDeskConsolePageState extends State<LabDeskConsolePage> {
   // render their state. Nothing reaches the daemon until the operator says so.
   late final OverlayDaemon _daemon;
   late final OverlayBroker _broker;
+  late final OrganizationContextController _organization;
+  String _shownContext = '';
+  int _accountEpoch = 0;
+  int? _pollingEpoch;
+  DateTime? _lastOrgResponse;
+  String? _fleetError;
   late final OverlayEnrolment _enrolment;
   late final OverlaySession _overlay;
   var _labnet = LabnetCardState.off;
@@ -168,7 +179,6 @@ class _LabDeskConsolePageState extends State<LabDeskConsolePage> {
   Timer? _inboxTick;
   static const _kConsentKey = 'labdesk-overlay-consent';
 
-
   void _goToSettings(SettingsTabKey tab) {
     // A page this build does not offer must not become reachable through the
     // console: tabKeys hides pages by policy and by platform.
@@ -193,11 +203,16 @@ class _LabDeskConsolePageState extends State<LabDeskConsolePage> {
     // second is work nobody asked for.
     _tick = Timer.periodic(const Duration(seconds: 1), (_) {
       if (!mounted) return;
+      final credential = bind.mainGetLocalOption(key: 'access_token');
+      if (!_organization.matchesCredential(credential)) {
+        _organization.syncCredential(credential);
+      }
       _pollReachability();
       _runAutomation();
       _ticks++;
       if (_ticks.isEven) _pollSessions();
-      if (_section == ConsoleSection.fleet ||
+      if (_section == ConsoleSection.home ||
+          _section == ConsoleSection.fleet ||
           _section == ConsoleSection.connect) {
         setState(() {});
       }
@@ -213,9 +228,7 @@ class _LabDeskConsolePageState extends State<LabDeskConsolePage> {
     bind.mainLoadRecentPeers();
     bind.mainLoadFavPeers();
     bind.mainLoadLanPeers();
-    _automation.rules = decodeRules(bind.mainGetLocalOption(key: _kRulesKey));
     _selfHealOn = bind.mainGetOptionSync(key: kSelfHealOption) == 'Y';
-    _library = ScriptLibrary.decode(bind.mainGetLocalOption(key: _kScriptsKey));
     _initLabnet();
     // Ask once on open so the fleet is not blank while waiting for the client's
     // own poll to come round.
@@ -230,6 +243,7 @@ class _LabDeskConsolePageState extends State<LabDeskConsolePage> {
   void dispose() {
     _tick?.cancel();
     _inboxTick?.cancel();
+    _organization.dispose();
     _enrolment.dispose();
     _sectionRequest.dispose();
     LabDeskMachineLink.closeAll();
@@ -280,11 +294,12 @@ class _LabDeskConsolePageState extends State<LabDeskConsolePage> {
   /// Rules that act on machines. Evaluated by this tick, so they run only
   /// while the console is open; the screen says so.
   static const _kRulesKey = 'labdesk-automation';
-  final _automation = AutomationEngine();
+  var _automation = AutomationEngine();
 
   /// The toolbox: which machines are picked, which tool is open, what each
   /// machine answered, and the operator's saved scripts.
   static const _kScriptsKey = 'labdesk-scripts';
+  String _scopedPreference(String key) => '$key-v2-${_organization.contextKey}';
   final _toolSelected = <String>{};
   ToolId? _tool;
   final _toolResults = <String, ToolRunResult>{};
@@ -328,7 +343,8 @@ class _LabDeskConsolePageState extends State<LabDeskConsolePage> {
           presentWindows.add(w);
           final list = await _ask(w, kWindowEventGetRemoteList);
           if (list is String) {
-            _windowPeerIds[w] = list.split(',').where((id) => id.isNotEmpty).toList();
+            _windowPeerIds[w] =
+                list.split(',').where((id) => id.isNotEmpty).toList();
           }
           // A busy window is not a closed session. Retain its last successful
           // response until it answers again or the window manager removes it.
@@ -338,7 +354,8 @@ class _LabDeskConsolePageState extends State<LabDeskConsolePage> {
           }
         }
       }
-      _windowPeerIds.removeWhere((window, _) => !presentWindows.contains(window));
+      _windowPeerIds
+          .removeWhere((window, _) => !presentWindows.contains(window));
       if (!mounted) return;
       final changed = !mapEquals(remote, _remoteWindowOf) ||
           !mapEquals(terminal, _terminalWindowOf);
@@ -357,12 +374,14 @@ class _LabDeskConsolePageState extends State<LabDeskConsolePage> {
       // Chat transcripts of the desktop sessions that are open.
       final chats = <String, SessionChat>{};
       for (final e in remote.entries) {
-        final s = decodeSessionChat(await _ask(e.value, kLabDeskRpcChatGet, e.key));
+        final s =
+            decodeSessionChat(await _ask(e.value, kLabDeskRpcChatGet, e.key));
         if (s != null) {
           final read =
               _openChatId == s.id ? s.lines.length : (_readLines[s.id] ?? 0);
           _readLines[s.id] = read;
-          chats[s.id] = s.copyWith(unread: (s.lines.length - read).clamp(0, 999));
+          chats[s.id] =
+              s.copyWith(unread: (s.lines.length - read).clamp(0, 999));
         }
       }
       _readLines.removeWhere((id, _) => !chats.containsKey(id));
@@ -394,16 +413,15 @@ class _LabDeskConsolePageState extends State<LabDeskConsolePage> {
   }
 
   void _runAutomation() {
-    if (_automation.rules.isEmpty) return;
-    final machines = _machines;
+    if (!_organization.ready || _automation.rules.isEmpty) return;
+    final machines = _fleetRows;
     final fired = _automation.tick(
       now: DateTime.now(),
-      status: {
-        for (final m in machines) m.id: labdeskStatus.store.stateOf(m.id).status
-      },
+      status: {for (final m in machines) m.id: m.status},
       metrics: {
         for (final m in machines)
-          if (_stateOfPeer(m.id) case final s?) m.id: s.metrics()
+          if (m.status == LabDeskPeerStatus.online)
+            if (_stateOfPeer(m.id) case final s?) m.id: s.metrics()
       },
       machines: {for (final m in machines) m.id},
     );
@@ -416,84 +434,115 @@ class _LabDeskConsolePageState extends State<LabDeskConsolePage> {
   }
 
   Future<void> _execute(Firing f) async {
+    final generation = _connectionGeneration;
+    final engine = _automation;
     final id = f.machineId;
     switch (f.action) {
       case RunCommand(:final command, :final platformHint):
         final platform = _rowOf(id)?.platform ?? '';
         if (platformHint != null &&
             !platform.toLowerCase().startsWith(platformHint.toLowerCase())) {
-          _automation.recordOutcome(
+          engine.recordOutcome(
               f.id, false, 'skipped: $platform is not $platformHint');
           break;
         }
         final ffi = await LabDeskMachineLink.open(id,
             beforeOpen: () => _prepareManagedLink(id));
+        if (!mounted || generation != _connectionGeneration) {
+          engine.recordOutcome(
+              f.id, false, 'cancelled: connection context changed');
+          break;
+        }
         if (ffi == null) {
-          _automation.recordOutcome(
-              f.id, false, LabDeskMachineLink.reason(id));
+          engine.recordOutcome(f.id, false, LabDeskMachineLink.reason(id));
           break;
         }
         final out = await LabDeskTerminalRpc.runOn(ffi, id, command);
         final code = out['exitCode'];
-        _automation.recordOutcome(
+        engine.recordOutcome(
             f.id, code == 0, (out['reason'] as String?) ?? 'exit $code');
       case Notify(:final message):
         showToast(message.isEmpty ? '${f.rule.name} fired' : message);
-        _automation.recordOutcome(f.id, true);
+        engine.recordOutcome(f.id, true);
       case WakeOnLan():
         await bind.mainWol(id: id);
-        _automation.recordOutcome(f.id, true, 'magic packet sent');
+        engine.recordOutcome(f.id, true, 'magic packet sent');
       case OpenSession():
         if (mounted) _connectVia(id);
-        _automation.recordOutcome(f.id, true);
+        engine.recordOutcome(f.id, true);
     }
     if (mounted) setState(() {});
   }
 
   void _saveRules(List<Rule> rules) {
     _automation.rules = rules;
-    bind.mainSetLocalOption(key: _kRulesKey, value: encodeRules(rules));
+    bind.mainSetLocalOption(
+        key: _scopedPreference(_kRulesKey), value: encodeRules(rules));
     setState(() {});
   }
 
-  Widget _automationScreen(BuildContext context) => AutomationScreen(
-        rules: _automation.rules,
-        log: _automation.log.entries,
-        machines: _machines,
-        now: DateTime.now(),
-        onSave: _saveRules,
-        onApplyPreset: (preset) => _saveRules([
-          ..._automation.rules,
-          preset.toRule(
-              'rule-${DateTime.now().microsecondsSinceEpoch.toRadixString(36)}'),
-        ]),
-        onToggle: (id, on) => _saveRules([
-          for (final r in _automation.rules)
-            r.id == id ? r.copyWith(enabled: on) : r,
-        ]),
-        onRunNow: (id) {
-          for (final f in _automation.runNow(
-            ruleId: id,
-            now: DateTime.now(),
-            machines: {for (final m in _machines) m.id},
-          )) {
-            _execute(f);
-          }
-        },
-      );
+  Widget _automationScreen(BuildContext context) => Column(children: [
+        if (_organization.ready &&
+            _automation.rules.isEmpty &&
+            decodeRules(bind.mainGetLocalOption(key: _kRulesKey)).isNotEmpty)
+          TextButton.icon(
+              icon: Icon(Icons.download_outlined),
+              label: const Text('Import saved local rules (paused)'),
+              onPressed: () => _saveRules([
+                    for (final rule in decodeRules(
+                        bind.mainGetLocalOption(key: _kRulesKey)))
+                      rule.copyWith(enabled: false)
+                  ])),
+        Expanded(
+            child: AutomationScreen(
+          rules: _automation.rules,
+          log: _automation.log.entries,
+          machines: _fleetRows,
+          now: DateTime.now(),
+          onSave: _saveRules,
+          onApplyPreset: (preset) => _saveRules([
+            ..._automation.rules,
+            preset.toRule(
+                'rule-${DateTime.now().microsecondsSinceEpoch.toRadixString(36)}'),
+          ]),
+          onToggle: (id, on) => _saveRules([
+            for (final r in _automation.rules)
+              r.id == id ? r.copyWith(enabled: on) : r,
+          ]),
+          onRunNow: (id) {
+            for (final f in _automation.runNow(
+              ruleId: id,
+              now: DateTime.now(),
+              machines: {for (final m in _fleetRows) m.id},
+            )) {
+              _execute(f);
+            }
+          },
+        )),
+      ]);
 
   /// Run one command on one machine over whatever shell is available and hand
   /// back the raw answer, or a map naming why there was none.
   Future<Map<String, dynamic>> _shell(String id, String command) async {
+    final generation = _connectionGeneration;
     final tw = _terminalWindowOf[id];
     if (tw != null) {
       final r = await _ask(tw, kWindowEventLabDeskTermRun,
           jsonEncode({'id': id, 'command': command}));
       if (r is String) return jsonDecode(r) as Map<String, dynamic>;
-      return {'lines': <String>[], 'reason': 'The terminal window did not answer.'};
+      return {
+        'lines': <String>[],
+        'reason': 'The terminal window did not answer.'
+      };
     }
     final ffi = await LabDeskMachineLink.open(id,
         beforeOpen: () => _prepareManagedLink(id));
+    if (!mounted || generation != _connectionGeneration) {
+      return {
+        'lines': <String>[],
+        'reason': 'Cancelled: connection context changed.'
+      };
+    }
     if (ffi == null) {
       return {'lines': <String>[], 'reason': LabDeskMachineLink.reason(id)};
     }
@@ -501,6 +550,7 @@ class _LabDeskConsolePageState extends State<LabDeskConsolePage> {
   }
 
   Future<void> _runTool(ToolId tool, Set<String> ids) async {
+    final epoch = _accountEpoch;
     setState(() {
       _tool = tool;
       _toolResults.clear();
@@ -515,7 +565,7 @@ class _LabDeskConsolePageState extends State<LabDeskConsolePage> {
               error: 'No ${tool.label.toLowerCase()} command for $platform.',
             )
           : ToolParsers.result(id, tool, await _shell(id, cmd.command));
-      if (!mounted) return;
+      if (!mounted || epoch != _accountEpoch) return;
       setState(() {
         _toolResults[id] = result;
         _toolBusy.remove(id);
@@ -525,6 +575,7 @@ class _LabDeskConsolePageState extends State<LabDeskConsolePage> {
 
   Future<void> _toolAction(
       ToolId tool, ToolAction action, String id, String? target) async {
+    final epoch = _accountEpoch;
     final platform = _rowOf(id)?.platform ?? '';
     final cmd = ToolCatalog.actionFor(tool, action, platform, target: target);
     if (cmd == null) {
@@ -533,7 +584,7 @@ class _LabDeskConsolePageState extends State<LabDeskConsolePage> {
     }
     setState(() => _toolBusy.add(id));
     final out = await _shell(id, cmd.command);
-    if (!mounted) return;
+    if (!mounted || epoch != _accountEpoch) return;
     setState(() => _toolBusy.remove(id));
     final reason = out['reason'];
     final code = out['exitCode'];
@@ -550,6 +601,7 @@ class _LabDeskConsolePageState extends State<LabDeskConsolePage> {
   }
 
   Future<void> _runScript(SavedScript script, Set<String> ids) async {
+    final epoch = _accountEpoch;
     setState(() {
       _tool = ToolId.scripts;
       _toolResults.clear();
@@ -565,7 +617,7 @@ class _LabDeskConsolePageState extends State<LabDeskConsolePage> {
               error: 'This script is for ${script.platform.label}; '
                   '${_rowOf(id)?.displayName ?? id} runs $platform.',
             );
-      if (!mounted) return;
+      if (!mounted || epoch != _accountEpoch) return;
       setState(() {
         _toolResults[id] = result;
         _toolBusy.remove(id);
@@ -575,30 +627,44 @@ class _LabDeskConsolePageState extends State<LabDeskConsolePage> {
 
   void _saveLibrary(ScriptLibrary next) {
     _library = next;
-    bind.mainSetLocalOption(key: _kScriptsKey, value: next.encode());
+    bind.mainSetLocalOption(
+        key: _scopedPreference(_kScriptsKey), value: next.encode());
     setState(() {});
   }
 
-  Widget _toolsScreen(BuildContext context) => ToolsScreen(
-        machines: _machines,
-        selectedIds: _toolSelected,
-        onSelectionChanged: (ids) => setState(() => _toolSelected
-          ..clear()
-          ..addAll(ids)),
-        tool: _tool,
-        onToolChanged: (t) => setState(() {
-          _tool = t;
-          _toolResults.clear();
-        }),
-        results: _toolResults,
-        busyIds: _toolBusy,
-        onRun: _runTool,
-        onAction: _toolAction,
-        library: _library,
-        onSaveScript: (s) => _saveLibrary(_library.upsert(s)),
-        onDeleteScript: (id) => _saveLibrary(_library.remove(id)),
-        onRunScript: _runScript,
-      );
+  Widget _toolsScreen(BuildContext context) => Column(children: [
+        if (_organization.ready &&
+            _library.scripts.isEmpty &&
+            ScriptLibrary.decode(bind.mainGetLocalOption(key: _kScriptsKey))
+                .scripts
+                .isNotEmpty)
+          TextButton.icon(
+              icon: Icon(Icons.download_outlined),
+              label: const Text('Import saved local scripts'),
+              onPressed: () => _saveLibrary(ScriptLibrary.decode(
+                  bind.mainGetLocalOption(key: _kScriptsKey)))),
+        Expanded(
+            child: ToolsScreen(
+          machines: _fleetRows,
+          selectedIds: _toolSelected,
+          onSelectionChanged: (ids) => setState(() => _toolSelected
+            ..clear()
+            ..addAll(ids)),
+          tool: _tool,
+          onToolChanged: (t) => setState(() {
+            _tool = t;
+            _toolResults.clear();
+          }),
+          results: _toolResults,
+          busyIds: _toolBusy,
+          onRun: _runTool,
+          onAction: _toolAction,
+          library: _library,
+          onSaveScript: (s) => _saveLibrary(_library.upsert(s)),
+          onDeleteScript: (id) => _saveLibrary(_library.remove(id)),
+          onRunScript: _runScript,
+        )),
+      ]);
 
   MachineRow? _rowOf(String id) {
     for (final m in _fleetRows) {
@@ -616,7 +682,11 @@ class _LabDeskConsolePageState extends State<LabDeskConsolePage> {
   /// board rendered it: signed in on homebox-devserver the board read "No
   /// machines yet." while lab-desk.net was answering the same console with four
   /// machines, one of them that machine, online and carrying figures.
-  List<MachineRow> get _fleetRows => _machines;
+  List<MachineRow> get _fleetRows => _organization.ready
+      ? _machines
+          .where((m) => _orgByPeer.containsKey(m.id))
+          .toList(growable: false)
+      : const [];
 
   MachineHealth _healthFor(String id) {
     final row = _rowOf(id);
@@ -648,8 +718,10 @@ class _LabDeskConsolePageState extends State<LabDeskConsolePage> {
   /// One command, run in the terminal window's hidden shell for this machine,
   /// with its output brought back as plain lines.
   Future<void> _terminalSubmit(String id, String command) async {
+    final generation = _connectionGeneration;
     final lines = _terminalLines.putIfAbsent(id, () => []);
-    setState(() => lines.add(TerminalLine(command, kind: TerminalLineKind.input)));
+    setState(
+        () => lines.add(TerminalLine(command, kind: TerminalLineKind.input)));
     final w = _terminalWindowOf[id];
     Map<String, dynamic>? out;
     if (w != null) {
@@ -660,6 +732,7 @@ class _LabDeskConsolePageState extends State<LabDeskConsolePage> {
       // No terminal window: the console's own link carries the shell.
       final ffi = await LabDeskMachineLink.open(id,
           beforeOpen: () => _prepareManagedLink(id));
+      if (!mounted || generation != _connectionGeneration) return;
       if (ffi == null) {
         if (!mounted) return;
         setState(() => lines.add(TerminalLine(LabDeskMachineLink.reason(id),
@@ -668,7 +741,7 @@ class _LabDeskConsolePageState extends State<LabDeskConsolePage> {
       }
       out = await LabDeskTerminalRpc.runOn(ffi, id, command);
     }
-    if (!mounted) return;
+    if (!mounted || generation != _connectionGeneration) return;
     setState(() {
       if (out == null) {
         lines.add(const TerminalLine('The terminal window did not answer.',
@@ -698,11 +771,11 @@ class _LabDeskConsolePageState extends State<LabDeskConsolePage> {
     try {
       await labdeskRefreshStatus();
       await _readSavedPasswords();
+      await _pollInbox();
     } finally {
       if (mounted) {
         setState(() {
           _refreshing = false;
-          _lastRefreshed = DateTime.now();
         });
       }
     }
@@ -757,8 +830,13 @@ class _LabDeskConsolePageState extends State<LabDeskConsolePage> {
         peers: _peers,
         organizationPeers: [
           for (final m in _orgMachines)
-            (id: m.peerId, hostname: m.name, platform: m.platform,
-              alias: '', username: ''),
+            (
+              id: m.peerId,
+              hostname: m.name,
+              platform: m.platform,
+              alias: '',
+              username: ''
+            ),
         ],
         store: labdeskStatus.store,
         historyOf: labdeskStatus.historyOf,
@@ -771,7 +849,7 @@ class _LabDeskConsolePageState extends State<LabDeskConsolePage> {
   LabDeskPeerStatus? _serverStatusOf(String peerId) {
     final m = _orgOfPeer(peerId);
     if (m == null) return null;
-    return switch (m.state.status) {
+    return switch (m.state.statusAt(DateTime.now())) {
       'online' => LabDeskPeerStatus.online,
       'offline' => LabDeskPeerStatus.offline,
       _ => LabDeskPeerStatus.unknown,
@@ -812,8 +890,7 @@ class _LabDeskConsolePageState extends State<LabDeskConsolePage> {
           break;
         }
         _ask(w, kLabDeskRpcAction,
-                jsonEncode({'id': machineId, 'action': action.id}))
-            .then((ok) {
+            jsonEncode({'id': machineId, 'action': action.id})).then((ok) {
           if (ok != true) showToast('The session window could not do that.');
         });
         break;
@@ -888,7 +965,7 @@ class _LabDeskConsolePageState extends State<LabDeskConsolePage> {
           // have left the console unable to explain a fleet that is entirely
           // unreachable because nothing is running here.
           if (!bind.isOutgoingOnly()) ...[
-            Divider(height: 1, thickness: 1, color: C.hairline),
+            Divider(height: 1, thickness: 1, color: C.of(context).hairline),
             const OnlineStatusWidget(),
           ],
         ],
@@ -1084,48 +1161,48 @@ class _LabDeskConsolePageState extends State<LabDeskConsolePage> {
   Widget _connectScreen(BuildContext context) {
     final machines = _machines;
     return ConnectScreen(
-        machines: machines,
-        capabilities: _capabilities(machines),
-        onAction: _rowAction,
-        // Same signal Fleet uses: genuinely loading only before anything has
-        // been asked for.
-        isLoading: machines.isEmpty && _lastRefreshed == null,
-        groups: [
-          for (final g in LabDeskGroupsModel.groups)
-            (name: g.name, collapsed: g.collapsed)
-        ],
-        sets: _peerSets,
-        initialId: _lastRemoteId,
-        // The same call the peer page made, with the same three alternates.
-        onConnect: (id, mode) {
-          // An administrator terminal is an ordinary terminal session opened
-          // with one environment variable set, which is how the peer card
-          // asked for it too.
-          if (mode == ConnectMode.terminalAdmin) setEnvTerminalAdmin();
-          _connectVia(
-            id,
-            isFileTransfer: mode == ConnectMode.fileTransfer,
-            isViewCamera: mode == ConnectMode.viewCamera,
-            isTerminal: mode == ConnectMode.terminal ||
-                mode == ConnectMode.terminalAdmin,
-            isTcpTunneling: mode == ConnectMode.tcpTunneling,
-            isRDP: mode == ConnectMode.rdp,
-          );
-        },
-        onGroupCollapsed: (name, collapsed) {
-          for (final g in LabDeskGroupsModel.groups) {
-            if (g.name == name) {
-              g.collapsed = collapsed;
-              LabDeskGroupsModel.saveGroups();
-              break;
-            }
+      machines: machines,
+      capabilities: _capabilities(machines),
+      onAction: _rowAction,
+      // Same signal Fleet uses: genuinely loading only before anything has
+      // been asked for.
+      isLoading: _organization.busy,
+      groups: [
+        for (final g in LabDeskGroupsModel.groups)
+          (name: g.name, collapsed: g.collapsed)
+      ],
+      sets: _peerSets,
+      initialId: _lastRemoteId,
+      // The same call the peer page made, with the same three alternates.
+      onConnect: (id, mode) {
+        // An administrator terminal is an ordinary terminal session opened
+        // with one environment variable set, which is how the peer card
+        // asked for it too.
+        if (mode == ConnectMode.terminalAdmin) setEnvTerminalAdmin();
+        _connectVia(
+          id,
+          isFileTransfer: mode == ConnectMode.fileTransfer,
+          isViewCamera: mode == ConnectMode.viewCamera,
+          isTerminal:
+              mode == ConnectMode.terminal || mode == ConnectMode.terminalAdmin,
+          isTcpTunneling: mode == ConnectMode.tcpTunneling,
+          isRDP: mode == ConnectMode.rdp,
+        );
+      },
+      onGroupCollapsed: (name, collapsed) {
+        for (final g in LabDeskGroupsModel.groups) {
+          if (g.name == name) {
+            g.collapsed = collapsed;
+            LabDeskGroupsModel.saveGroups();
+            break;
           }
-        },
-        // Discovery is a broadcast on the local network, so it goes out when
-        // the operator asks for that set and not on every open.
-        onPeerSetSelected: (id) {
-          if (id == kSetDiscovered) bind.mainDiscover();
-        },
+        }
+      },
+      // Discovery is a broadcast on the local network, so it goes out when
+      // the operator asks for that set and not on every open.
+      onPeerSetSelected: (id) {
+        if (id == kSetDiscovered) bind.mainDiscover();
+      },
     );
   }
 
@@ -1135,7 +1212,7 @@ class _LabDeskConsolePageState extends State<LabDeskConsolePage> {
   /// console's, which is two sidebars for one interface. Its pages are nested
   /// in the console's own sidebar instead, and only the body renders here.
   Widget _settings(BuildContext context) => Container(
-        color: C.bg,
+        color: C.of(context).bg,
         child: settingsPageBody(_settingsTab),
       );
 
@@ -1189,13 +1266,46 @@ class _LabDeskConsolePageState extends State<LabDeskConsolePage> {
           if (j is Map) info = Map<String, dynamic>.from(j);
         } catch (_) {}
         info['display_name'] = name.trim();
-        await bind.mainSetLocalOption(key: 'user_info', value: jsonEncode(info));
+        await bind.mainSetLocalOption(
+            key: 'user_info', value: jsonEncode(info));
         if (mounted) setState(() {});
       },
     );
   }
 
+  Widget _reportingControl(String peerId) {
+    final machineId = _machineIdOfPeer(peerId);
+    final membership = _organization.organizations
+        .where((item) => item.id == _organization.activeId);
+    final canWrite = _organization.ready &&
+        machineId.isNotEmpty &&
+        membership
+            .any((item) => item.role == 'owner' || item.role == 'technician');
+    final epoch = _accountEpoch;
+    final broker = _broker.captureScope();
+    return ReportingControl(
+      key: ValueKey('$_shownContext/$machineId'),
+      contextKey: '$_shownContext/$machineId',
+      currentSeconds: _orgByPeer[peerId]?.state.flushSeconds,
+      disabledReason: canWrite
+          ? null
+          : 'An owner or technician can change reporting intervals.',
+      onSave: canWrite
+          ? (seconds) async {
+              if (!mounted || epoch != _accountEpoch) {
+                throw StateError('Organization changed. Reopen the machine.');
+              }
+              await broker.setReportingInterval(machineId, seconds);
+              if (!mounted || epoch != _accountEpoch) return;
+              await _pollInbox();
+            }
+          : null,
+    );
+  }
+
   Widget _thisMachine(BuildContext context) {
+    final initiatingUser = _organization.userId;
+    final initiatingOrganization = _organization.activeId;
     return ChangeNotifierProvider.value(
       value: gFFI.serverModel,
       child: Consumer<ServerModel>(
@@ -1205,20 +1315,36 @@ class _LabDeskConsolePageState extends State<LabDeskConsolePage> {
           passwordIsTemporary:
               model.verificationMethod != kUsePermanentPassword,
           serviceRunning: model.isStart,
-          profileSwitcher: const ServerProfileSwitcher(),
           // Enrolment is the machine's own consent to be owned, so the token
           // is pasted here, at the machine, and the privileged process spends
           // it (src/labdesk/labnet.rs).
           enrol: MachineEnrolCard(
+            key: ValueKey(_shownContext),
             enrol: (token) => bind.mainAgentEnrol(token: token),
-            broker: _broker,
+            broker: _broker.captureScope(),
             signedIn: _signedIn,
-            signIn: () async => await loginDialog() == true,
+            signIn: () async {
+              if (await loginDialog() != true || !mounted) return false;
+              await _organization
+                  .syncCredential(bind.mainGetLocalOption(key: 'access_token'));
+              return mounted && _organization.ready;
+            },
+            refreshBroker: () async {
+              if (await loginDialog() != true || !mounted) return null;
+              await _organization
+                  .syncCredential(bind.mainGetLocalOption(key: 'access_token'));
+              if (!mounted ||
+                  !_organization.ready ||
+                  initiatingUser != _organization.userId ||
+                  initiatingOrganization != _organization.activeId) return null;
+              return _broker.captureScope();
+            },
             machineId: _machineIdOfPeer(_thisPeerId),
             checkService: () async {
               final error = await _daemon.checkAgent();
               if (error != null) {
-                throw StateError('The LabDesk background service is unavailable. '
+                throw StateError(
+                    'The LabDesk background service is unavailable. '
                     'Install or repair LabDesk, then try again. $error');
               }
             },
@@ -1283,6 +1409,7 @@ class _LabDeskConsolePageState extends State<LabDeskConsolePage> {
     _broker = OverlayBroker(
       baseUrl: 'https://lab-desk.net',
       token: () => bind.mainGetLocalOption(key: 'access_token'),
+      organizationId: () => _organization.activeId,
       // The machine plane's credential. The console cannot make it: the agent
       // key is kept where an interactive user cannot read it
       // (src/labdesk/identity.rs), so the privileged process signs over IPC
@@ -1292,6 +1419,12 @@ class _LabDeskConsolePageState extends State<LabDeskConsolePage> {
       peerId: () => _thisPeerId,
       machineIdOf: _machineIdOfPeer,
     );
+    _organization = OrganizationContextController(
+      broker: _broker,
+      readOption: (key) => bind.mainGetLocalOption(key: key),
+      writeOption: (key, value) =>
+          bind.mainSetLocalOption(key: key, value: value),
+    )..addListener(_organizationChanged);
     _enrolment = OverlayEnrolment(
       daemon: _daemon,
       broker: _broker,
@@ -1318,8 +1451,30 @@ class _LabDeskConsolePageState extends State<LabDeskConsolePage> {
     WidgetsBinding.instance.addPostFrameCallback((_) => _pollInbox());
   }
 
-  bool get _signedIn =>
-      bind.mainGetLocalOption(key: 'access_token').isNotEmpty;
+  void _organizationChanged() {
+    if (!mounted) return;
+    final key = '${_organization.revision}/${_organization.contextKey}';
+    if (key != _shownContext) {
+      _shownContext = key;
+      _forgetAccountData();
+      if (_organization.ready) {
+        _automation = AutomationEngine(decodeRules(
+            bind.mainGetLocalOption(key: _scopedPreference(_kRulesKey))));
+        _library = ScriptLibrary.decode(
+            bind.mainGetLocalOption(key: _scopedPreference(_kScriptsKey)));
+      }
+      if (_organization.ready) scheduleMicrotask(_pollInbox);
+    }
+    setState(() {});
+  }
+
+  bool _currentAccount(int epoch, String credential) =>
+      mounted &&
+      epoch == _accountEpoch &&
+      _organization.ready &&
+      credential == bind.mainGetLocalOption(key: 'access_token');
+
+  bool get _signedIn => bind.mainGetLocalOption(key: 'access_token').isNotEmpty;
 
   /// This machine's own peer id, as the server holds it.
   ///
@@ -1348,62 +1503,84 @@ class _LabDeskConsolePageState extends State<LabDeskConsolePage> {
   /// scoped by, so a console with nobody signed in polls nothing.
   Future<void> _pollInbox() async {
     if (!mounted) return;
-    if (!_signedIn) {
-      _forgetAccountData();
-      return;
-    }
-    // THE TWO READS ARE SEPARATE, and that is the whole point of this shape.
-    // The machines are the organization's; the inbox is labnet's, and labnet is
-    // a subsystem a server need not have at all -- lab-desk.net answers
-    // `/agent/overlay/inbox` 503 "labnet is not set up on this server yet" when
-    // no NetBird is configured for it. Reading both inside one `try` meant that
-    // 503 threw past the assignment below, so the console lost the whole
-    // organization over a feature nobody had asked for: an empty health board,
-    // no adapters, no self-healing report and no machine picker, with one red
-    // line on the Network page as the only sign (homebox-devserver,
-    // 2026-09-05).
-    final List<OrgMachine> machines;
+    await _organization
+        .syncCredential(bind.mainGetLocalOption(key: 'access_token'));
+    if (!mounted || !_organization.ready) return;
+    final epoch = _accountEpoch;
+    final credential = bind.mainGetLocalOption(key: 'access_token');
+    final broker = _broker.captureScope();
+    if (_pollingEpoch == epoch) return;
+    _pollingEpoch = epoch;
     try {
-      // First, because it is the map every labnet call names a machine
-      // through and the inbox is rendered against it. `?state=1` rides the same
-      // answer, so the fleet's figures cost no extra request.
-      machines = await _broker.machines();
-    } on OverlayBrokerException catch (e) {
-      _reportBrokerFailure(e);
-      return;
-    } catch (_) {
-      return;
-    }
-    if (!mounted) return;
-    setState(() {
-      _orgMachines = machines;
-      _orgByPeer = {
-        for (final m in machines)
-          if (m.peerId.isNotEmpty) m.peerId: m
-      };
-      _recordHistory(machines, DateTime.now());
-      if (_netMachineId.isEmpty ||
-          !machines.any((m) => m.id == _netMachineId)) {
-        _netMachineId = _machineIdOfPeer(_thisPeerId);
-        if (_netMachineId.isEmpty && machines.isNotEmpty) {
-          _netMachineId = machines.first.id;
+      // THE TWO READS ARE SEPARATE, and that is the whole point of this shape.
+      // The machines are the organization's; the inbox is labnet's, and labnet is
+      // a subsystem a server need not have at all -- lab-desk.net answers
+      // `/agent/overlay/inbox` 503 "labnet is not set up on this server yet" when
+      // no NetBird is configured for it. Reading both inside one `try` meant that
+      // 503 threw past the assignment below, so the console lost the whole
+      // organization over a feature nobody had asked for: an empty health board,
+      // no adapters, no self-healing report and no machine picker, with one red
+      // line on the Network page as the only sign (homebox-devserver,
+      // 2026-09-05).
+      final List<OrgMachine> machines;
+      try {
+        // First, because it is the map every labnet call names a machine
+        // through and the inbox is rendered against it. `?state=1` rides the same
+        // answer, so the fleet's figures cost no extra request.
+        machines = await broker.machines();
+      } on OverlayBrokerException catch (e) {
+        if (_currentAccount(epoch, credential)) {
+          if (e.signInAgain || e.status == 403) {
+            _organization.invalidate(e.message);
+          } else {
+            _reportBrokerFailure(e);
+          }
+          setState(() => _fleetError = e.message);
         }
+        return;
+      } catch (_) {
+        if (_currentAccount(epoch, credential)) {
+          setState(() => _fleetError =
+              'Fleet could not be refreshed. Showing the last received readings.');
+        }
+        return;
       }
-    });
-    try {
-      final inbox = await _broker.inbox();
-      if (!mounted) return;
+      if (!_currentAccount(epoch, credential)) return;
       setState(() {
-        _inbox = inbox;
-        _labnetError = '';
+        _lastOrgResponse = DateTime.now();
+        _fleetError = null;
+        _orgMachines = machines;
+        _orgByPeer = {
+          for (final m in machines)
+            if (m.peerId.isNotEmpty) m.peerId: m
+        };
+        _recordHistory(machines, DateTime.now());
+        if (_netMachineId.isEmpty ||
+            !machines.any((m) => m.id == _netMachineId)) {
+          _netMachineId = _machineIdOfPeer(_thisPeerId);
+          if (_netMachineId.isEmpty && machines.isNotEmpty) {
+            _netMachineId = machines.first.id;
+          }
+        }
       });
-      await _maybeAskConsent(inbox);
-    } on OverlayBrokerException catch (e) {
-      _reportBrokerFailure(e);
-    } catch (_) {}
-    await _pollDetail();
-    await _pollNetViews();
-    if (!_fleetsRead) await _readFleets();
+      try {
+        final inbox = await broker.inbox();
+        if (!_currentAccount(epoch, credential)) return;
+        setState(() {
+          _inbox = inbox;
+          _labnetError = '';
+        });
+        await _maybeAskConsent(inbox);
+      } on OverlayBrokerException catch (e) {
+        if (_currentAccount(epoch, credential)) _reportBrokerFailure(e);
+      } catch (_) {}
+      if (!_currentAccount(epoch, credential)) return;
+      await _pollDetail();
+      await _pollNetViews();
+      if (!_fleetsRead) await _readFleets();
+    } finally {
+      if (_pollingEpoch == epoch) _pollingEpoch = null;
+    }
   }
 
   /// A sign-in that no longer holds is the account surface's to report, and the
@@ -1421,21 +1598,26 @@ class _LabDeskConsolePageState extends State<LabDeskConsolePage> {
   /// history. Bounded on purpose, so a fleet of two hundred machines costs one
   /// extra request every fifteen seconds rather than two hundred.
   Future<void> _pollDetail() async {
+    if (!_organization.ready) return;
+    final epoch = _accountEpoch;
+    final credential = bind.mainGetLocalOption(key: 'access_token');
+    final broker = _broker.captureScope();
     if (_orgMachines.isEmpty) return;
     _detailCursor = (_detailCursor + 1) % _orgMachines.length;
     final m = _orgMachines[_detailCursor];
     try {
-      final state = await _broker.machineState(m.id);
-      if (!mounted) return;
+      final state = await broker.machineState(m.id);
+      if (!_currentAccount(epoch, credential)) return;
       setState(() => _detail[m.id] = state);
     } catch (_) {}
+    if (!_currentAccount(epoch, credential)) return;
     if (_backfilled.contains(m.id) || m.peerId.isEmpty) return;
     _backfilled.add(m.id);
     try {
       final now = DateTime.now().millisecondsSinceEpoch ~/ 1000;
-      final samples = await _broker.metrics(m.id,
+      final samples = await broker.metrics(m.id,
           from: now - const Duration(hours: 12).inSeconds, to: now);
-      if (!mounted || samples.isEmpty) return;
+      if (!_currentAccount(epoch, credential) || samples.isEmpty) return;
       setState(() {
         final history = MetricHistory();
         for (final s in samples) {
@@ -1454,15 +1636,19 @@ class _LabDeskConsolePageState extends State<LabDeskConsolePage> {
   /// The network view for the machine whichever section is open is showing,
   /// and nothing else: the adapter list is read where it is rendered.
   Future<void> _pollNetViews() async {
+    if (!_organization.ready) return;
+    final epoch = _accountEpoch;
+    final credential = bind.mainGetLocalOption(key: 'access_token');
+    final broker = _broker.captureScope();
     final wanted = <String>{
-      if (_section == ConsoleSection.network && _netMachineId.isNotEmpty)
+      if (_section == ConsoleSection.diagnostics && _netMachineId.isNotEmpty)
         _netMachineId,
       if (_section == ConsoleSection.thisMachine) _machineIdOfPeer(_thisPeerId),
     }..remove('');
     for (final id in wanted) {
       try {
-        final view = await _broker.netView(id);
-        if (!mounted) return;
+        final view = await broker.netView(id);
+        if (!_currentAccount(epoch, credential)) return;
         setState(() {
           _netViews[id] = view;
           if (id == _machineIdOfPeer(_thisPeerId) &&
@@ -1477,10 +1663,14 @@ class _LabDeskConsolePageState extends State<LabDeskConsolePage> {
   /// The fleets, read once per sign-in. Only a technician narrowed to more than
   /// one fleet is ever asked which one a new labnet belongs to.
   Future<void> _readFleets() async {
+    if (!_organization.ready) return;
+    final epoch = _accountEpoch;
+    final credential = bind.mainGetLocalOption(key: 'access_token');
+    final broker = _broker.captureScope();
     try {
-      final ids = await _broker.fleetIds();
-      final fleets = await _broker.fleets();
-      if (!mounted) return;
+      final ids = await broker.fleetIds();
+      final fleets = await broker.fleets();
+      if (!_currentAccount(epoch, credential)) return;
       setState(() {
         _fleets = fleets;
         _mustNameFleet = ids != null && ids.length > 1;
@@ -1512,13 +1702,26 @@ class _LabDeskConsolePageState extends State<LabDeskConsolePage> {
   /// revoked session or a sign-out never leaves another account's labnets,
   /// member addresses or machine names on screen or in the peer map.
   void _forgetAccountData() {
+    // Cancel a pending connection before it can resolve another context's peer.
+    _connectionGeneration++;
     if (!mounted) return;
-    if (_orgMachines.isEmpty && _inbox == LabnetInbox.empty) return;
+    _accountEpoch++;
     setState(() {
+      _lastOrgResponse = null;
+      _fleetError = null;
       _orgMachines = const <OrgMachine>[];
       _orgByPeer = const <String, OrgMachine>{};
       _inbox = LabnetInbox.empty;
       _labnetError = '';
+      _labnetBusy = false;
+      _netMachineId = '';
+      _automation = AutomationEngine();
+      _library = ScriptLibrary.empty;
+      _toolSelected.clear();
+      _toolResults.clear();
+      _toolBusy.clear();
+      _terminalLines.clear();
+      _detailCursor = -1;
       _detail.clear();
       _netViews.clear();
       _backfilled.clear();
@@ -1547,15 +1750,15 @@ class _LabDeskConsolePageState extends State<LabDeskConsolePage> {
     final yes = await showDialog<bool>(
       context: context,
       builder: (ctx) => AlertDialog(
-        backgroundColor: C.surface,
-        title: Text('Turn on Labnet', style: C.h2()),
+        backgroundColor: C.of(context).surface,
+        title: Text('Turn on Labnet', style: C.of(context).h2()),
         content: SizedBox(
           width: 440,
           child: Text(
             'Use NetBird to connect authorized machines through encrypted '
             'tunnels. Connections go directly when possible and use a relay '
             'when needed. You can turn labnet off under This machine at any time.',
-            style: C.body(),
+            style: C.of(context).body(),
           ),
         ),
         actions: [
@@ -1580,10 +1783,11 @@ class _LabDeskConsolePageState extends State<LabDeskConsolePage> {
             padding: const EdgeInsets.symmetric(horizontal: 4, vertical: 8),
             child: Text(
               label,
-              style: C.small(color: C.textMuted).copyWith(
-                decoration: TextDecoration.underline,
-                decorationColor: C.textFaint,
-              ),
+              style:
+                  C.of(context).small(color: C.of(context).textMuted).copyWith(
+                        decoration: TextDecoration.underline,
+                        decorationColor: C.of(context).textFaint,
+                      ),
             ),
           ),
         ),
@@ -1605,7 +1809,8 @@ class _LabDeskConsolePageState extends State<LabDeskConsolePage> {
       await Future.wait([_overlay.releaseAll(), _enrolment.disable()]);
       // Every per-peer hint the session service wrote goes with the labnet, or
       // the next connect to each of those peers dials a dead address first.
-      final opts = jsonDecode(bind.mainGetOptionsSync()) as Map<String, dynamic>;
+      final opts =
+          jsonDecode(bind.mainGetOptionsSync()) as Map<String, dynamic>;
       for (final k in opts.keys) {
         if (k.startsWith(kOverlayAddrOption) ||
             k.startsWith(kOverlayPkOption) ||
@@ -1658,7 +1863,8 @@ class _LabDeskConsolePageState extends State<LabDeskConsolePage> {
       if (_labnet.phase != LabnetPhase.off || _orgByPeer.containsKey(id)) {
         final state = await _enrolment.refresh();
         if (generation != _connectionGeneration || !mounted) return;
-        final ready = state.phase == LabnetPhase.on && await _overlay.prepare(id);
+        final ready =
+            state.phase == LabnetPhase.on && await _overlay.prepare(id);
         if (generation != _connectionGeneration || !mounted) return;
         if (!ready) {
           final detail = state.phase == LabnetPhase.on
@@ -1692,34 +1898,40 @@ class _LabDeskConsolePageState extends State<LabDeskConsolePage> {
     }
   }
 
-  Future<void> _labnetDo(Future<void> Function() action) async {
+  Future<void> _labnetDo(Future<void> Function(OverlayBroker) action) async {
+    if (!_organization.ready || _labnetBusy) return;
+    final user = _organization.userId, organization = _organization.activeId;
+    final epoch = _accountEpoch;
+    bool current() =>
+        mounted &&
+        _organization.userId == user &&
+        _organization.activeId == organization;
     setState(() {
       _labnetBusy = true;
       _labnetError = '';
     });
     try {
-      await action();
+      await action(_broker.captureScope());
     } on OverlayBrokerException catch (e) {
-      // Turning full access on, deleting a labnet and minting an enrolment
-      // token are refused on a console token older than five minutes, and the
-      // console's token is usually hours old. Signing in again mints a fresh
-      // one; the request is then the same request, so it is simply retried.
-      if (e.needsFreshSignIn && mounted && await loginDialog() == true) {
+      if (!current() || epoch != _accountEpoch) return;
+      if (e.needsFreshSignIn && await loginDialog() == true) {
+        await _organization
+            .syncCredential(bind.mainGetLocalOption(key: 'access_token'));
+        if (!current()) return;
         try {
-          await action();
-        } on OverlayBrokerException catch (e2) {
-          _labnetError = e2.message;
-        } catch (e2) {
-          _labnetError = '$e2';
+          await action(_broker.captureScope());
+        } catch (failure) {
+          if (current()) _labnetError = '$failure';
         }
-      } else {
+      } else if (current()) {
         _labnetError = e.message;
       }
     } catch (e) {
-      _labnetError = '$e';
+      if (current()) _labnetError = '$e';
+    } finally {
+      if (current()) setState(() => _labnetBusy = false);
     }
-    if (mounted) setState(() => _labnetBusy = false);
-    await _pollInbox();
+    if (current()) await _pollInbox();
   }
 
   /// The Network section speaks `machine.id`: it is what the members of a
@@ -1730,137 +1942,192 @@ class _LabDeskConsolePageState extends State<LabDeskConsolePage> {
         inbox: _inbox,
         thisMachineId: _machineIdOfPeer(_thisPeerId),
         machines: [
-          for (final m in _orgMachines)
-            NetworkMachine(id: m.id, name: m.name),
+          for (final m in _orgMachines) NetworkMachine(id: m.id, name: m.name),
         ],
         fleets: [
           for (final f in _fleets) NetworkFleet(id: f.id, name: f.name),
         ],
         mustNameFleet: _mustNameFleet,
-        netView: _netViews[_netMachineId] ?? MachineNetView.empty,
-        netMachineId: _netMachineId,
-        netBusy: !_netViews.containsKey(_netMachineId),
-        onSelectNetMachine: (id) {
-          setState(() => _netMachineId = id);
-          _pollNetViews();
-        },
         busy: _labnetBusy,
         error: _labnetError,
         onCreate: (name, fleetId) =>
-            _labnetDo(() => _broker.createLabnet(name, fleetId: fleetId)),
-        onRename: (id, name) => _labnetDo(() => _broker.renameLabnet(id, name)),
-        onApprove: (id) => _labnetDo(() => _broker.decide(id, approve: true)),
-        onDecline: (id) => _labnetDo(() => _broker.decide(id, approve: false)),
-        onInvite: (l, d) => _labnetDo(() => _broker.invite(l, d)),
-        onFullAccess: (l, on) => _labnetDo(() => _broker.setFullAccess(l, on)),
-        onLeave: (l) => _labnetDo(() => _broker.leave(l)),
-        onRemove: (l, d) => _labnetDo(() => _broker.removeMember(l, d)),
-        onDelete: (l) => _labnetDo(() => _broker.deleteLabnet(l)),
+            _labnetDo((broker) => broker.createLabnet(name, fleetId: fleetId)),
+        onRename: (id, name) =>
+            _labnetDo((broker) => broker.renameLabnet(id, name)),
+        onApprove: (id) =>
+            _labnetDo((broker) => broker.decide(id, approve: true)),
+        onDecline: (id) =>
+            _labnetDo((broker) => broker.decide(id, approve: false)),
+        onInvite: (l, d) => _labnetDo((broker) => broker.invite(l, d)),
+        onFullAccess: (l, on) =>
+            _labnetDo((broker) => broker.setFullAccess(l, on)),
+        onLeave: (l) => _labnetDo((broker) => broker.leave(l)),
+        onRemove: (l, d) => _labnetDo((broker) => broker.removeMember(l, d)),
+        onDelete: (l) => _labnetDo((broker) => broker.deleteLabnet(l)),
       );
 
   @override
   Widget build(BuildContext context) {
-    final machines = _machines;
-    return Container(
-      color: C.bg,
-      child: Stack(
-        children: [
-          // The old home page, mounted and never painted.
-          //
-          // Its widget tree is replaced by the console, but its State owned
-          // work nothing else does: it registers the main window's
-          // multi-window method handler (show, hide, move a tab to a new
-          // window, open a monitor session, report remote window coords), the
-          // stop-service flag that ConnectionPage and Settings resolve with
-          // Get.find, the uni-links subscription, the macOS permission
-          // watches, and the once-a-second fetch of this machine's own id.
-          //
-          // Reimplementing that was the alternative, and reimplementing a
-          // lifecycle by reading it is how the three defects a critique found
-          // in this rebuild got there in the first place. Mounting it offstage
-          // keeps every one of those responsibilities exactly as it was while
-          // the console owns the whole visible interface.
-          //
-          // What this deliberately does NOT restore is the page's own visible
-          // parts: the install prompt, the macOS permission cards, the update
-          // banner and the system error banner. Those are real interface and
-          // belong in the console; they are named in docs/CONSOLE.md as
-          // outstanding rather than quietly dropped.
-          const Offstage(offstage: true, child: DesktopHomePage()),
-          Column(children: [
-            _installBanner(),
-            _updateBanner(),
-            Expanded(child: ConsoleShell(
-        machines: machines,
-        healthMachines: _fleetRows,
-        samples: labdeskStatus.samples,
-        profiles: _profiles,
-        profileName: ServerProfilesModel.active.value,
-        // activate() rewrites the live server keys, saves, and asks the ID
-        // server again, which is exactly what the old home-screen dropdown did.
-        onProfileSelected: (name) async {
-          await ServerProfilesModel.activate(name);
-          if (mounted) setState(() {});
-        },
-        isRefreshing: _refreshing || labdeskStatus.isQuerying,
-        // The fleet is only genuinely loading before anything has been asked.
-        isLoading: machines.isEmpty && _lastRefreshed == null,
-        // Stamped when the server answered, not when the button was pressed:
-        // a query that never came back must not read as a fresh check.
-        lastRefreshed: labdeskStatus.lastResponseAt,
-        onRefresh: _refresh,
-        // Actions that need a session need a desktop session; the terminal
-        // screen needs a terminal. Health counts either as "connected".
-        connectedIds: _remoteWindowOf.keys.toSet(),
-        // A shell is available through a terminal window or the console's link;
-        // the link opens on demand, so every machine with a saved password
-        // counts.
-        terminalIds: {
-          ..._terminalWindowOf.keys,
-          ...LabDeskMachineLink.openIds,
-          ..._savedPasswords,
-        },
-        healthFor: _healthFor,
-        terminalLinesFor: (id) => _terminalLines[id] ?? const [],
-        onTerminalSubmit: _terminalSubmit,
-        onRunAction: _runAction,
-        sectionRequest: _sectionRequest,
-        onSectionChanged: (s) {
-          // The adapter list is read for whichever section is showing it, so
-          // the section that has just opened asks now rather than waiting out
-          // the fifteen second poll behind a card that says "Reading...".
-          setState(() => _section = s);
-          _pollNetViews();
-        },
-        subItems: {
-          ConsoleSection.settings: [
-            for (final p in settingsPages())
-              ConsoleSubItem(id: p.key.name, label: p.label, icon: p.icon),
-          ],
-        },
-        selectedSubItem: _settingsTab.name,
-        onSubItemSelected: (section, id) {
-          if (section != ConsoleSection.settings) return;
-          for (final p in settingsPages()) {
-            if (p.key.name == id) {
-              setState(() => _settingsTab = p.key);
-              break;
-            }
-          }
-        },
-            hosted: {
-              ConsoleSection.connect: _connect,
-              ConsoleSection.thisMachine: _thisMachine,
-              ConsoleSection.settings: _settings,
-              ConsoleSection.sessions: _sessions,
-              ConsoleSection.automation: _automationScreen,
-              ConsoleSection.tools: _toolsScreen,
-              ConsoleSection.network: _network,
-            },
-          )),
-          ]),
-        ],
-      ),
+    return Theme(
+      data: C.theme(brightness: Theme.of(context).brightness),
+      child: Builder(
+          builder: (context) => Container(
+                color: C.of(context).bg,
+                child: Stack(
+                  children: [
+                    // The old home page, mounted and never painted.
+                    //
+                    // Its widget tree is replaced by the console, but its State owned
+                    // work nothing else does: it registers the main window's
+                    // multi-window method handler (show, hide, move a tab to a new
+                    // window, open a monitor session, report remote window coords), the
+                    // stop-service flag that ConnectionPage and Settings resolve with
+                    // Get.find, the uni-links subscription, the macOS permission
+                    // watches, and the once-a-second fetch of this machine's own id.
+                    //
+                    // Reimplementing that was the alternative, and reimplementing a
+                    // lifecycle by reading it is how the three defects a critique found
+                    // in this rebuild got there in the first place. Mounting it offstage
+                    // keeps every one of those responsibilities exactly as it was while
+                    // the console owns the whole visible interface.
+                    //
+                    // What this deliberately does NOT restore is the page's own visible
+                    // parts: the install prompt, the macOS permission cards, the update
+                    // banner and the system error banner. Those are real interface and
+                    // belong in the console; they are named in docs/CONSOLE.md as
+                    // outstanding rather than quietly dropped.
+                    const Offstage(offstage: true, child: DesktopHomePage()),
+                    Column(children: [
+                      _installBanner(),
+                      _updateBanner(),
+                      Expanded(
+                          child: ConsoleShell(
+                        organizations: _organization.organizations,
+                        activeOrganizationId: _organization.activeId,
+                        onOrganizationSelected: _organization.select,
+                        accountName: _signedIn
+                            ? gFFI.userModel.userName.value
+                            : 'Sign in',
+                        accountDescription:
+                            _organization.ready ? 'Organization account' : null,
+                        onAccountPressed: () =>
+                            _goToSettings(SettingsTabKey.account),
+                        onTermsPressed: () => showLabDeskTerms(context),
+                        dashboardError: _organization.error ??
+                            _fleetError ??
+                            (_signedIn ? null : 'Sign in to see your fleet.'),
+                        dashboardContextKey: _shownContext,
+                        dashboardLayout: _organization.layout,
+                        onSaveDashboard: _organization.ready
+                            ? _organization.saveLayout
+                            : null,
+                        fleets: [
+                          for (final fleet in _fleets)
+                            DashboardFleet(id: fleet.id, name: fleet.name)
+                        ],
+                        machineFleetIds: {
+                          for (final machine in _orgMachines)
+                            machine.peerId: {
+                              if (machine.fleetId != null) machine.fleetId!
+                            }
+                        },
+                        onMachineSelected: (id) {
+                          _toolSelected
+                            ..clear()
+                            ..add(id);
+                          _netMachineId = _machineIdOfPeer(id);
+                          _pollNetViews();
+                        },
+                        machines: _fleetRows,
+                        healthMachines: _fleetRows,
+                        samples: labdeskStatus.samples,
+                        profiles: _profiles,
+                        profileName: ServerProfilesModel.active.value,
+                        // activate() rewrites the live server keys, saves, and asks the ID
+                        // server again, which is exactly what the old home-screen dropdown did.
+                        onProfileSelected: (name) async {
+                          await ServerProfilesModel.activate(name);
+                          if (mounted) setState(() {});
+                        },
+                        isRefreshing: _refreshing || labdeskStatus.isQuerying,
+                        // The fleet is only genuinely loading before anything has been asked.
+                        isLoading: _organization.busy,
+                        // Stamped when the server answered, not when the button was pressed:
+                        // a query that never came back must not read as a fresh check.
+                        lastRefreshed: _section == ConsoleSection.connect
+                            ? labdeskStatus.lastResponseAt
+                            : _lastOrgResponse,
+                        onRefresh: _refresh,
+                        // Actions that need a session need a desktop session; the terminal
+                        // screen needs a terminal. Health counts either as "connected".
+                        connectedIds: _remoteWindowOf.keys.toSet(),
+                        // A shell is available through a terminal window or the console's link;
+                        // the link opens on demand, so every machine with a saved password
+                        // counts.
+                        terminalIds: {
+                          ..._terminalWindowOf.keys,
+                          ...LabDeskMachineLink.openIds,
+                          ..._savedPasswords,
+                        },
+                        healthFor: _healthFor,
+                        machineHealthFooter: _reportingControl,
+                        terminalLinesFor: (id) =>
+                            _terminalLines[id] ?? const [],
+                        onTerminalSubmit: _terminalSubmit,
+                        onRunAction: _runAction,
+                        sectionRequest: _sectionRequest,
+                        onSectionChanged: (s) {
+                          // The adapter list is read for whichever section is showing it, so
+                          // the section that has just opened asks now rather than waiting out
+                          // the fifteen second poll behind a card that says "Reading...".
+                          setState(() => _section = s);
+                          _pollNetViews();
+                        },
+                        subItems: {
+                          ConsoleSection.settings: [
+                            for (final p in settingsPages())
+                              ConsoleSubItem(
+                                  id: p.key.name, label: p.label, icon: p.icon),
+                          ],
+                        },
+                        selectedSubItem: _settingsTab.name,
+                        onSubItemSelected: (section, id) {
+                          if (section != ConsoleSection.settings) return;
+                          for (final p in settingsPages()) {
+                            if (p.key.name == id) {
+                              setState(() => _settingsTab = p.key);
+                              break;
+                            }
+                          }
+                        },
+                        hosted: {
+                          ConsoleSection.connect: _connect,
+                          ConsoleSection.thisMachine: _thisMachine,
+                          ConsoleSection.settings: _settings,
+                          ConsoleSection.sessions: _sessions,
+                          ConsoleSection.automation: _automationScreen,
+                          ConsoleSection.tools: _toolsScreen,
+                          ConsoleSection.network: _network,
+                          ConsoleSection.diagnostics: (_) =>
+                              SingleChildScrollView(
+                                padding: const EdgeInsets.all(24),
+                                child: AdaptersCard(
+                                  view: _netViews[_netMachineId] ??
+                                      MachineNetView.empty,
+                                  machineName: _orgMachines
+                                          .where((m) => m.id == _netMachineId)
+                                          .map((m) => m.name)
+                                          .firstOrNull ??
+                                      'Selected machine',
+                                  selectedId: _netMachineId,
+                                ),
+                              ),
+                        },
+                      )),
+                    ]),
+                  ],
+                ),
+              )),
     );
   }
 
@@ -1868,8 +2135,11 @@ class _LabDeskConsolePageState extends State<LabDeskConsolePage> {
   /// access to this machine, and no in-place updates. The stock home page
   /// carried this card; the console owns it now.
   Widget _installBanner() {
-    final needsInstall = isWindows && !bind.isDisableInstallation() && !bind.mainIsInstalled();
-    final needsDaemon = isMacOS && bind.mainIsInstalled() && !bind.mainIsInstalledDaemon(prompt: false);
+    final needsInstall =
+        isWindows && !bind.isDisableInstallation() && !bind.mainIsInstalled();
+    final needsDaemon = isMacOS &&
+        bind.mainIsInstalled() &&
+        !bind.mainIsInstalledDaemon(prompt: false);
     if (!needsInstall && !needsDaemon) return const SizedBox.shrink();
     final theme = Theme.of(context);
     return Material(
@@ -1882,13 +2152,17 @@ class _LabDeskConsolePageState extends State<LabDeskConsolePage> {
           Expanded(
             child: Text(
               needsInstall
-                  ? translate('LabDesk is running without being installed. Install it to run as an always-on service, accept connections while nobody is signed in, and update itself.')
-                  : translate('The background service is not installed. Install it so this machine stays reachable.'),
+                  ? translate(
+                      'LabDesk is running without being installed. Install it to run as an always-on service, accept connections while nobody is signed in, and update itself.')
+                  : translate(
+                      'The background service is not installed. Install it so this machine stays reachable.'),
               style: theme.textTheme.bodyMedium,
             ),
           ),
           TextButton(
-            onPressed: () => needsInstall ? bind.mainGotoInstall() : bind.mainIsInstalledDaemon(prompt: true),
+            onPressed: () => needsInstall
+                ? bind.mainGotoInstall()
+                : bind.mainIsInstalledDaemon(prompt: true),
             child: Text(translate('Install')),
           ),
         ]),
@@ -1910,7 +2184,8 @@ class _LabDeskConsolePageState extends State<LabDeskConsolePage> {
           child: Padding(
             padding: const EdgeInsets.symmetric(horizontal: 20, vertical: 10),
             child: Row(children: [
-              Icon(Icons.system_update_alt, size: 18, color: theme.colorScheme.primary),
+              Icon(Icons.system_update_alt,
+                  size: 18, color: theme.colorScheme.primary),
               const SizedBox(width: 12),
               Expanded(
                 child: Text(

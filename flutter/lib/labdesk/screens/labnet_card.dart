@@ -11,23 +11,23 @@ class LabnetConnectionFailure extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) => AlertDialog(
-        title: Text('Labnet connection unavailable', style: C.h2()),
+        title: Text('Labnet connection unavailable', style: C.of(context).h2()),
         content: SizedBox(
           width: 480,
           child: Text(
               '$detail\n\nYou can cancel and repair labnet, or explicitly '
               'try the configured RustDesk ID and relay servers.',
-              style: C.body()),
+              style: C.of(context).body()),
         ),
         actions: [
           TextButton(
             onPressed: () => Navigator.pop(context, false),
-            child: Text('Cancel', style: C.small()),
+            child: Text('Cancel', style: C.of(context).small()),
           ),
           TextButton(
             onPressed: () => Navigator.pop(context, true),
             child:
-                Text('Use RustDesk instead', style: C.small(color: C.accent)),
+                Text('Use RustDesk instead', style: C.of(context).small(color: C.of(context).accent)),
           ),
         ],
       );
@@ -54,24 +54,24 @@ class LabnetCard extends StatelessWidget {
   Widget build(BuildContext context) {
     final (dot, label, subtitle) = switch (state.phase) {
       LabnetPhase.off => (
-          C.idle,
+          C.of(context).idle,
           'Off',
           'Labnet uses NetBird to connect your enrolled machines. Add this '
               'machine to your organization above, then turn labnet on.',
         ),
       LabnetPhase.working => (
-          C.accent,
+          C.of(context).accent,
           state.detail,
           'Setting up the encrypted NetBird connection.',
         ),
       LabnetPhase.on => (
-          C.ok,
+          C.of(context).ok,
           'On at ${state.ip}',
           'NetBird is connected. Authorized machines use an encrypted tunnel, '
               'directly when possible or through a relay when needed.',
         ),
       LabnetPhase.error => (
-          C.bad,
+          C.of(context).bad,
           'Labnet needs attention',
           state.detail,
         ),
@@ -84,17 +84,17 @@ class LabnetCard extends StatelessWidget {
     };
     return Container(
       decoration: BoxDecoration(
-        color: C.surface,
+        color: C.of(context).surface,
         borderRadius: C.rounded,
-        border: Border.all(color: C.hairline),
+        border: Border.all(color: C.of(context).hairline),
       ),
       padding: const EdgeInsets.fromLTRB(20, 18, 20, 20),
       child: Column(
         crossAxisAlignment: CrossAxisAlignment.start,
         children: [
-          Text('Labnet', style: C.h2()),
+          Text('Labnet', style: C.of(context).h2()),
           const SizedBox(height: 4),
-          Text(subtitle, style: C.small()),
+          Text(subtitle, style: C.of(context).small()),
           const SizedBox(height: 16),
           Row(
             children: [
@@ -104,7 +104,7 @@ class LabnetCard extends StatelessWidget {
                 decoration: BoxDecoration(color: dot, shape: BoxShape.circle),
               ),
               const SizedBox(width: 8),
-              Expanded(child: Text(label, style: C.body())),
+              Expanded(child: Text(label, style: C.of(context).body())),
               if (action.$1 != null && action.$2 != null)
                 _TextAction(label: action.$1!, onTap: action.$2!),
               if (state.phase == LabnetPhase.error && onDisable != null) ...[
@@ -142,9 +142,9 @@ class _TextActionState extends State<_TextAction> {
         onTap: widget.onTap,
         child: Text(
           widget.label,
-          style: C.small(color: _hover ? C.accent : C.textMuted).copyWith(
+          style: C.of(context).small(color: _hover ? C.of(context).accent : C.of(context).textMuted).copyWith(
                 decoration: TextDecoration.underline,
-                decorationColor: _hover ? C.accent : C.textFaint,
+                decorationColor: _hover ? C.of(context).accent : C.of(context).textFaint,
               ),
         ),
       ),

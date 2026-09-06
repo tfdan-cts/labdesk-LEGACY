@@ -82,7 +82,7 @@ class FleetConsole extends StatelessWidget {
     if (embedded) return content;
 
     return ColoredBox(
-      color: C.bg,
+      color: C.of(context).bg,
       child: Row(
         crossAxisAlignment: CrossAxisAlignment.stretch,
         children: [
@@ -124,7 +124,7 @@ class _Sidebar extends StatelessWidget {
   Widget build(BuildContext context) {
     return Container(
       width: 216,
-      color: C.chrome,
+      color: C.of(context).chrome,
       child: Column(
         crossAxisAlignment: CrossAxisAlignment.stretch,
         children: [
@@ -136,8 +136,8 @@ class _Sidebar extends StatelessWidget {
                   width: 22,
                   height: 22,
                   decoration: BoxDecoration(
-                    gradient: const LinearGradient(
-                      colors: [C.accent, C.accentDim],
+                    gradient: LinearGradient(
+                      colors: [C.of(context).accent, C.of(context).accentDim],
                       begin: Alignment.topLeft,
                       end: Alignment.bottomRight,
                     ),
@@ -145,20 +145,20 @@ class _Sidebar extends StatelessWidget {
                   ),
                 ),
                 const SizedBox(width: 10),
-                Text('LabDesk', style: C.h1()),
+                Text('LabDesk', style: C.of(context).h1()),
               ],
             ),
           ),
           for (final (icon, label, active) in _nav)
             _NavItem(icon: icon, label: label, active: active),
           const Spacer(),
-          Divider(height: 1, thickness: 1, color: C.hairline),
+          Divider(height: 1, thickness: 1, color: C.of(context).hairline),
           Padding(
             padding: const EdgeInsets.fromLTRB(18, 14, 18, 16),
             child: Column(
               crossAxisAlignment: CrossAxisAlignment.start,
               children: [
-                Text('Server profile', style: C.micro()),
+                Text('Server profile', style: C.of(context).micro()),
                 const SizedBox(height: 5),
                 Row(
                   children: [
@@ -166,10 +166,10 @@ class _Sidebar extends StatelessWidget {
                       child: Text(
                         profileName,
                         overflow: TextOverflow.ellipsis,
-                        style: C.body(),
+                        style: C.of(context).body(),
                       ),
                     ),
-                    const LdIcon(LdIcons.chevronDown, size: 14, color: C.textFaint),
+                    LdIcon(LdIcons.chevronDown, size: 14, color: C.of(context).textFaint),
                   ],
                 ),
               ],
@@ -197,7 +197,7 @@ class _NavItemState extends State<_NavItem> {
 
   @override
   Widget build(BuildContext context) {
-    final fg = widget.active ? C.text : (_hover ? C.text : C.textMuted);
+    final fg = widget.active ? C.of(context).text : (_hover ? C.of(context).text : C.of(context).textMuted);
     return Padding(
       padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 1),
       child: MouseRegion(
@@ -210,8 +210,8 @@ class _NavItemState extends State<_NavItem> {
           padding: const EdgeInsets.only(right: 10),
           decoration: BoxDecoration(
             color: widget.active
-                ? C.accent.withOpacity(0.14)
-                : (_hover ? C.surfaceHi : Colors.transparent),
+                ? C.of(context).accent.withOpacity(0.14)
+                : (_hover ? C.of(context).surfaceHi : Colors.transparent),
             borderRadius: C.roundedSm,
           ),
           child: Row(
@@ -222,16 +222,16 @@ class _NavItemState extends State<_NavItem> {
                 width: _leadBar,
                 height: 18,
                 decoration: BoxDecoration(
-                  color: widget.active ? C.accent : Colors.transparent,
+                  color: widget.active ? C.of(context).accent : Colors.transparent,
                   borderRadius: BorderRadius.circular(1),
                 ),
               ),
               const SizedBox(width: 8),
-              LdIcon(widget.icon, size: 16, color: widget.active ? C.accent : fg),
+              LdIcon(widget.icon, size: 16, color: widget.active ? C.of(context).accent : fg),
               const SizedBox(width: 10),
               Text(
                 widget.label,
-                style: C.small(
+                style: C.of(context).small(
                   color: fg,
                   w: widget.active ? FontWeight.w700 : FontWeight.w500,
                 ),
@@ -262,15 +262,15 @@ class _TopBar extends StatelessWidget {
     return Container(
       height: 60,
       decoration: BoxDecoration(
-        color: C.bg,
-        border: Border(bottom: BorderSide(color: C.hairline)),
+        color: C.of(context).bg,
+        border: Border(bottom: BorderSide(color: C.of(context).hairline)),
       ),
       padding: const EdgeInsets.symmetric(horizontal: 24),
       child: Row(
         children: [
-          Text('Fleet', style: C.h1()),
+          Text('Fleet', style: C.of(context).h1()),
           const Spacer(),
-          Text(_stamp(lastRefreshed, now), style: C.small(color: C.textFaint)),
+          Text(_stamp(lastRefreshed, now), style: C.of(context).small(color: C.of(context).textFaint)),
           const SizedBox(width: 12),
           GhostButton(
             label: 'Refresh',
@@ -339,19 +339,19 @@ class _Summary extends StatelessWidget {
                     _Metric(
                       label: 'Online',
                       value: measured ? '$online' : '--',
-                      color: C.ok,
+                      color: C.of(context).ok,
                     ),
                     const _BandRule(),
                     _Metric(
                       label: 'Offline',
                       value: measured ? '$offline' : '--',
-                      color: C.bad,
+                      color: C.of(context).bad,
                     ),
                     const _BandRule(),
                     _Metric(
                       label: 'Unknown',
                       value: '$unknown',
-                      color: C.idle,
+                      color: C.of(context).idle,
                       hollow: true,
                     ),
                   ],
@@ -360,19 +360,19 @@ class _Summary extends StatelessWidget {
                 FleetMixBar(online: online, offline: offline, unknown: unknown),
                 if (note != null) ...[
                   const SizedBox(height: 12),
-                  Text(note, style: C.small(color: C.textFaint)),
+                  Text(note, style: C.of(context).small(color: C.of(context).textFaint)),
                 ],
                 const SizedBox(height: 18),
-                Divider(height: 1, thickness: 1, color: C.hairline),
+                Divider(height: 1, thickness: 1, color: C.of(context).hairline),
                 const SizedBox(height: 14),
                 Row(
                   children: [
-                    Text('Online this session', style: C.micro()),
+                    Text('Online this session', style: C.of(context).micro()),
                     const Spacer(),
                     if (samples.length >= 2)
                       Text(
                         '0 to ${samples.map((s) => s.total).reduce(math.max)} machines',
-                        style: C.micro(),
+                        style: C.of(context).micro(),
                       ),
                   ],
                 ),
@@ -418,11 +418,11 @@ class _Metric extends StatelessWidget {
             children: [
               _Dot(color: color, hollow: hollow),
               const SizedBox(width: 8),
-              Text(label, style: C.small()),
+              Text(label, style: C.of(context).small()),
             ],
           ),
           const SizedBox(height: 8),
-          Text(value, style: C.metric()),
+          Text(value, style: C.of(context).metric()),
         ],
       ),
     );
@@ -438,7 +438,7 @@ class _BandRule extends StatelessWidget {
         width: 1,
         height: 44,
         margin: const EdgeInsets.only(right: 22, left: 2),
-        color: C.hairline,
+        color: C.of(context).hairline,
       );
 }
 
@@ -550,7 +550,7 @@ class _ListHeader extends StatelessWidget {
     Widget h(String s, {double? w, bool right = false}) {
       final t = Text(s,
           textAlign: right ? TextAlign.right : TextAlign.left,
-          style: C.micro().copyWith(letterSpacing: 0.7));
+          style: C.of(context).micro().copyWith(letterSpacing: 0.7));
       return w == null ? Expanded(child: t) : SizedBox(width: w, child: t);
     }
 
@@ -558,7 +558,7 @@ class _ListHeader extends StatelessWidget {
       height: 28,
       padding: const EdgeInsets.fromLTRB(_padH + _leadBar, 0, _padH, 0),
       decoration: BoxDecoration(
-        border: Border(bottom: BorderSide(color: C.hairline)),
+        border: Border(bottom: BorderSide(color: C.of(context).hairline)),
       ),
       child: Row(
         children: [
@@ -600,9 +600,9 @@ class _MachineTileState extends State<_MachineTile> {
   bool _hover = false;
 
   Color get _statusColor => switch (widget.machine.status) {
-        LabDeskPeerStatus.online => C.ok,
-        LabDeskPeerStatus.offline => C.bad,
-        LabDeskPeerStatus.unknown => C.idle,
+        LabDeskPeerStatus.online => C.of(context).ok,
+        LabDeskPeerStatus.offline => C.of(context).bad,
+        LabDeskPeerStatus.unknown => C.of(context).idle,
       };
 
   /// One triplet for these three states, everywhere on this screen and in the
@@ -628,17 +628,17 @@ class _MachineTileState extends State<_MachineTile> {
           padding: const EdgeInsets.fromLTRB(_padH, 0, _padH, 0),
           decoration: BoxDecoration(
             color: widget.selected
-                ? C.accent.withOpacity(0.13)
-                : (_hover ? C.surfaceHi : Colors.transparent),
+                ? C.of(context).accent.withOpacity(0.13)
+                : (_hover ? C.of(context).surfaceHi : Colors.transparent),
             border: Border(
               // Down the leading edge, not under the row: a rule beneath a
               // selected row reads as belonging to the row above it.
               left: BorderSide(
-                color: widget.selected ? C.accent : Colors.transparent,
+                color: widget.selected ? C.of(context).accent : Colors.transparent,
                 width: _leadBar,
               ),
               bottom: BorderSide(
-                color: widget.last ? Colors.transparent : C.hairline,
+                color: widget.last ? Colors.transparent : C.of(context).hairline,
               ),
             ),
           ),
@@ -665,35 +665,35 @@ class _MachineTileState extends State<_MachineTile> {
                     Text(
                       m.displayName,
                       overflow: TextOverflow.ellipsis,
-                      style: C.body().copyWith(height: 1.2),
+                      style: C.of(context).body().copyWith(height: 1.2),
                     ),
                     // One id formatter for the product. Connect and the consent
                     // prompt both print grouped triplets; a raw ten-digit run
                     // here made the same number look like a different field.
                     Text(formatID(m.id),
-                        style: C.data(size: 11, color: C.textFaint)
+                        style: C.of(context).data(size: 11, color: C.of(context).textFaint)
                             .copyWith(height: 1.25)),
                   ],
                 ),
               ),
               SizedBox(
                 width: _wPlatform,
-                child: Text(m.platform, style: C.small(color: C.textMuted)),
+                child: Text(m.platform, style: C.of(context).small(color: C.of(context).textMuted)),
               ),
               SizedBox(
                 width: _wGroup,
                 child: Text(
                   m.group ?? 'Ungrouped',
                   overflow: TextOverflow.ellipsis,
-                  style: C.small(
-                    color: m.group == null ? C.textFaint : C.textMuted,
+                  style: C.of(context).small(
+                    color: m.group == null ? C.of(context).textFaint : C.of(context).textMuted,
                   ),
                 ),
               ),
               SizedBox(
                 width: _wTrend,
                 child: m.history.isEmpty
-                    ? Text('--', style: C.small(color: C.textFaint))
+                    ? Text('--', style: C.of(context).small(color: C.of(context).textFaint))
                     : Tooltip(
                         message: 'Last ${m.history.length} checks, oldest first',
                         child: AvailabilityStrip(
@@ -709,9 +709,9 @@ class _MachineTileState extends State<_MachineTile> {
                       ? 'Now'
                       : m.sinceSeen(now: widget.now),
                   textAlign: TextAlign.right,
-                  style: C.data(
+                  style: C.of(context).data(
                     size: 12,
-                    color: m.status == LabDeskPeerStatus.online ? C.ok : C.textMuted,
+                    color: m.status == LabDeskPeerStatus.online ? C.of(context).ok : C.of(context).textMuted,
                   ),
                 ),
               ),
@@ -733,9 +733,9 @@ class _EmptyState extends StatelessWidget {
       padding: const EdgeInsets.symmetric(vertical: 54, horizontal: 24),
       child: Column(
         children: [
-          const LdIcon(LdIcons.fleet, size: 26, color: C.textFaint),
+          LdIcon(LdIcons.fleet, size: 26, color: C.of(context).textFaint),
           const SizedBox(height: 14),
-          Text('No machines yet', style: C.h2()),
+          Text('No machines yet', style: C.of(context).h2()),
           const SizedBox(height: 6),
           SizedBox(
             width: 340,
@@ -743,7 +743,7 @@ class _EmptyState extends StatelessWidget {
               'Machines appear here once you connect to them, or when a server '
               'profile with an address book is selected.',
               textAlign: TextAlign.center,
-              style: C.small(color: C.textFaint),
+              style: C.of(context).small(color: C.of(context).textFaint),
             ),
           ),
         ],
@@ -794,7 +794,7 @@ class _ListSkeleton extends StatelessWidget {
               height: _rowH,
               padding: const EdgeInsets.symmetric(horizontal: _padH),
               decoration: BoxDecoration(
-                border: Border(bottom: BorderSide(color: C.hairline)),
+                border: Border(bottom: BorderSide(color: C.of(context).hairline)),
               ),
               child: const Row(
                 children: [
@@ -847,7 +847,7 @@ class _ShimmerState extends State<_Shimmer> with SingleTickerProviderStateMixin 
         width: widget.width,
         height: widget.height,
         decoration: BoxDecoration(
-          color: Color.lerp(C.surfaceHi, C.hairline, _c.value),
+          color: Color.lerp(C.of(context).surfaceHi, C.of(context).hairline, _c.value),
           borderRadius: widget.circle ? null : BorderRadius.circular(3),
           shape: widget.circle ? BoxShape.circle : BoxShape.rectangle,
         ),

@@ -7,7 +7,6 @@
 //
 // Shots land in tool/shots/out/wp18-*.png.
 import 'dart:io';
-import 'dart:typed_data';
 import 'dart:ui' as ui;
 
 import 'package:flutter/material.dart';
@@ -22,6 +21,7 @@ import 'package:flutter_hbb/labdesk/models/machine_row.dart';
 import 'package:flutter_hbb/labdesk/models/machine_state.dart';
 import 'package:flutter_hbb/labdesk/models/net_view.dart';
 import 'package:flutter_hbb/labdesk/screens/automation_screen.dart';
+import 'package:flutter_hbb/labdesk/screens/adapters_card.dart';
 import 'package:flutter_hbb/labdesk/screens/health_board.dart';
 import 'package:flutter_hbb/labdesk/screens/labnet_card.dart';
 import 'package:flutter_hbb/labdesk/screens/network_screen.dart';
@@ -40,18 +40,19 @@ Future<void> _loadFonts() async {
     final loader = FontLoader(family);
     for (final p in paths) {
       final bytes = File(p).readAsBytesSync();
-      loader
-          .addFont(Future.value(ByteData.view(Uint8List.fromList(bytes).buffer)));
+      loader.addFont(
+          Future.value(ByteData.view(Uint8List.fromList(bytes).buffer)));
     }
     await loader.load();
   }
 
   await load('Manrope', ['assets/fonts/Manrope-Variable.ttf']);
   await load('JetBrainsMono', ['assets/fonts/JetBrainsMono-Medium.ttf']);
-  final flutterRoot = Platform.environment['FLUTTER_ROOT'] ?? '';
+  final flutterRoot =
+      Platform.environment['FLUTTER_ROOT'] ?? 'C:/sdk/flutter-3.24.5';
   final icons = File(
       '$flutterRoot/bin/cache/artifacts/material_fonts/materialicons-regular.otf');
-  if (icons.existsSync()) await load('MaterialIcons', [icons.path]);
+  await load('MaterialIcons', [icons.path]);
 }
 
 Widget _frame(Widget child) => RepaintBoundary(
@@ -97,9 +98,13 @@ final _machines = <MachineRow>[
 
 /// The hot row each machine's own collector sent. The last two report nothing:
 /// one is not enrolled, one has been offline since before it could.
-const _states = <String, MachineState>{
+final _seenAt =
+    _now.subtract(const Duration(seconds: 18)).millisecondsSinceEpoch ~/ 1000;
+final _states = <String, MachineState>{
   '482910337': MachineState(
       status: 'online',
+      seenAt: _seenAt,
+      flushSeconds: 60,
       cpuPct: 14,
       memPct: 61,
       fsWorstPct: 49,
@@ -109,6 +114,8 @@ const _states = <String, MachineState>{
       worstDisk: 'ok'),
   '118374662': MachineState(
       status: 'online',
+      seenAt: _seenAt,
+      flushSeconds: 60,
       cpuPct: 71,
       memPct: 44,
       fsWorstPct: 93,
@@ -118,6 +125,8 @@ const _states = <String, MachineState>{
       worstDisk: 'warn'),
   '905513280': MachineState(
       status: 'online',
+      seenAt: _seenAt,
+      flushSeconds: 60,
       cpuPct: 3,
       memPct: 22,
       fsWorstPct: 61,
@@ -126,6 +135,8 @@ const _states = <String, MachineState>{
       worstDisk: 'failing'),
   '204471839': MachineState(
       status: 'online',
+      seenAt: _seenAt,
+      flushSeconds: 60,
       cpuPct: 38,
       memPct: 77,
       fsWorstPct: 55,
@@ -167,7 +178,10 @@ MachineHealth _healthFor(String id) {
 const _netView = MachineNetView(
   reported: true,
   reachability: NetReachability(
-      internet: 'online', at: 1788480300, probe: 'tcp443', selfheal: 'watching'),
+      internet: 'online',
+      at: 1788480300,
+      probe: 'tcp443',
+      selfheal: 'watching'),
   adapters: [
     NetAdapter(
       name: 'eth0',
@@ -191,19 +205,20 @@ const _netView = MachineNetView(
       addresses: [NetAddress(addr: '100.64.0.3', prefix: 16, family: 'inet')],
     ),
     NetAdapter(
-        name: 'wlan0',
-        up: false,
-        mac: '11:22:33:44:55:66',
-        kind: 'physical'),
+        name: 'wlan0', up: false, mac: '11:22:33:44:55:66', kind: 'physical'),
   ],
 );
 
 const _offline = MachineNetView(
   reported: true,
   reachability: NetReachability(
-      internet: 'offline', at: 1788480300, probe: 'tcp443', selfheal: 'cycling'),
+      internet: 'offline',
+      at: 1788480300,
+      probe: 'tcp443',
+      selfheal: 'cycling'),
   adapters: [
-    NetAdapter(name: 'eth0', up: true, mac: 'aa:bb:cc:dd:ee:ff', kind: 'physical'),
+    NetAdapter(
+        name: 'eth0', up: true, mac: 'aa:bb:cc:dd:ee:ff', kind: 'physical'),
     NetAdapter(name: 'wlan0', up: false, kind: 'physical'),
   ],
 );
@@ -212,18 +227,35 @@ const _inbox = LabnetInbox(
   enrolled: true,
   overlayIp: '100.64.0.3',
   invitations: [
-    LabnetInvitation(labnetId: 'L9', name: 'Rack', invitedBy: 'owner@lab-desk.net')
+    LabnetInvitation(
+        labnetId: 'L9', name: 'Rack', invitedBy: 'owner@lab-desk.net')
   ],
   labnets: [
-    Labnet(id: 'L1', name: 'Workshop', fullAccess: false, owner: true, members: [
-      LabnetMember(deviceId: '482910337', status: 'approved', overlayIp: '100.64.0.3'),
-      LabnetMember(deviceId: '118374662', status: 'approved', overlayIp: '100.64.0.7'),
-      LabnetMember(deviceId: '905513280', status: 'pending'),
-    ]),
+    Labnet(
+        id: 'L1',
+        name: 'Workshop',
+        fullAccess: false,
+        owner: true,
+        members: [
+          LabnetMember(
+              deviceId: '482910337',
+              status: 'approved',
+              overlayIp: '100.64.0.3'),
+          LabnetMember(
+              deviceId: '118374662',
+              status: 'approved',
+              overlayIp: '100.64.0.7'),
+          LabnetMember(deviceId: '905513280', status: 'pending'),
+        ]),
   ],
 );
 
-Widget _network(MachineNetView view) => NetworkScreen(
+Widget _diagnostics(MachineNetView view) => SingleChildScrollView(
+      padding: const EdgeInsets.all(24),
+      child: AdaptersCard(view: view, machineName: 'Workshop NAS · Sample'),
+    );
+
+Widget _network() => NetworkScreen(
       inbox: _inbox,
       thisMachineId: '482910337',
       machines: [
@@ -234,9 +266,6 @@ Widget _network(MachineNetView view) => NetworkScreen(
         NetworkFleet(id: 'F2', name: 'Office'),
       ],
       mustNameFleet: true,
-      netMachineId: '482910337',
-      netView: view,
-      onSelectNetMachine: (_) {},
       onCreate: (_, __) {},
       onRename: (_, __) {},
       onApprove: (_) {},
@@ -286,20 +315,24 @@ void main() {
     await tester.pumpAndSettle();
     await _capture(tester, 'wp18-health-board');
 
-    await tester.pumpWidget(_frame(_network(_netView)));
+    await tester.pumpWidget(_frame(_network()));
+    await tester.pumpAndSettle();
+    await _capture(tester, 'wp18-labnets');
+
+    await tester.pumpWidget(_frame(_diagnostics(_netView)));
     await tester.pumpAndSettle();
     await _capture(tester, 'wp18-network-adapters');
 
-    await tester.pumpWidget(_frame(_network(_offline)));
+    await tester.pumpWidget(_frame(_diagnostics(_offline)));
     await tester.pumpAndSettle();
     await _capture(tester, 'wp18-network-offline');
 
-    await tester.pumpWidget(_frame(_network(MachineNetView.empty)));
+    await tester.pumpWidget(_frame(_diagnostics(MachineNetView.empty)));
     await tester.pumpAndSettle();
     await _capture(tester, 'wp18-network-unreported');
 
-    await tester.pumpWidget(_frame(
-        _thisMachine(true, _netView.reachability, false)));
+    await tester
+        .pumpWidget(_frame(_thisMachine(true, _netView.reachability, false)));
     await tester.pumpAndSettle();
     await _capture(tester, 'wp18-this-machine-selfheal-on');
 
@@ -308,8 +341,8 @@ void main() {
     await tester.pumpAndSettle();
     await _capture(tester, 'wp18-this-machine-selfheal-off');
 
-    await tester.pumpWidget(
-        _frame(_thisMachine(true, const NetReachability(), true)));
+    await tester
+        .pumpWidget(_frame(_thisMachine(true, const NetReachability(), true)));
     await tester.pumpAndSettle();
     await _capture(tester, 'wp18-this-machine-selfheal-waiting');
 

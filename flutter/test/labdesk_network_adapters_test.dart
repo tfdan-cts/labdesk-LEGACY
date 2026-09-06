@@ -3,6 +3,7 @@ import 'package:flutter_test/flutter_test.dart';
 import 'package:flutter_hbb/labdesk/models/labnet.dart';
 import 'package:flutter_hbb/labdesk/models/net_view.dart';
 import 'package:flutter_hbb/labdesk/screens/network_screen.dart';
+import 'package:flutter_hbb/labdesk/screens/adapters_card.dart';
 
 /// The per-adapter view and the two labnet surfaces that were missing: naming
 /// a fleet when creating, and renaming (contract sections 6 and 9).
@@ -29,36 +30,29 @@ const _view = MachineNetView(
 );
 
 void main() {
-  testWidgets('each adapter is drawn with its address, and the verdict above them',
+  testWidgets(
+      'each adapter is drawn with its address, and the verdict above them',
       (t) async {
     await _pump(
       t,
-      const NetworkScreen(
-        inbox: LabnetInbox(enrolled: true),
-        thisMachineId: '111',
-        netMachineId: '111',
-        netView: _view,
-      ),
+      const AdaptersCard(view: _view, machineName: 'machine-one'),
     );
     expect(find.text('eth0'), findsOneWidget);
     expect(find.text('192.168.1.20/24'), findsOneWidget);
     // An adapter with no address is down, and says so rather than showing
     // nothing at all.
     expect(find.text('Down'), findsOneWidget);
-    expect(
-        find.text('No internet. Self-healing is restarting networking.'),
+    expect(find.text('No internet. Self-healing is restarting networking.'),
         findsOneWidget);
   });
 
-  testWidgets('a machine that has reported nothing says so instead of showing an empty list',
+  testWidgets(
+      'a machine that has reported nothing says so instead of showing an empty list',
       (t) async {
     await _pump(
       t,
-      const NetworkScreen(
-        inbox: LabnetInbox(enrolled: true),
-        thisMachineId: '111',
-        netMachineId: '111',
-      ),
+      const AdaptersCard(
+          view: MachineNetView.empty, machineName: 'machine-one'),
     );
     expect(find.textContaining('has not reported a network view yet'),
         findsOneWidget);

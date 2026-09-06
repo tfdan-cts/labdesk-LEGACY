@@ -7,6 +7,13 @@ import 'package:flutter_hbb/common/labdesk_peer_status.dart';
 import 'package:flutter_hbb/labdesk/models/machine_metrics.dart';
 import 'package:flutter_hbb/labdesk/models/machine_state.dart';
 import 'package:flutter_hbb/labdesk/models/machine_row.dart';
+import 'package:flutter_hbb/labdesk/models/organization_context.dart';
+import 'package:flutter_hbb/labdesk/screens/actions_screen.dart';
+import 'package:flutter_hbb/labdesk/screens/fleet_console.dart';
+import 'package:flutter_hbb/labdesk/screens/health_board.dart';
+import 'package:flutter_hbb/labdesk/screens/home_dashboard.dart';
+import 'package:flutter_hbb/labdesk/screens/help_screen.dart';
+import 'package:flutter_hbb/labdesk/screens/terminal_screen.dart';
 import 'package:flutter_hbb/labdesk/screens/console_shell.dart';
 import 'package:flutter_hbb/labdesk/screens/settings_screen.dart';
 import 'package:flutter_hbb/labdesk/theme/console_theme.dart';
@@ -20,38 +27,102 @@ Widget _wrap(Widget child) => MaterialApp(
       home: Scaffold(body: child),
     );
 
-void main() {
-  _keyboardTests();
-  group('ConsoleShell navigation', () {
-    testWidgets('every section is offered in the sidebar', (tester) async {
-      await tester.pumpWidget(_wrap(const ConsoleShell(machines: [])));
+Finder _nav(ConsoleSection section) => find.byWidgetPredicate((widget) =>
+    widget is Semantics &&
+    widget.properties.button == true &&
+    widget.properties.label == section.label);
 
-      for (final s in ConsoleSection.values) {
-        expect(find.text(s.label), findsWidgets,
-            reason: '${s.label} must be reachable; a section with no way to '
-                'reach it is what this rebuild existed to fix');
+void main() {
+  testWidgets('Help opens the current feature manual without a machine action',
+      (tester) async {
+    await tester.pumpWidget(_wrap(const ConsoleShell(
+        machines: [], initialSection: ConsoleSection.network)));
+    await tester.tap(find.byTooltip('Help for this page'));
+    await tester.pumpAndSettle();
+    expect(tester.widget<HelpScreen>(find.byType(HelpScreen)).initialTopic,
+        'labnets');
+    expect(find.byKey(const ValueKey('help-search')), findsOneWidget);
+    await tester.tap(_nav(ConsoleSection.home));
+    await tester.pumpAndSettle();
+    await tester.tap(_nav(ConsoleSection.help));
+    await tester.pumpAndSettle();
+    expect(find.byType(HelpScreen), findsOneWidget);
+  });
+
+  testWidgets('context changes discard hosted feature drafts', (tester) async {
+    Widget shell(String contextKey) => _wrap(ConsoleShell(
+          machines: [],
+          dashboardContextKey: contextKey,
+          initialSection: ConsoleSection.network,
+          hosted: {
+            ConsoleSection.network: (_) =>
+                const TextField(key: ValueKey('draft'))
+          },
+        ));
+    await tester.pumpWidget(shell('1/account-a/org-a'));
+    await tester.enterText(
+        find.byKey(const ValueKey('draft')), 'Private draft A');
+    await tester.pumpWidget(shell('2/account-a/org-b'));
+    await tester.pumpAndSettle();
+    expect(find.text('Private draft A'), findsNothing);
+  });
+
+  _keyboardTests();
+  _contextTests();
+  _machineRouteTests();
+  group('ConsoleShell navigation', () {
+    testWidgets(
+        'the primary sidebar matches the approved information hierarchy',
+        (tester) async {
+      await tester.pumpWidget(_wrap(const ConsoleShell(machines: [])));
+      expect(primaryConsoleSections, [
+        ConsoleSection.home,
+        ConsoleSection.fleet,
+        ConsoleSection.network,
+        ConsoleSection.thisMachine,
+      ]);
+      expect(primaryConsoleSections.map((s) => s.label),
+          ['Home', 'Fleet', 'Labnets', 'This device']);
+      for (final section in primaryConsoleSections) {
+        expect(_nav(section), findsOneWidget);
+      }
+      for (final section in [
+        ConsoleSection.connect,
+        ConsoleSection.sessions,
+        ConsoleSection.settings
+      ]) {
+        expect(_nav(section), findsOneWidget);
+      }
+      for (final section in [
+        ConsoleSection.tools,
+        ConsoleSection.terminal,
+        ConsoleSection.actions,
+        ConsoleSection.automation,
+        ConsoleSection.machineHealth,
+        ConsoleSection.diagnostics
+      ]) {
+        expect(_nav(section), findsNothing,
+            reason:
+                'machine and fleet capabilities belong inside their context');
       }
     });
 
-    testWidgets('it opens on Connect, not on a per-machine section',
+    testWidgets('Home opens without requiring a selected machine',
         (tester) async {
       await tester.pumpWidget(_wrap(const ConsoleShell(machines: [])));
-
-      // Landing on a section that needs a machine would greet every launch
-      // with "no machine selected".
-      expect(ConsoleSection.connect.needsMachine, isFalse);
+      expect(ConsoleSection.home.needsMachine, isFalse);
       expect(
-        const ConsoleShell(machines: []).initialSection,
-        ConsoleSection.connect,
-      );
+          const ConsoleShell(machines: []).initialSection, ConsoleSection.home);
+      expect(find.byType(HomeDashboard), findsOneWidget);
+      expect(find.textContaining('part of the running client'), findsNothing);
     });
 
-    testWidgets('Connect, Fleet, This machine and Settings need no machine',
+    testWidgets('primary and general sections need no selected machine',
         (tester) async {
       for (final s in [
+        ...primaryConsoleSections,
         ConsoleSection.connect,
-        ConsoleSection.fleet,
-        ConsoleSection.thisMachine,
+        ConsoleSection.sessions,
         ConsoleSection.settings,
       ]) {
         expect(s.needsMachine, isFalse, reason: s.label);
@@ -67,8 +138,16 @@ void main() {
 
   group('Fleet tabs', () {
     const rows = [
-      MachineRow(id: '1', hostname: 'alpha', platform: 'Linux', status: LabDeskPeerStatus.online),
-      MachineRow(id: '2', hostname: 'beta', platform: 'Windows', status: LabDeskPeerStatus.offline),
+      MachineRow(
+          id: '1',
+          hostname: 'alpha',
+          platform: 'Linux',
+          status: LabDeskPeerStatus.online),
+      MachineRow(
+          id: '2',
+          hostname: 'beta',
+          platform: 'Windows',
+          status: LabDeskPeerStatus.offline),
     ];
 
     testWidgets('Health is a tab inside Fleet and shows every machine at once',
@@ -111,61 +190,90 @@ void main() {
 
     testWidgets('the figures come from the machine with no session open',
         (tester) async {
+      final state = MachineState(
+        status: 'online',
+        seenAt: DateTime.now().millisecondsSinceEpoch ~/ 1000 - 8,
+        flushSeconds: 60,
+        cpuPct: 61,
+        memPct: 44,
+        worstDisk: 'failing',
+      );
       await tester.pumpWidget(_wrap(ConsoleShell(
         machines: rows,
         initialSection: ConsoleSection.fleet,
         healthFor: (id) => MachineHealth(
           machineId: id,
           connected: false,
-          state: const MachineState(
-              status: 'online', cpuPct: 61, memPct: 44, worstDisk: 'failing'),
-          remote: const MachineState(status: 'online', cpuPct: 61, memPct: 44)
-              .metrics(),
+          state: state,
+          remote: state.metrics(),
         ),
       )));
       await tester.tap(find.text('Health'));
       await tester.pumpAndSettle();
-      expect(find.text('61'), findsWidgets);
+      expect(find.text('61 %'), findsWidgets);
       expect(find.text('Drive failing'), findsWidgets);
+      expect(find.textContaining('Current readings.'), findsWidgets);
     });
   });
 
   group('server profile control', () {
     const profiles = [
-      ProfileRow(name: 'Lab network', host: 'a', relay: 'a', api: '', hasKey: true, active: true),
-      ProfileRow(name: 'Personal Tailnet', host: 'b', relay: 'b', api: '', hasKey: true, active: false),
+      ProfileRow(
+          name: 'Lab network',
+          host: 'a',
+          relay: 'a',
+          api: '',
+          hasKey: true,
+          active: true),
+      ProfileRow(
+          name: 'Personal Tailnet',
+          host: 'b',
+          relay: 'b',
+          api: '',
+          hasKey: true,
+          active: false),
     ];
 
-    testWidgets('the sidebar chevron opens the profiles and reports the pick',
+    testWidgets('profiles stay in Settings and selecting one reports the pick',
         (tester) async {
       String? picked;
       await tester.pumpWidget(_wrap(ConsoleShell(
         machines: const [],
         profiles: profiles,
         profileName: 'Lab network',
-        onProfileSelected: (n) => picked = n,
+        onProfileSelected: (name) => picked = name,
       )));
-
-      await tester.tap(find.text('Lab network'));
+      expect(find.text('Lab network'), findsNothing);
+      expect(find.text('Personal Tailnet'), findsNothing);
+      await tester.tap(_nav(ConsoleSection.settings));
       await tester.pumpAndSettle();
-      expect(find.text('Personal Tailnet'), findsOneWidget,
-          reason: 'the other profile must be on offer once the control opens');
-
+      expect(find.byType(SettingsScreen), findsOneWidget);
+      expect(find.text('Lab network'), findsOneWidget);
       await tester.tap(find.text('Personal Tailnet'));
       await tester.pumpAndSettle();
       expect(picked, 'Personal Tailnet');
+      await tester.tap(_nav(ConsoleSection.home));
+      await tester.pumpAndSettle();
+      expect(find.text('Lab network'), findsNothing);
+      expect(find.text('Personal Tailnet'), findsNothing);
     });
 
-    testWidgets('with nothing to act on a pick, it is a label without a chevron',
+    testWidgets(
+        'without an activation callback Settings preserves profile data',
         (tester) async {
       await tester.pumpWidget(_wrap(const ConsoleShell(
         machines: [],
         profiles: profiles,
         profileName: 'Lab network',
+        initialSection: ConsoleSection.settings,
       )));
-      await tester.tap(find.text('Lab network'));
+      await tester.tap(find.text('Personal Tailnet'));
       await tester.pumpAndSettle();
-      expect(find.text('Personal Tailnet'), findsNothing);
+      final settings =
+          tester.widget<SettingsScreen>(find.byType(SettingsScreen));
+      expect(settings.onActivate, isNull);
+      expect(
+          settings.profiles.where((p) => p.active).single.name, 'Lab network');
     });
   });
 
@@ -174,6 +282,7 @@ void main() {
         (tester) async {
       await tester.pumpWidget(_wrap(ConsoleShell(
         machines: const [],
+        initialSection: ConsoleSection.connect,
         hosted: {
           ConsoleSection.connect: (_) =>
               const Text('the client owns this', key: Key('hosted-connect')),
@@ -186,7 +295,8 @@ void main() {
     testWidgets('a section with no builder falls back to the console screen',
         (tester) async {
       // This is what keeps the design harness renderable with no client.
-      await tester.pumpWidget(_wrap(const ConsoleShell(machines: [])));
+      await tester.pumpWidget(_wrap(const ConsoleShell(
+          machines: [], initialSection: ConsoleSection.connect)));
 
       expect(find.byKey(const Key('hosted-connect')), findsNothing);
       expect(find.textContaining('part of the running client'), findsOneWidget);
@@ -196,6 +306,7 @@ void main() {
         (tester) async {
       await tester.pumpWidget(_wrap(ConsoleShell(
         machines: const [],
+        initialSection: ConsoleSection.connect,
         hosted: {
           ConsoleSection.connect: (_) => const Text('CONNECT BODY'),
           ConsoleSection.settings: (_) => const Text('SETTINGS BODY'),
@@ -251,6 +362,17 @@ void main() {
       await tester.tap(find.text('Refresh'));
       await tester.pump();
 
+      expect(refreshed, 1);
+    });
+
+    testWidgets('Home refresh reports the callback', (tester) async {
+      var refreshed = 0;
+      await tester.pumpWidget(_wrap(ConsoleShell(
+        machines: const [],
+        onRefresh: () => refreshed++,
+      )));
+      await tester.tap(find.text('Refresh'));
+      await tester.pump();
       expect(refreshed, 1);
     });
 
@@ -360,7 +482,8 @@ void main() {
       expect(find.text('914 203 771'), findsOneWidget);
     });
 
-    testWidgets('the three states are named once, and named Online, Offline '
+    testWidgets(
+        'the three states are named once, and named Online, Offline '
         'and Unknown', (tester) async {
       await openFleet(tester);
 
@@ -389,15 +512,33 @@ void main() {
 // Appended: the sidebar is usable without a pointer.
 void _keyboardTests() {
   group('keyboard navigation', () {
-    testWidgets('Ctrl plus a digit opens that section', (tester) async {
-      await tester.pumpWidget(_wrap(const ConsoleShell(machines: [])));
-      await tester.sendKeyDownEvent(LogicalKeyboardKey.controlLeft);
-      await tester.sendKeyEvent(LogicalKeyboardKey.digit2);
-      await tester.sendKeyUpEvent(LogicalKeyboardKey.controlLeft);
-      await tester.pumpAndSettle();
-      // Fleet is the second section and the only one with a tab strip.
-      expect(ConsoleSection.values[1], ConsoleSection.fleet);
-      expect(find.text('Health'), findsOneWidget);
+    testWidgets('Ctrl+1 through Ctrl+4 follow primary navigation order',
+        (tester) async {
+      final requested = <ConsoleSection>[];
+      await tester.pumpWidget(_wrap(ConsoleShell(
+        machines: const [],
+        initialSection: ConsoleSection.connect,
+        onSectionChanged: requested.add,
+        hosted: {
+          for (final section in primaryConsoleSections)
+            section: (_) => Text('BODY ${section.name}'),
+        },
+      )));
+      final digits = [
+        LogicalKeyboardKey.digit1,
+        LogicalKeyboardKey.digit2,
+        LogicalKeyboardKey.digit3,
+        LogicalKeyboardKey.digit4
+      ];
+      for (var i = 0; i < digits.length; i++) {
+        await tester.sendKeyDownEvent(LogicalKeyboardKey.controlLeft);
+        await tester.sendKeyEvent(digits[i]);
+        await tester.sendKeyUpEvent(LogicalKeyboardKey.controlLeft);
+        await tester.pumpAndSettle();
+        expect(find.text('BODY ${primaryConsoleSections[i].name}'),
+            findsOneWidget);
+      }
+      expect(requested, primaryConsoleSections);
     });
 
     testWidgets('sidebar entries are focusable buttons that report selection',
@@ -405,14 +546,250 @@ void _keyboardTests() {
       final handle = tester.ensureSemantics();
       await tester.pumpWidget(_wrap(const ConsoleShell(machines: [])));
       Finder nav(String label) => find.byWidgetPredicate((w) =>
-          w is Semantics && w.properties.button == true && w.properties.label == label);
-      final connect = tester.getSemantics(nav(ConsoleSection.connect.label));
+          w is Semantics &&
+          w.properties.button == true &&
+          w.properties.label == label);
+      final home = tester.getSemantics(nav(ConsoleSection.home.label));
       final fleet = tester.getSemantics(nav(ConsoleSection.fleet.label));
-      expect(connect.hasFlag(SemanticsFlag.isSelected), isTrue);
+      expect(home.hasFlag(SemanticsFlag.isSelected), isTrue);
       expect(fleet.hasFlag(SemanticsFlag.isSelected), isFalse);
       expect(fleet.hasFlag(SemanticsFlag.isFocusable), isTrue);
       expect(fleet.hasFlag(SemanticsFlag.isButton), isTrue);
       handle.dispose();
     });
+  });
+}
+
+void _contextTests() {
+  const organizations = [
+    OrganizationSummary(id: 'a', name: 'Team Alpha', role: 'owner'),
+    OrganizationSummary(id: 'b', name: 'Team Beta', role: 'member'),
+  ];
+  testWidgets('organization, account and Terms controls report their callbacks',
+      (tester) async {
+    String? organization;
+    var accounts = 0;
+    var terms = 0;
+    await tester.pumpWidget(_wrap(ConsoleShell(
+      machines: const [],
+      organizations: organizations,
+      activeOrganizationId: 'a',
+      onOrganizationSelected: (id) => organization = id,
+      accountName: 'Jordan',
+      accountDescription: 'jordan@example.test',
+      onAccountPressed: () => accounts++,
+      onTermsPressed: () => terms++,
+    )));
+    expect(find.text('Organization'), findsOneWidget);
+    expect(find.text('jordan@example.test'), findsOneWidget);
+    await tester.tap(
+        find.widgetWithText(DropdownButtonFormField<String>, 'Team Alpha'));
+    await tester.pumpAndSettle();
+    await tester.tap(find.text('Team Beta').last);
+    await tester.pumpAndSettle();
+    expect(organization, 'b');
+    await tester.tap(find.text('Jordan'));
+    await tester.pump();
+    expect(accounts, 1);
+    await tester.tap(find.text('Terms of Service'));
+    await tester.pump();
+    expect(terms, 1);
+  });
+
+  for (final size in [const Size(800, 600), const Size(1400, 900)]) {
+    testWidgets('primary navigation and utilities render at $size',
+        (tester) async {
+      tester.view.physicalSize = size;
+      tester.view.devicePixelRatio = 1;
+      addTearDown(tester.view.reset);
+      await tester.binding.setSurfaceSize(size);
+      addTearDown(() => tester.binding.setSurfaceSize(null));
+      await tester.pumpWidget(_wrap(ConsoleShell(
+        machines: const [],
+        organizations: organizations,
+        activeOrganizationId: 'a',
+        onOrganizationSelected: (_) {},
+        accountName: 'Jordan',
+        onAccountPressed: () {},
+        onTermsPressed: () {},
+      )));
+      await tester.pumpAndSettle();
+      for (final section in [
+        ...primaryConsoleSections,
+        ConsoleSection.connect,
+        ConsoleSection.sessions,
+        ConsoleSection.settings
+      ]) {
+        await tester.ensureVisible(_nav(section));
+        await tester.tap(_nav(section));
+        await tester.pumpAndSettle();
+        expect(tester.takeException(), isNull,
+            reason: '${section.label} at $size');
+        expect(_nav(section).hitTestable(), findsOneWidget);
+        expect(find.text('Terms of Service').hitTestable(), findsOneWidget);
+      }
+    });
+  }
+}
+
+void _machineRouteTests() {
+  const rows = [
+    MachineRow(
+        id: '1',
+        hostname: 'alpha',
+        platform: 'Linux',
+        status: LabDeskPeerStatus.online),
+    MachineRow(
+        id: '2',
+        hostname: 'beta',
+        platform: 'Windows',
+        status: LabDeskPeerStatus.offline),
+  ];
+
+  testWidgets('Fleet retains Machines, Health, hosted Jobs and Automation',
+      (tester) async {
+    final changes = <ConsoleSection>[];
+    await tester.pumpWidget(_wrap(ConsoleShell(
+      machines: rows,
+      initialSection: ConsoleSection.fleet,
+      onSectionChanged: changes.add,
+      hosted: {
+        ConsoleSection.tools: (_) => const Text('HOSTED JOBS'),
+        ConsoleSection.automation: (_) => const Text('HOSTED AUTOMATION'),
+      },
+    )));
+    expect(find.byType(FleetConsole), findsOneWidget);
+    for (final title in ['Machines', 'Health', 'Jobs', 'Automation']) {
+      expect(find.widgetWithText(Tab, title), findsOneWidget);
+    }
+    await tester.tap(find.widgetWithText(Tab, 'Health'));
+    await tester.pumpAndSettle();
+    expect(find.byType(HealthBoard), findsOneWidget);
+    await tester.tap(find.widgetWithText(Tab, 'Jobs'));
+    await tester.pumpAndSettle();
+    expect(find.text('HOSTED JOBS'), findsOneWidget);
+    await tester.tap(find.widgetWithText(Tab, 'Automation'));
+    await tester.pumpAndSettle();
+    expect(find.text('HOSTED AUTOMATION'), findsOneWidget);
+    expect(changes.last, ConsoleSection.automation);
+    await tester.tap(find.widgetWithText(Tab, 'Machines'));
+    await tester.pumpAndSettle();
+    expect(find.byType(FleetConsole), findsOneWidget);
+    expect(changes.last, ConsoleSection.fleet);
+  });
+
+  testWidgets(
+      'selected machine routes retain the machine and hosted capabilities',
+      (tester) async {
+    final selected = <String>[];
+    final changes = <ConsoleSection>[];
+    await tester.pumpWidget(_wrap(ConsoleShell(
+      machines: rows,
+      initialSection: ConsoleSection.fleet,
+      onMachineSelected: selected.add,
+      onSectionChanged: changes.add,
+      machineHealthFooter: (id) => Text('Reporting policy for $id'),
+      connectedIds: const {'1'},
+      terminalIds: const {},
+      hosted: {
+        ConsoleSection.tools: (_) => const Text('MACHINE TOOLS'),
+        ConsoleSection.diagnostics: (_) => const Text('MACHINE NETWORK'),
+      },
+    )));
+    await tester.tap(find.text('alpha'));
+    await tester.pumpAndSettle();
+    expect(selected, ['1']);
+    expect(tester.widget<ActionsScreen>(find.byType(ActionsScreen)).machine!.id,
+        '1');
+    for (final title in [
+      'Overview',
+      'Health',
+      'Terminal',
+      'Tools',
+      'Network'
+    ]) {
+      expect(find.widgetWithText(TextButton, title), findsOneWidget);
+    }
+    await tester.tap(find.widgetWithText(TextButton, 'Health'));
+    await tester.pumpAndSettle();
+    expect(
+        tester
+            .widget<HealthBoard>(find.byType(HealthBoard))
+            .machines
+            .map((m) => m.id),
+        ['1']);
+    expect(changes.last, ConsoleSection.machineHealth);
+    expect(tester.widget<HealthBoard>(find.byType(HealthBoard)).footer,
+        isA<Text>());
+    expect(
+        (tester.widget<HealthBoard>(find.byType(HealthBoard)).footer! as Text)
+            .data,
+        'Reporting policy for 1');
+    await tester.tap(find.widgetWithText(TextButton, 'Terminal'));
+    await tester.pumpAndSettle();
+    final terminal = tester.widget<TerminalScreen>(find.byType(TerminalScreen));
+    expect(terminal.machine!.id, '1');
+    expect(terminal.connected, isFalse,
+        reason: 'a desktop connection cannot imply terminal capability');
+    for (final route in [
+      ('Tools', ConsoleSection.tools, 'MACHINE TOOLS'),
+      ('Network', ConsoleSection.diagnostics, 'MACHINE NETWORK'),
+    ]) {
+      final tab = find.widgetWithText(TextButton, route.$1);
+      await tester.ensureVisible(tab);
+      await tester.tap(tab);
+      await tester.pumpAndSettle();
+      expect(find.text(route.$3), findsOneWidget);
+      expect(changes.last, route.$2);
+    }
+    final overview = find.widgetWithText(TextButton, 'Overview');
+    await tester.ensureVisible(overview);
+    await tester.tap(overview);
+    await tester.pumpAndSettle();
+    expect(tester.widget<ActionsScreen>(find.byType(ActionsScreen)).machine!.id,
+        '1');
+    await tester.tap(find.text('All machines'));
+    await tester.pumpAndSettle();
+    expect(find.byType(FleetConsole), findsOneWidget);
+    expect(find.byType(ActionsScreen), findsNothing);
+  });
+
+  testWidgets('changing account or organization clears a selected peer',
+      (tester) async {
+    Widget shell(String contextKey) => _wrap(ConsoleShell(
+          machines: rows,
+          initialSection: ConsoleSection.fleet,
+          dashboardContextKey: contextKey,
+        ));
+    await tester.pumpWidget(shell('account-a/org-a'));
+    await tester.tap(find.text('alpha'));
+    await tester.pumpAndSettle();
+    await tester.tap(find.widgetWithText(TextButton, 'Terminal'));
+    await tester.pumpAndSettle();
+    expect(
+        tester.widget<TerminalScreen>(find.byType(TerminalScreen)).machine!.id,
+        '1');
+    await tester.pumpWidget(shell('account-b/org-b'));
+    await tester.pumpAndSettle();
+    expect(tester.widget<TerminalScreen>(find.byType(TerminalScreen)).machine,
+        isNull);
+    expect(find.text('Selected'), findsNothing);
+  });
+
+  testWidgets('changing context resets the Fleet tab to Machines',
+      (tester) async {
+    Widget shell(String contextKey) => _wrap(ConsoleShell(
+          machines: rows,
+          initialSection: ConsoleSection.fleet,
+          dashboardContextKey: contextKey,
+        ));
+    await tester.pumpWidget(shell('account-a/org-a'));
+    await tester.tap(find.widgetWithText(Tab, 'Health'));
+    await tester.pumpAndSettle();
+    expect(find.byType(HealthBoard), findsOneWidget);
+    await tester.pumpWidget(shell('account-a/org-b'));
+    await tester.pumpAndSettle();
+    expect(find.byType(FleetConsole), findsOneWidget);
+    expect(find.byType(HealthBoard), findsNothing);
   });
 }

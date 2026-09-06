@@ -110,9 +110,9 @@ class _TerminalScreenState extends State<TerminalScreen> {
             // draws. Material's terminal_rounded puts that prompt inside a
             // window, so the empty state and the tab that leads to it were two
             // different marks for the same screen.
-            const LdIcon(LdIcons.terminal, size: 26, color: C.textFaint),
+            LdIcon(LdIcons.terminal, size: 26, color: C.of(context).textFaint),
             const SizedBox(height: 14),
-            Text('No machine selected', style: C.h2()),
+            Text('No machine selected', style: C.of(context).h2()),
             const SizedBox(height: 6),
             // Fixed height, matching the health and actions screens: see the
             // note on HealthScreen's empty state.
@@ -122,7 +122,7 @@ class _TerminalScreenState extends State<TerminalScreen> {
               child: Text(
                 'Choose a machine on the Fleet screen to open a shell on it.',
                 textAlign: TextAlign.center,
-                style: C.small(color: C.textFaint),
+                style: C.of(context).small(color: C.of(context).textFaint),
               ),
             ),
           ],
@@ -162,7 +162,7 @@ class _TerminalScreenState extends State<TerminalScreen> {
                       ),
                     ),
             ),
-            Divider(height: 1, thickness: 1, color: C.hairline),
+            Divider(height: 1, thickness: 1, color: C.of(context).hairline),
             _Prompt(
               controller: _input,
               focus: _focus,
@@ -185,16 +185,16 @@ class _Line extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     final color = switch (line.kind) {
-      TerminalLineKind.input => C.text,
-      TerminalLineKind.error => C.bad,
-      TerminalLineKind.notice => C.textFaint,
-      TerminalLineKind.output => C.textMuted,
+      TerminalLineKind.input => C.of(context).text,
+      TerminalLineKind.error => C.of(context).bad,
+      TerminalLineKind.notice => C.of(context).textFaint,
+      TerminalLineKind.output => C.of(context).textMuted,
     };
     return Padding(
       padding: const EdgeInsets.symmetric(vertical: 1),
       child: SelectableText(
         line.kind == TerminalLineKind.input ? '\$ ${line.text}' : line.text,
-        style: C.data(size: 12.5, color: color),
+        style: C.of(context).data(size: 12.5, color: color),
       ),
     );
   }
@@ -211,7 +211,7 @@ class _Idle extends StatelessWidget {
           connected
               ? 'Session open. Type a command below.'
               : 'No session. Open one to run commands on this machine.',
-          style: C.small(color: C.textFaint),
+          style: C.of(context).small(color: C.of(context).textFaint),
         ),
       );
 }
@@ -238,7 +238,7 @@ class _Prompt extends StatelessWidget {
       padding: const EdgeInsets.symmetric(horizontal: 18),
       child: Row(
         children: [
-          Text('\$', style: C.data(size: 13, color: enabled ? C.accent : C.textFaint)),
+          Text('\$', style: C.of(context).data(size: 13, color: enabled ? C.of(context).accent : C.of(context).textFaint)),
           const SizedBox(width: 10),
           Expanded(
             child: Focus(
@@ -248,14 +248,14 @@ class _Prompt extends StatelessWidget {
                 focusNode: focus,
                 enabled: enabled,
                 onSubmitted: (_) => onSubmit(),
-                style: C.data(size: 12.5, color: C.text),
-                cursorColor: C.accent,
+                style: C.of(context).data(size: 12.5, color: C.of(context).text),
+                cursorColor: C.of(context).accent,
                 cursorWidth: 1.6,
                 decoration: InputDecoration(
                   isDense: true,
                   border: InputBorder.none,
                   hintText: enabled ? 'Run a command' : 'Open a session to type here',
-                  hintStyle: C.data(size: 12.5, color: C.textFaint),
+                  hintStyle: C.of(context).data(size: 12.5, color: C.of(context).textFaint),
                 ),
               ),
             ),

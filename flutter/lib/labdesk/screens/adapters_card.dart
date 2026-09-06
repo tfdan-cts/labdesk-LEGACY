@@ -35,9 +35,9 @@ class AdaptersCard extends StatelessWidget {
   Widget build(BuildContext context) {
     return Container(
       decoration: BoxDecoration(
-        color: C.surface,
+        color: C.of(context).surface,
         borderRadius: C.rounded,
-        border: Border.all(color: C.hairline),
+        border: Border.all(color: C.of(context).hairline),
       ),
       padding: const EdgeInsets.fromLTRB(20, 18, 20, 20),
       child: Column(
@@ -45,7 +45,7 @@ class AdaptersCard extends StatelessWidget {
         children: [
           Row(
             children: [
-              Expanded(child: Text('Adapters', style: C.h2())),
+              Expanded(child: Text('Adapters', style: C.of(context).h2())),
               if (machines.length > 1 && onSelect != null)
                 _MachinePicker(
                   machines: machines,
@@ -59,7 +59,7 @@ class AdaptersCard extends StatelessWidget {
           Text(
             'What the machine reports about its own network. Loopback is left '
             'out; byte counts are since it last booted.',
-            style: C.small(),
+            style: C.of(context).small(),
           ),
           const SizedBox(height: 16),
           _Reachability(reachability: view.reachability),
@@ -71,10 +71,10 @@ class AdaptersCard extends StatelessWidget {
                   : 'This machine has not reported a network view yet. It is '
                       'sent on the agent\'s own flush, and only when something '
                       'changed.',
-              style: C.small(color: C.textFaint),
+              style: C.of(context).small(color: C.of(context).textFaint),
             )
           else if (view.adapters.isEmpty)
-            Text('No adapters reported.', style: C.small(color: C.textFaint))
+            Text('No adapters reported.', style: C.of(context).small(color: C.of(context).textFaint))
           else
             for (final a in view.adapters) _AdapterRow(adapter: a),
         ],
@@ -91,9 +91,9 @@ class _Reachability extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     final colour = switch (reachability.internet) {
-      'online' => C.ok,
-      'offline' => C.bad,
-      _ => C.idle,
+      'online' => C.of(context).ok,
+      'offline' => C.of(context).bad,
+      _ => C.of(context).idle,
     };
     final selfheal = reachability.selfHealRunning
         ? 'Self-healing is ${reachability.selfhealLabel}.'
@@ -109,11 +109,11 @@ class _Reachability extends StatelessWidget {
         Expanded(
           child: Text(
             '${reachability.internetLabel}. $selfheal',
-            style: C.body(),
+            style: C.of(context).body(),
           ),
         ),
         if (reachability.probe.isNotEmpty)
-          Text(reachability.probe, style: C.small(color: C.textFaint)),
+          Text(reachability.probe, style: C.of(context).small(color: C.of(context).textFaint)),
       ],
     );
   }
@@ -128,8 +128,8 @@ class _AdapterRow extends StatelessWidget {
   Widget build(BuildContext context) {
     final addresses = adapter.addresses.map((a) => '$a').join('  ');
     return Container(
-      decoration: const BoxDecoration(
-        border: Border(top: BorderSide(color: C.hairline)),
+      decoration: BoxDecoration(
+        border: Border(top: BorderSide(color: C.of(context).hairline)),
       ),
       padding: const EdgeInsets.symmetric(vertical: 10),
       child: Row(
@@ -141,7 +141,7 @@ class _AdapterRow extends StatelessWidget {
               width: 8,
               height: 8,
               decoration: BoxDecoration(
-                color: adapter.up ? C.ok : C.idle,
+                color: adapter.up ? C.of(context).ok : C.of(context).idle,
                 shape: BoxShape.circle,
               ),
             ),
@@ -157,10 +157,10 @@ class _AdapterRow extends StatelessWidget {
                       child: Text(adapter.name,
                           maxLines: 1,
                           overflow: TextOverflow.ellipsis,
-                          style: C.body()),
+                          style: C.of(context).body()),
                     ),
                     const SizedBox(width: 8),
-                    Text(adapter.kind, style: C.small(color: C.textFaint)),
+                    Text(adapter.kind, style: C.of(context).small(color: C.of(context).textFaint)),
                   ],
                 ),
                 const SizedBox(height: 2),
@@ -168,11 +168,11 @@ class _AdapterRow extends StatelessWidget {
                   addresses.isEmpty
                       ? (adapter.up ? 'Up, no address' : 'Down')
                       : addresses,
-                  style: C.data(size: 12, color: C.textMuted),
+                  style: C.of(context).data(size: 12, color: C.of(context).textMuted),
                 ),
                 if (adapter.mac.isNotEmpty) ...[
                   const SizedBox(height: 2),
-                  Text(adapter.mac, style: C.data(size: 11, color: C.textFaint)),
+                  Text(adapter.mac, style: C.of(context).data(size: 11, color: C.of(context).textFaint)),
                 ],
               ],
             ),
@@ -182,10 +182,10 @@ class _AdapterRow extends StatelessWidget {
             crossAxisAlignment: CrossAxisAlignment.end,
             children: [
               Text('${formatBytes(adapter.rxBytes)} in',
-                  style: C.data(size: 12, color: C.textMuted)),
+                  style: C.of(context).data(size: 12, color: C.of(context).textMuted)),
               const SizedBox(height: 2),
               Text('${formatBytes(adapter.txBytes)} out',
-                  style: C.data(size: 12, color: C.textMuted)),
+                  style: C.of(context).data(size: 12, color: C.of(context).textMuted)),
             ],
           ),
         ],
@@ -211,7 +211,7 @@ class _MachinePicker extends StatelessWidget {
   Widget build(BuildContext context) {
     return PopupMenuButton<String>(
       tooltip: 'Another machine',
-      color: C.surfaceHi,
+      color: C.of(context).surfaceHi,
       enabled: onSelect != null,
       initialValue: selectedId.isEmpty ? null : selectedId,
       onSelected: onSelect,
@@ -219,13 +219,13 @@ class _MachinePicker extends StatelessWidget {
         for (final (id, name) in machines)
           PopupMenuItem(
               value: id,
-              child: Text(name.isEmpty ? id : name, style: C.body())),
+              child: Text(name.isEmpty ? id : name, style: C.of(context).body())),
       ],
       child: Text(
         label.isEmpty ? 'Pick a machine' : label,
-        style: C.small(color: C.textMuted).copyWith(
+        style: C.of(context).small(color: C.of(context).textMuted).copyWith(
             decoration: TextDecoration.underline,
-            decorationColor: C.textFaint),
+            decorationColor: C.of(context).textFaint),
       ),
     );
   }

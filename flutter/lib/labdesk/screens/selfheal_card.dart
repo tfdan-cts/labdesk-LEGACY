@@ -44,27 +44,27 @@ class SelfHealCard extends StatelessWidget {
   Widget build(BuildContext context) {
     final running = reachability.selfHealRunning;
     final (dot, line) = waiting
-        ? (C.accent, 'Waiting for the service to pick this up.')
+        ? (C.of(context).accent, 'Waiting for the service to pick this up.')
         : on
             ? running
-                ? (C.ok, 'The service is ${reachability.selfhealLabel}.')
+                ? (C.of(context).ok, 'The service is ${reachability.selfhealLabel}.')
                 : (
-                    C.idle,
+                    C.of(context).idle,
                     'Switched on here. The service has not reported yet.',
                   )
             : running
                 ? (
-                    C.accent,
+                    C.of(context).accent,
                     'Switched off here, but the service is still '
                         '${reachability.selfhealLabel}.',
                   )
-                : (C.idle, 'Off. Nothing watches this machine\'s connection.');
+                : (C.of(context).idle, 'Off. Nothing watches this machine\'s connection.');
 
     return Container(
       decoration: BoxDecoration(
-        color: C.surface,
+        color: C.of(context).surface,
         borderRadius: C.rounded,
-        border: Border.all(color: C.hairline),
+        border: Border.all(color: C.of(context).hairline),
       ),
       padding: const EdgeInsets.fromLTRB(20, 18, 20, 20),
       child: Column(
@@ -72,10 +72,10 @@ class SelfHealCard extends StatelessWidget {
         children: [
           Row(
             children: [
-              Expanded(child: Text('Self-healing', style: C.h2())),
+              Expanded(child: Text('Self-healing', style: C.of(context).h2())),
               Switch(
                 value: on,
-                activeColor: C.accent,
+                activeColor: C.of(context).accent,
                 onChanged: onChanged,
               ),
             ],
@@ -86,7 +86,7 @@ class SelfHealCard extends StatelessWidget {
             'cycles the network adapter and restarts networking rather than '
             'waiting for somebody to notice. It never touches a connection '
             'that is working.',
-            style: C.small(),
+            style: C.of(context).small(),
           ),
           const SizedBox(height: 16),
           Row(
@@ -97,7 +97,7 @@ class SelfHealCard extends StatelessWidget {
                 decoration: BoxDecoration(color: dot, shape: BoxShape.circle),
               ),
               const SizedBox(width: 8),
-              Expanded(child: Text(line, style: C.body())),
+              Expanded(child: Text(line, style: C.of(context).body())),
             ],
           ),
           const SizedBox(height: 10),
@@ -108,9 +108,9 @@ class SelfHealCard extends StatelessWidget {
                 height: 8,
                 decoration: BoxDecoration(
                   color: switch (reachability.internet) {
-                    'online' => C.ok,
-                    'offline' => C.bad,
-                    _ => C.idle,
+                    'online' => C.of(context).ok,
+                    'offline' => C.of(context).bad,
+                    _ => C.of(context).idle,
                   },
                   shape: BoxShape.circle,
                 ),
@@ -122,7 +122,7 @@ class SelfHealCard extends StatelessWidget {
                       ? 'This machine has not reported an internet check yet.'
                       : '${reachability.internetLabel}, last checked by the '
                           'machine itself.',
-                  style: C.small(),
+                  style: C.of(context).small(),
                 ),
               ),
             ],

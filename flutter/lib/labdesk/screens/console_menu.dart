@@ -96,7 +96,7 @@ Future<T?> showConsoleMenu<T>({
   return showMenu<T>(
     context: context,
     position: anchor,
-    color: C.surfaceHi,
+    color: C.of(context).surfaceHi,
     // Material tints an elevated surface toward the primary colour. The
     // console's surfaces are a fixed ladder, and a menu that sits a shade
     // purple over the panel behind it is not on that ladder.
@@ -110,7 +110,7 @@ Future<T?> showConsoleMenu<T>({
         const BoxConstraints(minWidth: _panelWidth, maxWidth: _panelWidth),
     shape: RoundedRectangleBorder(
       borderRadius: C.rounded,
-      side: const BorderSide(color: C.hairline),
+      side: BorderSide(color: C.of(context).hairline),
     ),
     items: [
       for (final e in entries)
@@ -156,7 +156,7 @@ class _ConsoleMenuItemState<T> extends State<_ConsoleMenuItem<T>> {
     // A menu's lines are its content, so they are set at full strength and
     // the hover says where the pointer is with the fill, not by dimming the
     // rest of the list.
-    final fg = e.danger ? C.bad : C.text;
+    final fg = e.danger ? C.of(context).bad : C.of(context).text;
 
     return FocusableActionDetector(
       mouseCursor: SystemMouseCursors.click,
@@ -179,11 +179,11 @@ class _ConsoleMenuItemState<T> extends State<_ConsoleMenuItem<T>> {
           decoration: BoxDecoration(
             color: !lit
                 ? Colors.transparent
-                : (e.danger ? C.bad : C.accent).withOpacity(0.12),
+                : (e.danger ? C.of(context).bad : C.of(context).accent).withOpacity(0.12),
             borderRadius: C.roundedSm,
             border: Border.all(
               color:
-                  _focused ? (e.danger ? C.bad : C.accent) : Colors.transparent,
+                  _focused ? (e.danger ? C.of(context).bad : C.of(context).accent) : Colors.transparent,
             ),
           ),
           child: Row(
@@ -195,7 +195,7 @@ class _ConsoleMenuItemState<T> extends State<_ConsoleMenuItem<T>> {
                   child: e.glyph == null
                       ? null
                       : LdIcon(e.glyph!,
-                          size: 14, color: e.danger ? C.bad : C.textMuted),
+                          size: 14, color: e.danger ? C.of(context).bad : C.of(context).textMuted),
                 ),
                 const SizedBox(width: 10),
               ],
@@ -203,7 +203,7 @@ class _ConsoleMenuItemState<T> extends State<_ConsoleMenuItem<T>> {
                 child: Text(
                   e.label,
                   overflow: TextOverflow.ellipsis,
-                  style: C.small(color: fg, w: FontWeight.w500),
+                  style: C.of(context).small(color: fg, w: FontWeight.w500),
                 ),
               ),
               if (e.checked != null) ...[
@@ -244,7 +244,7 @@ class _ConsoleMenuHeadingState<T> extends State<_ConsoleMenuHeading<T>> {
         padding: const EdgeInsets.fromLTRB(14, 0, 14, 5),
         child: Text(
           widget.label.toUpperCase(),
-          style: C.micro().copyWith(letterSpacing: 0.7),
+          style: C.of(context).micro().copyWith(letterSpacing: 0.7),
         ),
       );
 }
@@ -268,7 +268,7 @@ class _ConsoleMenuSplitState<T> extends State<_ConsoleMenuSplit<T>> {
         height: _splitHeight,
         margin: const EdgeInsets.symmetric(horizontal: 5),
         alignment: Alignment.center,
-        child: Container(height: 1, color: C.hairline),
+        child: Container(height: 1, color: C.of(context).hairline),
       );
 }
 

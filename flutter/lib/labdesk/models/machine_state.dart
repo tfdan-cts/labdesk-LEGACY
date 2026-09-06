@@ -50,10 +50,20 @@ class MachineState {
 
   bool get isOnline => status == 'online';
 
+  /// A cached online response stops being current after two reporting periods.
+  /// Only a new server response can assert offline; expired cache is unknown.
+  String statusAt(DateTime now) {
+    if (status != 'online') return status == 'offline' ? 'offline' : 'unknown';
+    if (seenAt == null || flushSeconds == null || flushSeconds! <= 0) {
+      return 'unknown';
+    }
+    final age = now.millisecondsSinceEpoch ~/ 1000 - seenAt!;
+    return age >= 0 && age <= 2 * flushSeconds! ? 'online' : 'unknown';
+  }
+
   static num? _num(Object? v) => v is num ? v : null;
   static int? _int(Object? v) => v is num ? v.toInt() : null;
-  static String? _str(Object? v) =>
-      v is String && v.isNotEmpty ? v : null;
+  static String? _str(Object? v) => v is String && v.isNotEmpty ? v : null;
 
   /// Reads either shape: the per-machine `/state` answer and one row of the
   /// `?state=1` inventory carry the same keys, the inventory simply carrying
@@ -76,15 +86,19 @@ class MachineState {
   /// inventory refreshes every fifteen seconds.
   MachineState mergeDetail(MachineState detail) => MachineState(
         status: detail.status,
-        seenAt: detail.seenAt ?? seenAt,
+        seenAt: detail.seenAt,
         flushSeconds: detail.flushSeconds ?? flushSeconds,
-        cpuPct: detail.cpuPct ?? cpuPct,
-        memPct: detail.memPct ?? memPct,
-        fsWorstPct: detail.fsWorstPct ?? fsWorstPct,
-        uptimeS: detail.uptimeS ?? uptimeS,
-        loggedInUser: detail.loggedInUser ?? loggedInUser,
+        // These fields are present (and intentionally nullable) in inventory.
+        // Filling null from an old detail row would give an old reading the
+        // newest source timestamp and make a failed sensor look current.
+        cpuPct: detail.cpuPct,
+        memPct: detail.memPct,
+        fsWorstPct: detail.fsWorstPct,
+        uptimeS: detail.uptimeS ?? (seenAt == detail.seenAt ? uptimeS : null),
+        loggedInUser: detail.loggedInUser ??
+            (seenAt == detail.seenAt ? loggedInUser : null),
         agentVersion: detail.agentVersion ?? agentVersion,
-        worstDisk: detail.worstDisk ?? worstDisk,
+        worstDisk: detail.worstDisk,
       );
 
   /// The four figures the health board draws, in the order it draws them.
@@ -126,7 +140,8 @@ class MachineState {
     return MetricSample(
       at: at,
       cpu: cpuPct == null ? null : (cpuPct! / 100).clamp(0.0, 1.0).toDouble(),
-      memory: memPct == null ? null : (memPct! / 100).clamp(0.0, 1.0).toDouble(),
+      memory:
+          memPct == null ? null : (memPct! / 100).clamp(0.0, 1.0).toDouble(),
       disk: fsWorstPct == null
           ? null
           : (fsWorstPct! / 100).clamp(0.0, 1.0).toDouble(),
@@ -175,12 +190,10 @@ List<MetricSample> parseMetricHistory(Map<dynamic, dynamic> j) {
     for (var i = 0; i < samples.length; i++) {
       final row = samples[i];
       if (row is! List || row.isEmpty) continue;
-      final offset = samples.length == 1
-          ? 0
-          : (span * i / (samples.length - 1)).round();
+      final offset =
+          samples.length == 1 ? 0 : (span * i / (samples.length - 1)).round();
       out.add(MetricSample(
-        at: DateTime.fromMillisecondsSinceEpoch(
-                (from.toInt() + offset) * 1000,
+        at: DateTime.fromMillisecondsSinceEpoch((from.toInt() + offset) * 1000,
                 isUtc: true)
             .toLocal(),
         cpu: share(row[0]),

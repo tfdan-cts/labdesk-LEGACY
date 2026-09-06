@@ -22,8 +22,11 @@ import 'labdesk/models/machine_metrics.dart';
 import 'labdesk/models/machine_row.dart';
 import 'labdesk/models/machine_state.dart';
 import 'labdesk/models/net_view.dart';
+import 'labdesk/models/organization_context.dart';
+import 'labdesk/screens/adapters_card.dart';
 import 'labdesk/screens/console_shell.dart';
 import 'labdesk/screens/enrol_card.dart';
+import 'labdesk/screens/home_dashboard.dart';
 import 'labdesk/screens/labnet_card.dart';
 import 'labdesk/screens/automation_screen.dart';
 import 'labdesk/screens/network_screen.dart';
@@ -50,11 +53,14 @@ class _LabDeskPreviewAppState extends State<LabDeskPreviewApp> {
   bool _refreshing = false;
   bool _selfHeal = true;
   var _rules = <Rule>[];
+  String _selectedId = '482910337';
 
   final _terminal = <TerminalLine>[
-    const TerminalLine('Session opened on workshop-nas', kind: TerminalLineKind.notice),
+    const TerminalLine('Session opened on workshop-nas',
+        kind: TerminalLineKind.notice),
     const TerminalLine('uptime', kind: TerminalLineKind.input),
-    const TerminalLine(' 04:30:12 up 6 days,  2:14,  1 user,  load average: 0.14, 0.09, 0.08'),
+    const TerminalLine(
+        ' 04:30:12 up 6 days,  2:14,  1 user,  load average: 0.14, 0.09, 0.08'),
     const TerminalLine('df -h /', kind: TerminalLineKind.input),
     const TerminalLine('Filesystem      Size  Used Avail Use% Mounted on'),
     const TerminalLine('/dev/sda2       458G  212G  223G  49% /'),
@@ -88,6 +94,27 @@ class _LabDeskPreviewAppState extends State<LabDeskPreviewApp> {
           connectedIds: const {'482910337'},
           terminalLines: _terminal,
           healthFor: _healthFor,
+          dashboardContextKey: 'fixture-account/workshop',
+          accountName: 'Preview account',
+          accountDescription: 'Fixture data · no live machines',
+          organizations: const [
+            OrganizationSummary(
+                id: 'workshop', name: 'Workshop · Sample', role: 'owner'),
+          ],
+          activeOrganizationId: 'workshop',
+          onOrganizationSelected: (_) {},
+          onSaveDashboard: (_) async {},
+          fleets: const [
+            DashboardFleet(id: 'fleet-workshop', name: 'Workshop'),
+            DashboardFleet(id: 'fleet-office', name: 'Office'),
+            DashboardFleet(id: 'fleet-rack', name: 'Rack'),
+            DashboardFleet(id: 'fleet-garage', name: 'Garage'),
+          ],
+          machineFleetIds: {
+            for (final machine in _fixtures)
+              machine.id: {if (machine.group != null) 'fleet-${machine.group}'},
+          },
+          onMachineSelected: (id) => _selectedId = id,
           onTerminalSubmit: _submit,
           onRunAction: (id, action) {},
           onRefresh: () async {
@@ -98,6 +125,17 @@ class _LabDeskPreviewAppState extends State<LabDeskPreviewApp> {
           // The two labnet surfaces, with fixture state, so they can be looked
           // at beside the sections they sit among.
           hosted: {
+            ConsoleSection.diagnostics: (_) => SingleChildScrollView(
+                  padding: const EdgeInsets.all(24),
+                  child: AdaptersCard(
+                    view: _selectedId == '482910337'
+                        ? _netView
+                        : MachineNetView.empty,
+                    machineName: _fixtures
+                        .firstWhere((machine) => machine.id == _selectedId)
+                        .displayName,
+                  ),
+                ),
             ConsoleSection.thisMachine: (_) => ThisMachineScreen(
                   machineId: '482910337',
                   password: 'k7Qm2xLp',
@@ -115,7 +153,8 @@ class _LabDeskPreviewAppState extends State<LabDeskPreviewApp> {
                     },
                   ),
                   labnet: LabnetCard(
-                    state: const LabnetCardState(LabnetPhase.on, ip: '100.64.0.3'),
+                    state:
+                        const LabnetCardState(LabnetPhase.on, ip: '100.64.0.3'),
                     onDisable: () {},
                   ),
                   selfHeal: SelfHealCard(
@@ -141,32 +180,56 @@ class _LabDeskPreviewAppState extends State<LabDeskPreviewApp> {
                     enrolled: true,
                     overlayIp: '100.64.0.3',
                     invitations: [
-                      LabnetInvitation(labnetId: 'L9', name: 'Rack', invitedBy: 'owner@lab-desk.net'),
+                      LabnetInvitation(
+                          labnetId: 'L9',
+                          name: 'Rack',
+                          invitedBy: 'owner@lab-desk.net'),
                     ],
                     labnets: [
-                      Labnet(id: 'L1', name: 'Workshop', fullAccess: false, owner: true, members: [
-                        LabnetMember(deviceId: '482910337', status: 'approved', overlayIp: '100.64.0.3'),
-                        LabnetMember(deviceId: '118374662', status: 'approved', overlayIp: '100.64.0.7'),
-                        LabnetMember(deviceId: '905513280', status: 'pending'),
-                      ]),
-                      Labnet(id: 'L2', name: 'Office', fullAccess: true, owner: false, members: [
-                        LabnetMember(deviceId: '482910337', status: 'approved', overlayIp: '100.64.0.3'),
-                        LabnetMember(deviceId: '330918744', status: 'approved', overlayIp: '100.64.0.12'),
-                      ]),
+                      Labnet(
+                          id: 'L1',
+                          name: 'Workshop',
+                          fullAccess: false,
+                          owner: true,
+                          members: [
+                            LabnetMember(
+                                deviceId: '482910337',
+                                status: 'approved',
+                                overlayIp: '100.64.0.3'),
+                            LabnetMember(
+                                deviceId: '118374662',
+                                status: 'approved',
+                                overlayIp: '100.64.0.7'),
+                            LabnetMember(
+                                deviceId: '905513280', status: 'pending'),
+                          ]),
+                      Labnet(
+                          id: 'L2',
+                          name: 'Office',
+                          fullAccess: true,
+                          owner: false,
+                          members: [
+                            LabnetMember(
+                                deviceId: '482910337',
+                                status: 'approved',
+                                overlayIp: '100.64.0.3'),
+                            LabnetMember(
+                                deviceId: '330918744',
+                                status: 'approved',
+                                overlayIp: '100.64.0.12'),
+                          ]),
                     ],
                   ),
                   thisMachineId: '482910337',
                   machines: [
-                    for (final m in _fixtures) NetworkMachine(id: m.id, name: m.displayName),
+                    for (final m in _fixtures)
+                      NetworkMachine(id: m.id, name: m.displayName),
                   ],
                   fleets: const [
                     NetworkFleet(id: 'F1', name: 'Workshop'),
                     NetworkFleet(id: 'F2', name: 'Office'),
                   ],
                   mustNameFleet: true,
-                  netMachineId: '482910337',
-                  netView: _netView,
-                  onSelectNetMachine: (_) {},
                   onRename: (_, __) {},
                   onCreate: (_, __) {},
                   onApprove: (_) {},
@@ -189,7 +252,10 @@ class _LabDeskPreviewAppState extends State<LabDeskPreviewApp> {
 const _netView = MachineNetView(
   reported: true,
   reachability: NetReachability(
-      internet: 'online', at: 1788480300, probe: 'tcp443', selfheal: 'watching'),
+      internet: 'online',
+      at: 1788480300,
+      probe: 'tcp443',
+      selfheal: 'watching'),
   adapters: [
     NetAdapter(
       name: 'eth0',
@@ -200,7 +266,8 @@ const _netView = MachineNetView(
       txBytes: 4234567890,
       addresses: [
         NetAddress(addr: '192.168.1.20', prefix: 24, family: 'inet'),
-        NetAddress(addr: 'fe80::1c2d:3e4f:5a6b:7c8d', prefix: 64, family: 'inet6'),
+        NetAddress(
+            addr: 'fe80::1c2d:3e4f:5a6b:7c8d', prefix: 64, family: 'inet6'),
       ],
     ),
     NetAdapter(
@@ -211,7 +278,8 @@ const _netView = MachineNetView(
       txBytes: 7654321,
       addresses: [NetAddress(addr: '100.64.0.3', prefix: 16, family: 'inet')],
     ),
-    NetAdapter(name: 'wlan0', up: false, mac: '11:22:33:44:55:66', kind: 'physical'),
+    NetAdapter(
+        name: 'wlan0', up: false, mac: '11:22:33:44:55:66', kind: 'physical'),
   ],
 );
 
@@ -219,9 +287,13 @@ final _reachability = _netView.reachability;
 
 /// The hot row the collector sends, per fixture machine, so the board shows
 /// what a reporting fleet looks like beside one that reports nothing.
-const _states = <String, MachineState>{
+final _seenAt =
+    _now.subtract(const Duration(seconds: 18)).millisecondsSinceEpoch ~/ 1000;
+final _states = <String, MachineState>{
   '482910337': MachineState(
       status: 'online',
+      seenAt: _seenAt,
+      flushSeconds: 60,
       cpuPct: 14,
       memPct: 61,
       fsWorstPct: 49,
@@ -231,6 +303,8 @@ const _states = <String, MachineState>{
       worstDisk: 'ok'),
   '118374662': MachineState(
       status: 'online',
+      seenAt: _seenAt,
+      flushSeconds: 60,
       cpuPct: 71,
       memPct: 44,
       fsWorstPct: 93,
@@ -239,6 +313,8 @@ const _states = <String, MachineState>{
       worstDisk: 'warn'),
   '905513280': MachineState(
       status: 'online',
+      seenAt: _seenAt,
+      flushSeconds: 60,
       cpuPct: 3,
       memPct: 22,
       fsWorstPct: 61,
@@ -247,6 +323,8 @@ const _states = <String, MachineState>{
       worstDisk: 'failing'),
   '204471839': MachineState(
       status: 'online',
+      seenAt: _seenAt,
+      flushSeconds: 60,
       cpuPct: 38,
       memPct: 77,
       fsWorstPct: 55,
@@ -266,16 +344,34 @@ MachineHealth _healthFor(String id) {
     machineId: id,
     connected: connected,
     state: state,
+    history: state == null ? null : _history(state),
     identity: [
-      Metric(label: 'Hostname', value: row?.hostname ?? '--', source: MetricSource.known),
-      Metric(label: 'Platform', value: row?.platform ?? '--', source: MetricSource.known),
-      Metric(label: 'Group', value: row?.group ?? 'Ungrouped', source: MetricSource.known),
+      Metric(
+          label: 'Hostname',
+          value: row?.hostname ?? '--',
+          source: MetricSource.known),
+      Metric(
+          label: 'Platform',
+          value: row?.platform ?? '--',
+          source: MetricSource.known),
+      Metric(
+          label: 'Group',
+          value: row?.group ?? 'Ungrouped',
+          source: MetricSource.known),
       Metric(label: 'Machine ID', value: id, source: MetricSource.known),
     ],
     session: connected
         ? const [
-            Metric(label: 'Round trip', value: '14', unit: 'ms', source: MetricSource.session),
-            Metric(label: 'Throughput', value: '2.4', unit: 'MB/s', source: MetricSource.session),
+            Metric(
+                label: 'Round trip',
+                value: '14',
+                unit: 'ms',
+                source: MetricSource.session),
+            Metric(
+                label: 'Throughput',
+                value: '2.4',
+                unit: 'MB/s',
+                source: MetricSource.session),
             Metric(label: 'Codec', value: 'H264', source: MetricSource.session),
             Metric(label: 'Displays', value: '2', source: MetricSource.session),
           ]
@@ -295,8 +391,32 @@ MachineHealth _healthFor(String id) {
   );
 }
 
+MetricHistory _history(MachineState state) {
+  final history = MetricHistory();
+  for (var i = 0; i < 48; i++) {
+    history.add(MetricSample(
+      at: _now.subtract(Duration(minutes: (48 - i) * 5)),
+      cpu: ((state.cpuPct ?? 0) / 100 + (i % 7 - 3) * .01)
+          .clamp(0, 1)
+          .toDouble(),
+      memory: ((state.memPct ?? 0) / 100 + (i % 5 - 2) * .005)
+          .clamp(0, 1)
+          .toDouble(),
+      disk: (state.fsWorstPct ?? 0) / 100,
+    ));
+  }
+  final latest = state.sampleAt(
+      DateTime.fromMillisecondsSinceEpoch(_seenAt * 1000, isUtc: true));
+  if (latest != null) history.add(latest);
+  return history;
+}
+
 const _profiles = <ProfileRow>[
-  ProfileRow(name: 'Workshop', host: 'id.workshop.example', hasKey: true, active: true),
+  ProfileRow(
+      name: 'Workshop',
+      host: 'id.workshop.example',
+      hasKey: true,
+      active: true),
   ProfileRow(name: 'Office', host: 'id.office.example', hasKey: true),
   ProfileRow(name: 'Public servers', host: ''),
 ];
@@ -330,11 +450,76 @@ MachineRow _m(
       lastChecked: _now.subtract(const Duration(seconds: 24)),
     );
 
-const _up = <bool?>[true, true, true, true, true, true, true, true, true, true, true, true];
-const _down = <bool?>[true, true, true, true, true, false, false, false, false, false, false, false];
-const _flap = <bool?>[true, true, false, true, true, true, false, true, true, true, true, true];
-const _never = <bool?>[null, null, null, null, null, null, null, null, null, null, null, null];
-const _gone = <bool?>[false, false, false, false, false, false, false, false, false, false, false, false];
+const _up = <bool?>[
+  true,
+  true,
+  true,
+  true,
+  true,
+  true,
+  true,
+  true,
+  true,
+  true,
+  true,
+  true
+];
+const _down = <bool?>[
+  true,
+  true,
+  true,
+  true,
+  true,
+  false,
+  false,
+  false,
+  false,
+  false,
+  false,
+  false
+];
+const _flap = <bool?>[
+  true,
+  true,
+  false,
+  true,
+  true,
+  true,
+  false,
+  true,
+  true,
+  true,
+  true,
+  true
+];
+const _never = <bool?>[
+  null,
+  null,
+  null,
+  null,
+  null,
+  null,
+  null,
+  null,
+  null,
+  null,
+  null,
+  null
+];
+const _gone = <bool?>[
+  false,
+  false,
+  false,
+  false,
+  false,
+  false,
+  false,
+  false,
+  false,
+  false,
+  false,
+  false
+];
 
 final _fixtures = <MachineRow>[
   _m('482910337', 'workshop-nas', 'linux', LabDeskPeerStatus.online,
@@ -353,7 +538,8 @@ final _fixtures = <MachineRow>[
       group: 'rack', seenAgo: const Duration(seconds: 5), history: _up),
   _m('558210946', 'rack-backup', 'linux', LabDeskPeerStatus.offline,
       group: 'rack', seenAgo: const Duration(days: 2), history: _gone),
-  _m('887301255', 'shed-pi', 'linux', LabDeskPeerStatus.unknown, history: _never),
+  _m('887301255', 'shed-pi', 'linux', LabDeskPeerStatus.unknown,
+      history: _never),
   _m('149920788', 'garage-tablet', 'android', LabDeskPeerStatus.online,
       group: 'garage', seenAgo: const Duration(minutes: 3), history: _flap),
 ];

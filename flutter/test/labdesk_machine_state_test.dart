@@ -6,7 +6,41 @@ import 'package:flutter_hbb/labdesk/models/machine_state.dart';
 /// (docs/plans/2026-09-05-002-phase1-contracts.md section 5). These are the
 /// figures the console draws now that the terminal probe is gone.
 void main() {
+  test('cached online expires at the configured cadence, not a global default',
+      () {
+    const state =
+        MachineState(status: 'online', seenAt: 1000, flushSeconds: 60);
+    DateTime at(int seconds) =>
+        DateTime.fromMillisecondsSinceEpoch(seconds * 1000);
+    expect(state.statusAt(at(1120)), 'online');
+    expect(state.statusAt(at(1121)), 'unknown');
+    expect(state.statusAt(at(999)), 'unknown');
+    expect(const MachineState(status: 'offline').statusAt(at(1121)), 'offline');
+    expect(const MachineState(status: 'online').statusAt(at(1121)), 'unknown');
+    expect(
+        const MachineState(status: 'online', seenAt: 1000, flushSeconds: 300)
+            .statusAt(at(1500)),
+        'online');
+  });
+
   group('MachineState', () {
+    test('new missing readings never inherit an old value with a new stamp',
+        () {
+      const old = MachineState(
+          seenAt: 10,
+          cpuPct: 95,
+          memPct: 80,
+          fsWorstPct: 90,
+          worstDisk: 'warn');
+      final fresh = old.mergeDetail(const MachineState(seenAt: 20));
+      expect(fresh.seenAt, 20);
+      expect(fresh.cpuPct, isNull);
+      expect(fresh.memPct, isNull);
+      expect(fresh.fsWorstPct, isNull);
+      expect(fresh.worstDisk, isNull);
+      expect(old.mergeDetail(const MachineState()).seenAt, isNull);
+    });
+
     test('reads the state answer and keeps an absent reading absent', () {
       final s = MachineState.fromJson(const {
         'machineId': 'm1',
@@ -46,7 +80,11 @@ void main() {
     test('the per-machine read fills in what the fleet answer does not carry',
         () {
       const detail = MachineState(
-          status: 'online', uptimeS: 7200, loggedInUser: 'dan', cpuPct: 1);
+          status: 'online',
+          seenAt: 5,
+          uptimeS: 7200,
+          loggedInUser: 'dan',
+          cpuPct: 1);
       const fleet =
           MachineState(status: 'offline', cpuPct: 9, memPct: 20, seenAt: 5);
       final merged = detail.mergeDetail(fleet);
