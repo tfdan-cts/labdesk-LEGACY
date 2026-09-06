@@ -46,3 +46,9 @@ No production migration, Worker deployment, machine enrollment, new service inst
 - Exercise remote desktop and a long file transfer; confirm policy cleanup after close and listener recovery after restarting the agent.
 - A direct UDP path is preferred; an authenticated NetBird relay path is a supported result when NAT/firewall conditions prevent direct connectivity. Never claim universal hole punching.
 - Update durable project findings and retain explicit unverified items until their real checks run.
+
+## Continuation review corrections
+
+The full Rust review found `sign_here` using `Option<AgentIdentity>` as an identity; it now returns the existing not-enrolled error when absent. Durable ticket spends now go through one privileged IPC owner across desktop users and root/elevated callers; a per-user path or separate process caches of one path allowed duplicate spends. Authentication fails closed on service, persistence, or protocol failure, and the entire IPC request has a deadline. Inbox recovery backoff is capped at ten seconds within the thirty-second preparation window.
+
+Fresh verification: 370 Flutter tests, pinned analysis with 79 inherited/zero owned-path issues, and a captured GUI build exit 0. Worker typecheck/build and500tests passed locally; site PR#2 checks passed and merged to dev at5b8d82a808c6f65db35ca8e5ebac71b91214ec84 after production0012 migration was applied/read back. Eleven isolated Rust checks passed on current source, covering concurrent machine spends, replay after restart, missing/unavailable service and persistence failure. Full native compilation and real-device acceptance remain pending; the GUI preview DLL is still the old core.

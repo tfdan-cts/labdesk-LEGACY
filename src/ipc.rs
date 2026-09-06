@@ -1953,13 +1953,16 @@ async fn set_options_async(value: HashMap<String, String>) -> ResultType<()> {
 #[tokio::main(flavor = "current_thread")]
 pub async fn labnet(request: crate::labdesk::labnet::LabnetRequest) -> ResultType<String> {
     let ms_timeout = request.ipc_timeout_ms();
-    let mut c = connect(1000, crate::labdesk::labnet::IPC_POSTFIX).await?;
-    c.send(&Data::Labnet(request)).await?;
-    match c.next_timeout(ms_timeout).await? {
-        Some(Data::LabnetResult(Ok(answer))) => Ok(answer),
-        Some(Data::LabnetResult(Err(err))) => bail!(err),
-        _ => bail!("No answer from the LabDesk service"),
-    }
+    tokio::time::timeout(std::time::Duration::from_millis(ms_timeout), async move {
+        let mut c = connect(1000, crate::labdesk::labnet::IPC_POSTFIX).await?;
+        c.send(&Data::Labnet(request)).await?;
+        match c.next_timeout(ms_timeout).await? {
+            Some(Data::LabnetResult(Ok(answer))) => Ok(answer),
+            Some(Data::LabnetResult(Err(err))) => bail!(err),
+            _ => bail!("No answer from the LabDesk service"),
+        }
+    })
+    .await?
 }
 
 #[inline]

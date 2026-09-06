@@ -91,10 +91,8 @@ lazy_static::lazy_static! {
     static ref WAKELOCK_KEEP_AWAKE_OPTION: Arc::<Mutex<Option<bool>>> = Default::default();
     // Connect tickets (src/labdesk/ticket.rs): on every build, unlike the switch-sides map below.
     static ref PENDING_TICKETS: Arc::<Mutex<Vec<PendingTicket>>> = Default::default();
+    #[cfg(test)]
     static ref SPENT_TICKETS: Mutex<ResultType<crate::labdesk::ticket::SpentTickets>> = Mutex::new({
-        #[cfg(not(test))]
-        let path = Config::path("labdesk-spent-tickets.json");
-        #[cfg(test)]
         let path = std::env::temp_dir().join(format!("labdesk-spent-{}.json", uuid::Uuid::new_v4()));
         crate::labdesk::ticket::SpentTickets::load(path)
     });
@@ -6254,7 +6252,13 @@ pub fn claim_pending_ticket(controller_peer_id: &str, matches: impl Fn(&str) -> 
     retain_live_tickets(&mut tickets);
     for t in tickets.iter_mut() {
         if t.controller_peer_id == controller_peer_id && !t.claimed && matches(&t.secret_hash) {
+            #[cfg(test)]
             return spend_pending_ticket(t, &mut SPENT_TICKETS.lock().unwrap());
+            #[cfg(not(test))]
+            {
+                let result = crate::labdesk::ticket::spend_on_machine(&t.id, t.expires_at);
+                return finish_pending_ticket(t, result);
+            }
         }
     }
     false
@@ -6262,6 +6266,7 @@ pub fn claim_pending_ticket(controller_peer_id: &str, matches: impl Fn(&str) -> 
 
 /// Persistence is part of authentication, not the later best-effort HTTP
 /// claim report. A process restart must not make a redelivered ticket usable.
+#[cfg(test)]
 fn spend_pending_ticket(
     ticket: &mut PendingTicket,
     ledger: &mut ResultType<crate::labdesk::ticket::SpentTickets>,
@@ -6273,6 +6278,10 @@ fn spend_pending_ticket(
             return false;
         }
     };
+    finish_pending_ticket(ticket, result)
+}
+
+fn finish_pending_ticket(ticket: &mut PendingTicket, result: ResultType<bool>) -> bool {
     match result {
         Ok(first_claim) => {
             // A recovered spend should also be reported again to the Worker.
@@ -7324,6 +7333,8 @@ mod test {
             expires_at: hbb_common::get_time() / 1000 + 120, claimed: false, reported: false,
         };
         let mut ledger = crate::labdesk::ticket::SpentTickets::load(path.clone());
+        assert!(!finish_pending_ticket(&mut ticket, Err(hbb_common::anyhow::anyhow!("service unavailable"))));
+        assert!(!ticket.claimed, "an unavailable machine service cannot authorize a login");
         assert!(spend_pending_ticket(&mut ticket, &mut ledger));
         // Simulate redelivery to a fresh --server after the claim HTTP failed.
         ticket.claimed = false;

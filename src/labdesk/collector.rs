@@ -341,7 +341,8 @@ async fn run_ticket_inbox() {
                 failures = failures.saturating_add(1);
             }
         }
-        let wait = backoff_seconds(TICKET_POLL.as_secs(), failures).min(60);
+        // Recovery must fit the controller's 30-second preparation deadline.
+        let wait = backoff_seconds(TICKET_POLL.as_secs(), failures).min(10);
         sleep(Duration::from_secs(wait)).await;
     }
 }

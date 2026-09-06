@@ -9,7 +9,7 @@
 // controller's peer id (`src/server/connection.rs`, beside
 // `PENDING_SWITCH_SIDES_UUID`), and a login from that peer presenting
 // `sha256(H || salt)` claims it exactly once. Only spent IDs and their expiry
-// persist on disk, before authentication succeeds. The inbox can therefore
+// persist in the privileged machine ledger before authentication succeeds. The inbox can therefore
 // redeliver after a login-process restart without authorizing a replay.
 //
 // `H` is `sha256Hex(secret)` in the Worker's terms (`src/worker/crypto.ts`,
@@ -22,12 +22,59 @@ use hbb_common::{bail, log, sodiumoxide::crypto::hash::sha256, ResultType};
 use serde_derive::Deserialize;
 use std::{collections::BTreeMap, io::Write, path::PathBuf};
 
-/// The login process loads this once, then writes only on a matching claim.
+/// The privileged process loads this once, then writes only on a matching claim.
 /// No ticket secret is persisted. Unreadable/corrupt storage is an error, never
 /// an empty ledger, because redelivery must not revive a spent credential.
 pub struct SpentTickets {
     path: PathBuf,
     spent: BTreeMap<String, i64>,
+}
+
+#[cfg(not(any(target_os = "android", target_os = "ios")))]
+lazy_static::lazy_static! {
+    static ref MACHINE_SPENT_TICKETS: std::sync::Mutex<ResultType<SpentTickets>> =
+        std::sync::Mutex::new(SpentTickets::load(
+            super::identity::AgentIdentity::path().with_file_name("labdesk-spent-tickets.json")
+        ));
+}
+
+/// Only the machine service may persist claims, even when the desktop user changes.
+#[cfg(not(any(target_os = "android", target_os = "ios")))]
+pub fn spend_here(id: &str, expires_at: i64) -> ResultType<bool> {
+    if !crate::platform::is_root() {
+        bail!("Not the privileged LabDesk process");
+    }
+    let now = hbb_common::get_time() / 1000;
+    if expires_at > now + 86400 {
+        bail!("ticket expiry exceeds the machine retention limit");
+    }
+    let mut ledger = MACHINE_SPENT_TICKETS.lock().map_err(|_| hbb_common::anyhow::anyhow!("spent-ticket lock unavailable"))?;
+    match ledger.as_mut() {
+        Ok(ledger) => ledger.spend(id, expires_at, now),
+        Err(err) => bail!("spent-ticket storage unavailable: {}", err),
+    }
+}
+
+/// Login validation is synchronous and may be inside Tokio. Run the bounded
+/// service request on a separate thread rather than nesting another runtime.
+#[cfg(not(any(target_os = "android", target_os = "ios")))]
+pub fn spend_on_machine(id: &str, expires_at: i64) -> ResultType<bool> {
+    // Even an elevated caller uses the designated service: separate process
+    // caches of the same file would not serialize one-time spends.
+    let request = super::labnet::LabnetRequest::SpendTicket { id: id.to_owned(), expires_at };
+    let answer = std::thread::Builder::new().name("labdesk-ticket-spend".into())
+        .spawn(move || crate::ipc::labnet(request))?
+        .join().map_err(|_| hbb_common::anyhow::anyhow!("ticket spend request failed"))??;
+    match answer.as_str() {
+        "true" => Ok(true),
+        "false" => Ok(false),
+        _ => bail!("invalid ticket spend answer"),
+    }
+}
+
+#[cfg(any(target_os = "android", target_os = "ios"))]
+pub fn spend_on_machine(_: &str, _: i64) -> ResultType<bool> {
+    bail!("machine ticket authentication requires the desktop service");
 }
 
 impl SpentTickets {
@@ -225,6 +272,21 @@ mod tests {
         // Claim checks use the loaded cache; no disk read is needed for replay.
         std::fs::remove_file(&path).unwrap();
         assert!(!restarted.spend("ticket-1", 200, 100).unwrap());
+        std::fs::remove_dir(path.parent().unwrap()).unwrap();
+    }
+
+    #[test]
+    fn concurrent_desktop_claims_share_one_machine_spend() {
+        let path = ledger_path();
+        let ledger = std::sync::Arc::new(std::sync::Mutex::new(SpentTickets::load(path.clone()).unwrap()));
+        let claims: Vec<_> = (0..2).map(|_| {
+            let ledger = ledger.clone();
+            std::thread::spawn(move || ledger.lock().unwrap().spend("same-machine-ticket", 200, 100).unwrap())
+        }).collect();
+        assert_eq!(claims.into_iter().map(|claim| claim.join().unwrap()).filter(|spent| *spent).count(), 1);
+        let mut restarted = SpentTickets::load(path.clone()).unwrap();
+        assert!(!restarted.spend("same-machine-ticket", 200, 100).unwrap());
+        std::fs::remove_file(&path).unwrap();
         std::fs::remove_dir(path.parent().unwrap()).unwrap();
     }
 

@@ -45,6 +45,8 @@ pub enum LabnetRequest {
     },
     /// `main_agent_enrol` for a process that cannot read the key: answers the machine id.
     Enrol { token: String },
+    /// Commit a one-time ticket spend in the machine's privileged ledger.
+    SpendTicket { id: String, expires_at: i64 },
     /// Drive the bundled netbird daemon. `action` is one of `install`, `start`, `up`,
     /// `down`, `status`; `setup_key` is read by `up` only; `management_url` by `install`
     /// and `up`. Answers the daemon's stdout.
@@ -66,6 +68,7 @@ impl std::fmt::Debug for LabnetRequest {
                 .field("path", path)
                 .finish_non_exhaustive(),
             Self::Enrol { .. } => formatter.debug_struct("Enrol").finish_non_exhaustive(),
+            Self::SpendTicket { id, .. } => formatter.debug_struct("SpendTicket").field("id", id).finish_non_exhaustive(),
             Self::Daemon {
                 action,
                 management_url,
@@ -86,6 +89,7 @@ impl LabnetRequest {
     pub fn ipc_timeout_ms(&self) -> u64 {
         match self {
             Self::Sign { .. } => 3_000,
+            Self::SpendTicket { .. } => 3_000,
             Self::Enrol { .. } => 30_000,
             Self::Daemon { .. } => 120_000,
         }
@@ -118,6 +122,8 @@ pub fn serve(request: LabnetRequest) -> Result<String, String> {
     }
     match request {
         LabnetRequest::Sign { method, path, body } => sign_here(&method, &path, body.as_bytes()),
+        LabnetRequest::SpendTicket { id, expires_at } => super::ticket::spend_here(&id, expires_at)
+            .map(|spent| spent.to_string()).map_err(|err| err.to_string()),
         LabnetRequest::Enrol { token } => {
             super::identity::enrol(&token, &hbb_common::config::Config::get_id())
                 .map_err(|err| err.to_string())
@@ -147,7 +153,9 @@ pub fn serve_here_or_over_ipc(request: LabnetRequest) -> Result<String, String> 
 #[cfg(not(any(target_os = "android", target_os = "ios")))]
 pub fn sign_here(method: &str, path: &str, body: &[u8]) -> Result<String, String> {
     use super::identity::AgentIdentity;
-    let identity = AgentIdentity::load_existing().map_err(|err| err.to_string())?;
+    let identity = AgentIdentity::load_existing()
+        .map_err(|err| err.to_string())?
+        .ok_or_else(|| "This machine is not enrolled".to_owned())?;
     if identity.machine_id().is_empty() {
         return Err("This machine is not enrolled".to_owned());
     }
@@ -763,6 +771,7 @@ mod tests {
             management_url: String::new(),
         };
         assert!(sign.ipc_timeout_ms() < enrol.ipc_timeout_ms());
+        assert_eq!(LabnetRequest::SpendTicket { id: "ticket".into(), expires_at: 200 }.ipc_timeout_ms(), 3_000);
         assert!(enrol.ipc_timeout_ms() < daemon.ipc_timeout_ms());
     }
 
