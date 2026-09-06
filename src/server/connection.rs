@@ -93,7 +93,7 @@ lazy_static::lazy_static! {
     static ref PENDING_TICKETS: Arc::<Mutex<Vec<PendingTicket>>> = Default::default();
 }
 
-#[cfg(test)]
+#[cfg(all(test, not(any(target_os = "android", target_os = "ios"))))]
 lazy_static::lazy_static! {
     static ref SPENT_TICKETS: Mutex<ResultType<crate::labdesk::ticket::SpentTickets>> = Mutex::new({
         let path = std::env::temp_dir().join(format!("labdesk-spent-{}.json", uuid::Uuid::new_v4()));
@@ -6250,6 +6250,7 @@ pub fn insert_pending_ticket(
 /// Claim the first unclaimed, unexpired ticket issued to `controller_peer_id`
 /// whose `H` satisfies `matches` (the login's own password check). Never for
 /// another peer id, never twice.
+#[cfg(not(any(target_os = "android", target_os = "ios")))]
 pub fn claim_pending_ticket(controller_peer_id: &str, matches: impl Fn(&str) -> bool) -> bool {
     let mut tickets = PENDING_TICKETS.lock().unwrap();
     retain_live_tickets(&mut tickets);
@@ -6267,9 +6268,15 @@ pub fn claim_pending_ticket(controller_peer_id: &str, matches: impl Fn(&str) -> 
     false
 }
 
+// Mobile has no privileged LabDesk service to authorize a durable spend.
+#[cfg(any(target_os = "android", target_os = "ios"))]
+pub fn claim_pending_ticket(_controller_peer_id: &str, _matches: impl Fn(&str) -> bool) -> bool {
+    false
+}
+
 /// Persistence is part of authentication, not the later best-effort HTTP
 /// claim report. A process restart must not make a redelivered ticket usable.
-#[cfg(test)]
+#[cfg(all(test, not(any(target_os = "android", target_os = "ios"))))]
 fn spend_pending_ticket(
     ticket: &mut PendingTicket,
     ledger: &mut ResultType<crate::labdesk::ticket::SpentTickets>,
@@ -7276,6 +7283,7 @@ mod test {
     /// `cargo test claim_once`: the ticket map behaves like the switch-sides
     /// map above, keyed by the controller's peer id.
     #[test]
+    #[cfg(not(any(target_os = "android", target_os = "ios")))]
     fn test_pending_ticket_claim_once_per_ticket_never_for_another_peer() {
         let peer = uuid::Uuid::new_v4().to_string();
         let tid = |n: u8| format!("{}-{}", peer, n);
@@ -7329,6 +7337,15 @@ mod test {
     }
 
     #[test]
+    #[cfg(any(target_os = "android", target_os = "ios"))]
+    fn test_mobile_cannot_authorize_a_managed_ticket() {
+        assert!(!claim_pending_ticket("controller", |_| {
+            panic!("mobile must refuse before checking a ticket secret")
+        }));
+    }
+
+    #[test]
+    #[cfg(not(any(target_os = "android", target_os = "ios")))]
     fn test_ticket_auth_requires_a_durable_spend() {
         let path = std::env::temp_dir().join(format!("labdesk-claim-{}", uuid::Uuid::new_v4())).join("spent.json");
         let mut ticket = PendingTicket {
