@@ -27,7 +27,7 @@ native-windows-gui = {version = "1.0", default-features = false, features = ["an
 
 [package.metadata.winres]
 CompanyName = "LabDesk"
-LegalCopyright = "Copyright © 2026 LabDesk contributors. Based on RustDesk, © Purslane Tech Pte. Ltd."
+LegalCopyright = "Copyright © 2026 LabDesk contributors. Licensed under AGPL-3.0; third-party notices in docs/THIRD-PARTY.md."
 ProductName = "LabDesk"
 OriginalFilename = "labdesk.exe"
 FileDescription = "LabDesk Remote Desktop"

@@ -53,7 +53,7 @@ screencapturekit = ["cpal/screencapturekit"]
 [dependencies]
 async-trait = "0.1"
 scrap = { path = "libs/scrap", features = ["wayland"] }
-hbb_common = { path = "libs/labdesk_common" }
+hbb_common = { path = "libs/labdesk_common", package = "labdesk_common" }
 serde_derive = "1.0"
 serde = "1.0"
 serde_json = "1.0"
@@ -235,7 +235,7 @@ android-wakelock = { git = "https://github.com/rustdesk-org/android-wakelock" }
 
 [workspace]
 members = ["libs/scrap", "libs/labdesk_common", "libs/enigo", "libs/clipboard", "libs/virtual_display", "libs/virtual_display/dylib", "libs/portable", "libs/remote_printer"]
-exclude = ["vdi/host", "examples/custom_plugin", "libs/hbb_common"]
+exclude = ["vdi/host", "examples/custom_plugin"]
 
 # Patch libxdo-sys to use a stub implementation that doesn't require libxdo
 # This allows building and running on systems without libxdo installed (e.g., Wayland-only)
@@ -244,7 +244,7 @@ libxdo-sys = { path = "libs/libxdo-sys-stub" }
 
 [package.metadata.winres]
 CompanyName = "LabDesk"
-LegalCopyright = "Copyright © 2026 LabDesk contributors. Based on RustDesk, © Purslane Tech Pte. Ltd."
+LegalCopyright = "Copyright © 2026 LabDesk contributors. Licensed under AGPL-3.0; third-party notices in docs/THIRD-PARTY.md."
 ProductName = "LabDesk"
 FileDescription = "LabDesk Remote Desktop"
 OriginalFilename = "labdesk.exe"
@@ -255,7 +255,7 @@ winapi = { version = "0.3", features = [ "winnt", "pdh", "synchapi" ] }
 
 [build-dependencies]
 cc = "1.0"
-hbb_common = { path = "libs/labdesk_common" }
+hbb_common = { path = "libs/labdesk_common", package = "labdesk_common" }
 os-version = "0.2"
 
 [dev-dependencies]

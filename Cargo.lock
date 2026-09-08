@@ -1332,7 +1332,7 @@ dependencies = [
  "dirs 5.0.1",
  "fsevent",
  "fuser",
- "hbb_common",
+ "labdesk_common",
  "lazy_static",
  "libc",
  "objc2 0.5.2",
@@ -2539,7 +2539,7 @@ name = "dylib_virtual_display"
 version = "0.1.0"
 dependencies = [
  "cc",
- "hbb_common",
+ "labdesk_common",
  "lazy_static",
  "serde 1.0.228",
  "serde_derive",
@@ -2601,7 +2601,7 @@ name = "enigo"
 version = "0.0.14"
 dependencies = [
  "core-graphics 0.22.3",
- "hbb_common",
+ "labdesk_common",
  "libxdo-sys",
  "log",
  "objc",
@@ -3795,70 +3795,6 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "5971ac85611da7067dbfcabef3c70ebb5606018acd9e2a3903a0da507521e0d5"
 
 [[package]]
-name = "hbb_common"
-version = "0.1.0"
-dependencies = [
- "anyhow",
- "async-recursion",
- "backtrace",
- "base64 0.22.1",
- "bytes",
- "chrono",
- "clap 4.5.53",
- "confy",
- "default_net",
- "directories-next",
- "dirs-next",
- "dlopen",
- "env_logger 0.11.6",
- "filetime",
- "flexi_logger",
- "futures",
- "futures-util",
- "httparse",
- "lazy_static",
- "libc",
- "libloading 0.8.4",
- "log",
- "mac_address",
- "machine-uid",
- "osascript",
- "protobuf",
- "protobuf-codegen",
- "rand 0.8.8",
- "regex",
- "rustls-native-certs",
- "rustls-pki-types",
- "rustls-platform-verifier",
- "serde 1.0.228",
- "serde_derive",
- "serde_json 1.0.118",
- "sha2",
- "smithay-client-toolkit 0.20.0",
- "socket2 0.3.19",
- "sodiumoxide",
- "sysinfo",
- "thiserror 1.0.61",
- "tokio",
- "tokio-native-tls",
- "tokio-rustls",
- "tokio-socks",
- "tokio-tungstenite",
- "tokio-util",
- "toml 0.7.8",
- "tungstenite",
- "url",
- "users 0.11.0",
- "uuid",
- "webpki-roots 1.0.9",
- "webrtc",
- "whoami",
- "winapi 0.3.9",
- "x11 2.21.0",
- "zstd 0.13.1",
-]
-
-[[package]]
 name = "heck"
 version = "0.3.3"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -4591,7 +4527,6 @@ dependencies = [
  "foreign-types 0.3.2",
  "fruitbasket",
  "gtk",
- "hbb_common",
  "hex",
  "hound",
  "image 0.24.9",
@@ -4600,6 +4535,7 @@ dependencies = [
  "jni",
  "kcp-sys",
  "keepawake",
+ "labdesk_common",
  "lazy_static",
  "libpulse-binding",
  "libpulse-simple-binding",
@@ -4677,6 +4613,70 @@ dependencies = [
  "winapi 0.3.9",
  "windows 0.61.1",
  "winres",
+]
+
+[[package]]
+name = "labdesk_common"
+version = "0.1.0"
+dependencies = [
+ "anyhow",
+ "async-recursion",
+ "backtrace",
+ "base64 0.22.1",
+ "bytes",
+ "chrono",
+ "clap 4.5.53",
+ "confy",
+ "default_net",
+ "directories-next",
+ "dirs-next",
+ "dlopen",
+ "env_logger 0.11.6",
+ "filetime",
+ "flexi_logger",
+ "futures",
+ "futures-util",
+ "httparse",
+ "lazy_static",
+ "libc",
+ "libloading 0.8.4",
+ "log",
+ "mac_address",
+ "machine-uid",
+ "osascript",
+ "protobuf",
+ "protobuf-codegen",
+ "rand 0.8.8",
+ "regex",
+ "rustls-native-certs",
+ "rustls-pki-types",
+ "rustls-platform-verifier",
+ "serde 1.0.228",
+ "serde_derive",
+ "serde_json 1.0.118",
+ "sha2",
+ "smithay-client-toolkit 0.20.0",
+ "socket2 0.3.19",
+ "sodiumoxide",
+ "sysinfo",
+ "thiserror 1.0.61",
+ "tokio",
+ "tokio-native-tls",
+ "tokio-rustls",
+ "tokio-socks",
+ "tokio-tungstenite",
+ "tokio-util",
+ "toml 0.7.8",
+ "tungstenite",
+ "url",
+ "users 0.11.0",
+ "uuid",
+ "webpki-roots 1.0.9",
+ "webrtc",
+ "whoami",
+ "winapi 0.3.9",
+ "x11 2.21.0",
+ "zstd 0.13.1",
 ]
 
 [[package]]
@@ -4867,7 +4867,7 @@ dependencies = [
 name = "libxdo-sys"
 version = "0.11.0"
 dependencies = [
- "hbb_common",
+ "labdesk_common",
 ]
 
 [[package]]
@@ -7344,7 +7344,7 @@ checksum = "2b15c43186be67a4fd63bee50d0303afffcef381492ebe2c5d87f324e1b8815c"
 name = "remote_printer"
 version = "0.1.0"
 dependencies = [
- "hbb_common",
+ "labdesk_common",
  "winapi 0.3.9",
  "windows-strings 0.3.1",
 ]
@@ -7761,9 +7761,9 @@ dependencies = [
  "gstreamer",
  "gstreamer-app",
  "gstreamer-video",
- "hbb_common",
  "hwcodec",
  "jni",
+ "labdesk_common",
  "lazy_static",
  "log",
  "ndk 0.7.0",
@@ -9653,7 +9653,7 @@ checksum = "49874b5167b65d7193b8aba1567f5c7d93d001cafc34600cee003eda787e483f"
 name = "virtual_display"
 version = "0.1.0"
 dependencies = [
- "hbb_common",
+ "labdesk_common",
  "lazy_static",
 ]
 
