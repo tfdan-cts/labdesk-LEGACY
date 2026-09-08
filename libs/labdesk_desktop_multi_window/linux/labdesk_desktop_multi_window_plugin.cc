@@ -1,4 +1,4 @@
-#include "include/labdesk_desktop_multi_window/labdesk_desktop_multi_window_plugin.h"
+#include "include/labdesk_desktop_multi_window/desktop_multi_window_plugin.h"
 
 #include <flutter_linux/flutter_linux.h>
 #include <gtk/gtk.h>

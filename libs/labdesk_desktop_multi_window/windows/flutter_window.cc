@@ -14,7 +14,7 @@
 #include <string>
 #include <utility>
 
-#include "include/labdesk_desktop_multi_window/labdesk_desktop_multi_window_plugin.h"
+#include "include/labdesk_desktop_multi_window/desktop_multi_window_plugin.h"
 #include "multi_window_plugin_internal.h"
 
 /// LabDesk plugins registered into every sub-window through the method channel

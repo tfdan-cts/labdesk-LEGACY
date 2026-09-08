@@ -1,6 +1,6 @@
 #include "flutter_window.h"
 
-#include <labdesk_desktop_multi_window/labdesk_desktop_multi_window_plugin.h>
+#include <labdesk_desktop_multi_window/desktop_multi_window_plugin.h>
 #include <texture_rgba_renderer/texture_rgba_renderer_plugin_c_api.h>
 #include <flutter_gpu_texture_renderer/flutter_gpu_texture_renderer_plugin_c_api.h>
 

@@ -10,7 +10,7 @@
 #include "wayland_shortcuts_inhibit.h"
 #endif
 
-#include <labdesk_desktop_multi_window/labdesk_desktop_multi_window_plugin.h>
+#include <labdesk_desktop_multi_window/desktop_multi_window_plugin.h>
 
 #include "flutter/generated_plugin_registrant.h"
 

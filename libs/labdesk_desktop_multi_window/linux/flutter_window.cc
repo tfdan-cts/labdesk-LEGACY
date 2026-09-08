@@ -7,7 +7,7 @@
 #include <iostream>
 #include <cairo/cairo.h>
 
-#include "include/labdesk_desktop_multi_window/labdesk_desktop_multi_window_plugin.h"
+#include "include/labdesk_desktop_multi_window/desktop_multi_window_plugin.h"
 #include "labdesk_desktop_multi_window_plugin_internal.h"
 
 extern void fl_register_plugins(FlPluginRegistry *registry);
