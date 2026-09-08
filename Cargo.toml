@@ -1,6 +1,6 @@
 [package]
 name = "labdesk"
-version = "1.4.0-alpha.8"
+version = "1.4.0-alpha.9"
 authors = ["LabDesk contributors"]
 edition = "2021"
 build= "build.rs"

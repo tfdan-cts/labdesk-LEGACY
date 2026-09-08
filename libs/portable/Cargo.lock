@@ -161,7 +161,7 @@ dependencies = [
 
 [[package]]
 name = "labdesk-portable-packer"
-version = "1.4.0-alpha.8"
+version = "1.4.0-alpha.9"
 dependencies = [
  "brotli",
  "dirs",
