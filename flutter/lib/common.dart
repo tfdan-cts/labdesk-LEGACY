@@ -3,7 +3,7 @@ import 'dart:convert';
 import 'dart:math';
 
 import 'package:back_button_interceptor/back_button_interceptor.dart';
-import 'package:desktop_multi_window/desktop_multi_window.dart';
+import 'package:labdesk_desktop_multi_window/labdesk_desktop_multi_window.dart';
 import 'package:flutter/foundation.dart';
 import 'package:flutter/gestures.dart';
 import 'package:flutter/material.dart';

@@ -18,7 +18,7 @@ import 'package:flutter_hbb/plugin/common.dart';
 import 'package:get/get.dart';
 import 'package:provider/provider.dart';
 import 'package:debounce_throttle/debounce_throttle.dart';
-import 'package:desktop_multi_window/desktop_multi_window.dart';
+import 'package:labdesk_desktop_multi_window/labdesk_desktop_multi_window.dart';
 import 'package:window_size/window_size.dart' as window_size;
 
 import '../../common.dart';

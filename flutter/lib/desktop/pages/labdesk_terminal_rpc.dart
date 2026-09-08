@@ -5,7 +5,7 @@ import 'package:flutter_hbb/desktop/widgets/tabbar_widget.dart';
 import 'package:flutter_hbb/labdesk/services/terminal_text.dart';
 import 'package:flutter_hbb/models/model.dart' show FFI;
 import 'package:flutter_hbb/models/terminal_model.dart';
-import 'package:desktop_multi_window/desktop_multi_window.dart';
+import 'package:labdesk_desktop_multi_window/labdesk_desktop_multi_window.dart';
 import 'package:flutter_hbb/consts.dart';
 import 'package:flutter_hbb/labdesk/services/desktop_session_access.dart';
 

@@ -4,7 +4,7 @@ import 'dart:math';
 import 'dart:ui' as ui;
 
 import 'package:bot_toast/bot_toast.dart';
-import 'package:desktop_multi_window/desktop_multi_window.dart';
+import 'package:labdesk_desktop_multi_window/labdesk_desktop_multi_window.dart';
 import 'package:flutter/gestures.dart';
 import 'package:flutter/material.dart' hide TabBarTheme;
 import 'package:flutter_hbb/common.dart';

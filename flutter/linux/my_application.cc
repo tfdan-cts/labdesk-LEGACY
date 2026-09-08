@@ -10,7 +10,7 @@
 #include "wayland_shortcuts_inhibit.h"
 #endif
 
-#include <desktop_multi_window/desktop_multi_window_plugin.h>
+#include <labdesk_desktop_multi_window/labdesk_desktop_multi_window_plugin.h>
 
 #include "flutter/generated_plugin_registrant.h"
 
@@ -174,7 +174,7 @@ static void my_application_activate(GApplication* application) {
   // Handles both Wayland shortcuts inhibition (guarded inside) and side button
   // forwarding. Safe to call on X11-only builds - the plugin just stores the
   // callback pointer regardless of windowing system.
-  desktop_multi_window_plugin_set_window_created_callback(
+  labdesk_desktop_multi_window_plugin_set_window_created_callback(
       (WindowCreatedCallback)on_subwindow_created);
 
   fl_register_plugins(FL_PLUGIN_REGISTRY(view));

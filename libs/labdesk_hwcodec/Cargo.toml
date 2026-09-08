@@ -1,0 +1,20 @@
+[package]
+name = "labdesk_hwcodec"
+version = "0.7.1"
+edition = "2021"
+description = "Hardware video codec bindings for LabDesk Connect (FFmpeg with NVENC/NVDEC, AMF and Intel VPL), derived from the hwcodec crate."
+publish = false
+
+[features]
+default = []
+vram = []
+
+[dependencies]
+log = "0.4"
+serde_derive = "1.0"
+serde = "1.0"
+serde_json = "1.0"
+
+[build-dependencies]
+cc = "1.0"
+bindgen = "0.59"

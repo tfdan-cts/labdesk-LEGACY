@@ -46,3 +46,24 @@ Pinned version: 0.14.1, recorded with its SHA-256 in the same
 `third_party/netbird/manifest.txt` and fetched by the same
 `third_party/netbird/fetch.py`, which exits with an error rather than a warning
 when a downloaded archive does not match its pinned sum.
+
+## Multi-window plugin (labdesk_desktop_multi_window)
+
+The remote desktop, file transfer and port forward windows are separate Flutter
+windows created by `libs/labdesk_desktop_multi_window`, LabDesk's copy of the
+`desktop_multi_window` plugin by MixinNetwork, licensed under the Apache License
+2.0 (`libs/labdesk_desktop_multi_window/LICENSE`). It ships compiled into
+`labdesk_desktop_multi_window_plugin.dll` on Windows and the matching shared
+library on Linux and macOS.
+
+## Hardware codec SDK headers (labdesk_hwcodec)
+
+`libs/labdesk_hwcodec` compiles LabDesk Connect's hardware video codec support
+from the `hwcodec` crate (https://github.com/rustdesk-org/hwcodec, revision
+778df1f) and carries the SDK interface headers its build script reads under
+`libs/labdesk_hwcodec/externals`: AMD AMF 1.4.35 (MIT), Intel Media SDK 22.5.4
+(MIT), FFmpeg's nv-codec-headers n12.1.14.0 (MIT) and the NVIDIA Video Codec SDK
+12.1.14 interface headers (NVIDIA's license as stated in each header). They are
+compiled into `liblabdesk.dll`; no SDK runtime is shipped, the vendor drivers
+supply it at run time. The upstream crate publishes no license file at that
+revision; LabDesk distributes its modified copy under LabDesk's AGPL-3.0 terms.

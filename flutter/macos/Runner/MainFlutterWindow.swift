@@ -1,7 +1,7 @@
 import Cocoa
 import AVFoundation
 import FlutterMacOS
-import desktop_multi_window
+import labdesk_desktop_multi_window
 // import bitsdojo_window_macos
 
 import desktop_drop

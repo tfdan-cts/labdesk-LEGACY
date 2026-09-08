@@ -335,15 +335,6 @@ packages:
       url: "https://pub.dev"
     source: hosted
     version: "0.4.4"
-  desktop_multi_window:
-    dependency: "direct main"
-    description:
-      path: "."
-      ref: HEAD
-      resolved-ref: "533883bcb0ffe91a9afdb13b8bac9b14b3e054ba"
-      url: "https://github.com/rustdesk-org/rustdesk_desktop_multi_window"
-    source: git
-    version: "0.1.0"
   device_info_plus:
     dependency: "direct main"
     description:
@@ -862,6 +853,13 @@ packages:
       url: "https://pub.dev"
     source: hosted
     version: "4.9.0"
+  labdesk_desktop_multi_window:
+    dependency: "direct main"
+    description:
+      path: "../libs/labdesk_desktop_multi_window"
+      relative: true
+    source: path
+    version: "0.1.0"
   leak_tracker:
     dependency: transitive
     description:

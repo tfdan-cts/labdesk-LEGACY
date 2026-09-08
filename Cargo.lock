@@ -3937,19 +3937,6 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "9a3a5bfb195931eeb336b2a7b4d761daec841b97f947d34394601737a7bba5e4"
 
 [[package]]
-name = "hwcodec"
-version = "0.7.1"
-source = "git+https://github.com/rustdesk-org/hwcodec#778df1f99597722473b29443bac22ae6c23946fe"
-dependencies = [
- "bindgen 0.59.2",
- "cc",
- "log",
- "serde 1.0.228",
- "serde_derive",
- "serde_json 1.0.118",
-]
-
-[[package]]
 name = "hyper"
 version = "1.7.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -4491,7 +4478,7 @@ dependencies = [
 
 [[package]]
 name = "labdesk"
-version = "1.4.0-alpha.8"
+version = "1.4.0-alpha.9"
 dependencies = [
  "android-wakelock",
  "android_logger",
@@ -4604,7 +4591,7 @@ dependencies = [
 
 [[package]]
 name = "labdesk-portable-packer"
-version = "1.4.0-alpha.8"
+version = "1.4.0-alpha.9"
 dependencies = [
  "brotli",
  "dirs 5.0.1",
@@ -4677,6 +4664,18 @@ dependencies = [
  "winapi 0.3.9",
  "x11 2.21.0",
  "zstd 0.13.1",
+]
+
+[[package]]
+name = "labdesk_hwcodec"
+version = "0.7.1"
+dependencies = [
+ "bindgen 0.59.2",
+ "cc",
+ "log",
+ "serde 1.0.228",
+ "serde_derive",
+ "serde_json 1.0.118",
 ]
 
 [[package]]
@@ -7761,9 +7760,9 @@ dependencies = [
  "gstreamer",
  "gstreamer-app",
  "gstreamer-video",
- "hwcodec",
  "jni",
  "labdesk_common",
+ "labdesk_hwcodec",
  "lazy_static",
  "log",
  "ndk 0.7.0",
