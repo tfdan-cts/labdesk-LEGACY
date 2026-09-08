@@ -37,7 +37,8 @@ List<MachineRow> buildMachineRows({
   LabDeskPeerStatus? Function(String id)? serverStatusOf,
 }) {
   final rows = <String, MachineRow>{};
-  for (final p in peers.followedBy(organizationPeers)) {
+  // Managed inventory owns canonical names; cached peer aliases may be stale.
+  for (final p in organizationPeers.followedBy(peers)) {
     if (p.id.isEmpty) continue;
     if (rows.containsKey(p.id)) continue;
     final state = store.stateOf(p.id);

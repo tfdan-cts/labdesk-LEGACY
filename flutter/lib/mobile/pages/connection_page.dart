@@ -84,7 +84,11 @@ class _ConnectionPageState extends State<ConnectionPage> {
       slivers: [
         SliverList(
             delegate: SliverChildListDelegate([
-          if (!bind.isCustomClient() && !isIOS)
+          // LabDesk's native Android check publishes a nonempty notice only
+          // for a newer release with a matching published APK. checkUpdate()
+          // retains that event (including cached replay) in stateGlobal.
+          if (!isIOS && (!bind.isCustomClient() ||
+              (isAndroid && bind.mainGetAppNameSync() == 'LabDesk')))
             Obx(() => _buildUpdateUI(stateGlobal.updateUrl.value)),
           _buildRemoteIDTextField(),
         ])),
@@ -118,7 +122,8 @@ class _ConnectionPageState extends State<ConnectionPage> {
   }
 
   /// UI for software update.
-  /// If _updateUrl] is not empty, shows a button to update the software.
+  /// A native-confirmed notice only opens the published download page.
+  /// The URL is a presence signal; it never becomes an installer destination.
   Widget _buildUpdateUI(String updateUrl) {
     return updateUrl.isEmpty
         ? const SizedBox(height: 0)
@@ -138,11 +143,12 @@ class _ConnectionPageState extends State<ConnectionPage> {
             child: Container(
                 alignment: AlignmentDirectional.center,
                 width: double.infinity,
-                color: Colors.pinkAccent,
+                color: Theme.of(context).colorScheme.primary,
                 padding: const EdgeInsets.symmetric(vertical: 12),
                 child: Text(translate('Download new version'),
-                    style: const TextStyle(
-                        color: Colors.white, fontWeight: FontWeight.bold))));
+                    style: TextStyle(
+                        color: Theme.of(context).colorScheme.onPrimary,
+                        fontWeight: FontWeight.bold))));
   }
 
   /// UI for the remote ID TextField.

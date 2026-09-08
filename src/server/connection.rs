@@ -342,6 +342,7 @@ pub struct Connection {
     tx_to_cm: mpsc::UnboundedSender<ipc::Data>,
     authorized: bool,
     ticket_lease: Option<tokio::sync::oneshot::Receiver<()>>,
+    ticket_permissions: Option<crate::labdesk::ticket::ConnectPermissions>,
     require_2fa: Option<totp_rs::TOTP>,
     awaiting_2fa: bool,
     keyboard: bool,
@@ -551,6 +552,7 @@ impl Connection {
             tx_to_cm,
             authorized: false,
             ticket_lease: None,
+            ticket_permissions: None,
             keyboard: Self::permission(keys::OPTION_ENABLE_KEYBOARD, &control_permissions),
             clipboard: Self::permission(keys::OPTION_ENABLE_CLIPBOARD, &control_permissions),
             audio: Self::permission(keys::OPTION_ENABLE_AUDIO, &control_permissions),
@@ -750,6 +752,7 @@ impl Connection {
                             conn.chat_unanswered = false;
                         }
                         ipc::Data::SwitchPermission{name, enabled} => {
+                            let enabled = enabled && conn.ticket_permission_for_switch(&name);
                             log::info!("Change permission {} -> {}", name, enabled);
                             if &name == "keyboard" {
                                 conn.keyboard = enabled;
@@ -924,7 +927,7 @@ impl Connection {
                             conn.send(msg).await;
                         }
                         ipc::Data::VoiceCallResponse(accepted) => {
-                            conn.handle_voice_call(accepted).await;
+                            conn.handle_voice_call(accepted && conn.audio_enabled()).await;
                         }
                         ipc::Data::CloseVoiceCall(_reason) => {
                             log::debug!("Close the voice call from the ipc.");
@@ -1096,7 +1099,7 @@ impl Connection {
                     match data {
                         #[cfg(all(target_os = "windows", feature = "flutter"))]
                         ipc::Data::PrinterData(data) => {
-                            if Self::permission(keys::OPTION_ENABLE_REMOTE_PRINTER, &conn.control_permissions) {
+                            if Self::permission(keys::OPTION_ENABLE_REMOTE_PRINTER, &conn.control_permissions) && conn.ticket_allows("remotePrinter") && (conn.ticket_permissions.is_none() || Self::is_permission_enabled_locally(keys::OPTION_ENABLE_REMOTE_PRINTER)) {
                                 conn.send_printer_request(data).await;
                             } else {
                                 conn.send_remote_printing_disallowed().await;
@@ -1106,6 +1109,10 @@ impl Connection {
                     }
                 }
                 _ = second_timer.tick() => {
+                    if conn.authorized && conn.ticket_lease.is_none() && crate::labdesk::ticket::listener_requires_ticket() {
+                        conn.on_close("Central permissions require a broker ticket. Reconnect.", false).await;
+                        break;
+                    }
                     #[cfg(windows)]
                     conn.portable_check();
                     raii::AuthedConnID::check_wake_lock_on_setting_changed();
@@ -1816,6 +1823,10 @@ impl Connection {
         if self.authorized {
             return true;
         }
+        if self.ticket_lease.is_none() && crate::labdesk::ticket::refresh_listener_policy() {
+            self.send_login_error("This managed connection requires its authorized session ticket.").await;
+            return false;
+        }
         if self.require_2fa.is_some() && !self.is_recent_session(true) && !self.from_switch {
             self.require_2fa.as_ref().map(|totp| {
                 let bot = crate::auth_2fa::TelegramBot::get();
@@ -1850,6 +1861,14 @@ impl Connection {
             return true;
         }
         self.awaiting_2fa = false;
+        if self.ticket_permissions.is_some() {
+            for (permission, enabled) in [
+                (Permission::Keyboard, self.keyboard), (Permission::Clipboard, self.clipboard),
+                (Permission::Audio, self.audio), (Permission::File, self.file),
+                (Permission::Restart, self.restart), (Permission::Recording, self.recording),
+                (Permission::BlockInput, self.block_input), (Permission::PrivacyMode, self.privacy_mode),
+            ] { self.send_permission(permission, enabled).await; }
+        }
         if let Some(keep_alive) = self.prepare_terminal_login_for_authorization().await {
             return keep_alive;
         }
@@ -2267,6 +2286,84 @@ impl Connection {
         }
     }
 
+    fn ticket_permission_for_switch(&self, name: &str) -> bool {
+        let Some(p) = self.ticket_permissions.as_ref() else { return true; };
+        let (cap, key) = match name {
+            "keyboard" => ("control", keys::OPTION_ENABLE_KEYBOARD),
+            "clipboard" => ("clipboard", keys::OPTION_ENABLE_CLIPBOARD),
+            "audio" => ("audio", keys::OPTION_ENABLE_AUDIO),
+            "file" => ("files", keys::OPTION_ENABLE_FILE_TRANSFER),
+            "restart" => ("restart", keys::OPTION_ENABLE_REMOTE_RESTART),
+            "recording" => ("recording", keys::OPTION_ENABLE_RECORD_SESSION),
+            "block_input" => ("blockInput", keys::OPTION_ENABLE_BLOCK_INPUT),
+            "privacy_mode" => ("privacyMode", keys::OPTION_ENABLE_PRIVACY_MODE),
+            _ => return false,
+        };
+        p.allows(cap) && Self::is_permission_enabled_locally(key)
+    }
+
+    fn ticket_allows(&self, capability: &str) -> bool {
+        self.ticket_permissions.as_ref().map_or(true, |p| p.allows(capability))
+    }
+
+    fn ticket_message_allowed(&self, msg: &Message) -> bool {
+        if self.ticket_permissions.is_none() { return true; }
+        match msg.union.as_ref() {
+            Some(message::Union::MouseEvent(_)) | Some(message::Union::KeyEvent(_)) | Some(message::Union::PointerDeviceEvent(_)) => self.peer_keyboard_enabled(),
+            Some(message::Union::AudioFrame(_)) | Some(message::Union::VoiceCallRequest(_)) | Some(message::Union::VoiceCallResponse(_)) => self.audio_enabled(),
+            Some(message::Union::FileAction(action)) => self.file || self.ticket_printer_action_allowed(action),
+            Some(message::Union::FileResponse(_)) => self.file,
+            Some(message::Union::Misc(m)) => match m.union.as_ref() {
+                Some(misc::Union::AudioFormat(_)) => self.audio_enabled(),
+                Some(misc::Union::ElevationRequest(_)) | Some(misc::Union::SwitchSidesRequest(_))
+                | Some(misc::Union::ToggleVirtualDisplay(_)) | Some(misc::Union::ChangeResolution(_))
+                | Some(misc::Union::ChangeDisplayResolution(_)) | Some(misc::Union::SelectedSid(_))
+                | Some(misc::Union::PluginRequest(_)) => self.peer_keyboard_enabled() && self.ticket_allows("remoteConfig")
+                    && Self::is_permission_enabled_locally("allow-remote-config-modification"),
+                Some(misc::Union::ClientRecordStatus(_)) => self.recording,
+                _ => true,
+            },
+            _ => true,
+        }
+    }
+
+    fn ticket_mode_local_allowed(&self, p: &crate::labdesk::ticket::ConnectPermissions) -> bool {
+        let key = match p.mode.as_str() {
+            "desktop" => return true,
+            "files" => keys::OPTION_ENABLE_FILE_TRANSFER,
+            "camera" => keys::OPTION_ENABLE_CAMERA,
+            "terminal" | "terminal_admin" => keys::OPTION_ENABLE_TERMINAL,
+            "rdp" | "tcp" => keys::OPTION_ENABLE_TUNNEL,
+            _ => return false,
+        };
+        Self::is_permission_enabled_locally(key)
+    }
+
+    fn ticket_printer_action_allowed(&self, action: &FileAction) -> bool {
+        if !self.ticket_allows("remotePrinter") || !Self::is_permission_enabled_locally(keys::OPTION_ENABLE_REMOTE_PRINTER) {
+            return false;
+        }
+        let id = match action.union.as_ref() {
+            Some(file_action::Union::Send(send)) => return fs::JobType::from_proto(send.file_type) == fs::JobType::Printer
+                && self.printer_data.iter().any(|(_, path, _)| path == &send.path),
+            Some(file_action::Union::SendConfirm(confirm)) => confirm.id,
+            Some(file_action::Union::Cancel(cancel)) => cancel.id,
+            _ => return false,
+        };
+        self.read_jobs.iter().any(|job| job.id() == id && job.r#type == fs::JobType::Printer)
+    }
+
+    fn clamp_ticket_permissions(&mut self) {
+        self.keyboard &= self.ticket_permission_for_switch("keyboard");
+        self.clipboard &= self.ticket_permission_for_switch("clipboard");
+        self.audio &= self.ticket_permission_for_switch("audio");
+        self.file &= self.ticket_permission_for_switch("file");
+        self.restart &= self.ticket_permission_for_switch("restart");
+        self.recording &= self.ticket_permission_for_switch("recording");
+        self.block_input &= self.ticket_permission_for_switch("block_input");
+        self.privacy_mode &= self.ticket_permission_for_switch("privacy_mode");
+    }
+
     fn peer_keyboard_enabled(&self) -> bool {
         self.keyboard && !self.disable_keyboard
     }
@@ -2500,16 +2597,23 @@ impl Connection {
         state.failures = 0;
     }
 
-    fn validate_password(&mut self, allow_permanent_password: bool) -> bool {
+    fn try_claim_connect_ticket(&mut self) -> bool {
         // A connect ticket, before any stored password: the presented value is
         // sha256(H || salt) for a ticket issued to this connection's peer id,
         // and a second use of the same ticket is refused like a wrong password.
-        if let Some(ticket_id) = claim_pending_ticket(&self.lr.my_id, |h| self.validate_password_plain(h)) {
+        if let Some((ticket_id, permissions)) = claim_pending_ticket_scoped(&self.lr.my_id, |h| self.validate_password_plain(h), |p| p.accepts_login(&self.lr) && self.ticket_mode_local_allowed(p)) {
+            self.ticket_permissions = permissions;
+            self.clamp_ticket_permissions();
             log::info!("Connect ticket claimed by {}", self.lr.my_id);
             self.set_conn_audit_primary_auth(ConnAuditPrimaryAuth::ConnectTicket);
             self.ticket_lease = Some(crate::labdesk::ticket::monitor_lease(ticket_id));
             return true;
         }
+        false
+    }
+
+    fn validate_password(&mut self, allow_permanent_password: bool) -> bool {
+        if self.ticket_lease.is_some() || self.try_claim_connect_ticket() { return true; }
         if password::temporary_enabled() {
             let password = password::temporary_password();
             if self.validate_password_plain(&password) {
@@ -2832,6 +2936,10 @@ impl Connection {
                 return true;
             }
             self.reset_session_scope_for_login();
+            if (crate::labdesk::ticket::refresh_listener_policy() || has_pending_managed_ticket(&lr.my_id)) && self.ticket_lease.is_none() && !self.try_claim_connect_ticket() {
+                self.send_login_error("This managed connection requires its authorized session ticket.").await;
+                return false;
+            }
             if !self.check_id_whitelist().await {
                 return false;
             }
@@ -3158,6 +3266,7 @@ impl Connection {
                 }
             }
         } else if self.authorized {
+            if !self.ticket_message_allowed(&msg) { return true; }
             if self.port_forward_socket.is_some() {
                 return true;
             }
@@ -3470,7 +3579,7 @@ impl Connection {
                     }
                 }
                 Some(message::Union::FileAction(fa)) => {
-                    let mut handle_fa = self.file_transfer.is_some();
+                    let mut handle_fa = self.file_transfer.is_some() || (self.ticket_permissions.is_some() && self.ticket_printer_action_allowed(&fa));
                     if !handle_fa {
                         if let Some(file_action::Union::Send(s)) = fa.union.as_ref() {
                             if JobType::from_proto(s.file_type) == JobType::Printer {
@@ -6221,6 +6330,7 @@ pub fn claim_pending_switch_sides_uuid(id: &str, uuid: &uuid::Uuid) -> bool {
 /// claim it a second time.
 #[derive(Debug, Clone)]
 struct PendingTicket {
+    permissions: Option<crate::labdesk::ticket::ConnectPermissions>,
     id: String,
     controller_peer_id: String,
     secret_hash: String,
@@ -6229,6 +6339,12 @@ struct PendingTicket {
     /// Set once the daemon has been handed this id to report to the server
     /// (`POST /agent/ticket/:id/claimed`), so a claim is reported once.
     reported: bool,
+}
+
+fn has_pending_managed_ticket(controller: &str) -> bool {
+    let mut tickets = PENDING_TICKETS.lock().unwrap();
+    retain_live_tickets(&mut tickets);
+    tickets.iter().any(|t| t.controller_peer_id == controller && t.permissions.is_some())
 }
 
 fn retain_live_tickets(tickets: &mut Vec<PendingTicket>) {
@@ -6243,12 +6359,21 @@ pub fn insert_pending_ticket(
     secret_hash: String,
     expires_at: i64,
 ) -> bool {
+    insert_pending_ticket_scoped(id, controller_peer_id, secret_hash, expires_at, None)
+}
+
+pub fn insert_pending_ticket_scoped(
+    id: String, controller_peer_id: String, secret_hash: String, expires_at: i64,
+    permissions: Option<crate::labdesk::ticket::ConnectPermissions>,
+) -> bool {
+    if permissions.as_ref().is_some_and(|p| !p.valid()) { return false; }
     let mut tickets = PENDING_TICKETS.lock().unwrap();
     retain_live_tickets(&mut tickets);
     if tickets.iter().any(|t| t.id == id) {
         return false;
     }
     tickets.push(PendingTicket {
+        permissions,
         id,
         controller_peer_id,
         secret_hash,
@@ -6264,21 +6389,30 @@ pub fn insert_pending_ticket(
 /// another peer id, never twice.
 #[cfg(not(any(target_os = "android", target_os = "ios")))]
 pub fn claim_pending_ticket(controller_peer_id: &str, matches: impl Fn(&str) -> bool) -> Option<String> {
+    claim_pending_ticket_scoped(controller_peer_id, matches, |_| true).map(|(id, _)| id)
+}
+
+#[cfg(not(any(target_os = "android", target_os = "ios")))]
+pub fn claim_pending_ticket_scoped(controller_peer_id: &str, matches: impl Fn(&str) -> bool, accepts: impl Fn(&crate::labdesk::ticket::ConnectPermissions) -> bool) -> Option<(String, Option<crate::labdesk::ticket::ConnectPermissions>)> {
     let mut tickets = PENDING_TICKETS.lock().unwrap();
     retain_live_tickets(&mut tickets);
     for t in tickets.iter_mut() {
         if t.controller_peer_id == controller_peer_id && !t.claimed && matches(&t.secret_hash) {
+            if t.permissions.as_ref().is_some_and(|p| !accepts(p)) { return None; }
             #[cfg(test)]
-            return spend_pending_ticket(t, &mut SPENT_TICKETS.lock().unwrap()).then(|| t.id.clone());
+            return spend_pending_ticket(t, &mut SPENT_TICKETS.lock().unwrap()).then(|| (t.id.clone(), t.permissions.clone()));
             #[cfg(not(test))]
             {
-                let result = crate::labdesk::ticket::spend_on_machine(&t.id, t.expires_at);
-                return finish_pending_ticket(t, result).then(|| t.id.clone());
+                let result = crate::labdesk::ticket::spend_on_machine(&t.id, t.expires_at, t.permissions.clone());
+                return finish_pending_ticket(t, result).then(|| (t.id.clone(), t.permissions.clone()));
             }
         }
     }
     None
 }
+
+#[cfg(any(target_os = "android", target_os = "ios"))]
+pub fn claim_pending_ticket_scoped(_: &str, _: impl Fn(&str) -> bool, _: impl Fn(&crate::labdesk::ticket::ConnectPermissions) -> bool) -> Option<(String, Option<crate::labdesk::ticket::ConnectPermissions>)> { None }
 
 // Mobile has no privileged LabDesk service to authorize a durable spend.
 #[cfg(any(target_os = "android", target_os = "ios"))]
@@ -7361,6 +7495,7 @@ mod test {
     fn test_ticket_auth_requires_a_durable_spend() {
         let path = std::env::temp_dir().join(format!("labdesk-claim-{}", uuid::Uuid::new_v4())).join("spent.json");
         let mut ticket = PendingTicket {
+            permissions: None,
             id: "ticket".into(), controller_peer_id: "controller".into(), secret_hash: "hash".into(),
             expires_at: hbb_common::get_time() / 1000 + 120, claimed: false, reported: false,
         };

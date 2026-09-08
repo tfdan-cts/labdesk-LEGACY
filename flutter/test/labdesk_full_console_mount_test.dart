@@ -131,7 +131,7 @@ class BrokerBoundary extends HttpOverrides {
       return (
         200,
         {
-          'device': {'enrolled': true},
+          'device': {'enrolled': true, 'machineId': 'machine-1'},
           'invitations': []
         }
       );
@@ -143,6 +143,7 @@ class BrokerBoundary extends HttpOverrides {
             {
               'id': 'labnet-1',
               'name': 'Integration network',
+              'editable': true,
               'fullAccess': false,
               'syncPending': unrelatedGroupPending ||
                   !staleMembershipRead &&
@@ -356,7 +357,8 @@ void main() {
         expect(find.text('Labnets'), findsOneWidget);
         await tester.tap(find.text('Labnets'));
         await tester.pumpAndSettle();
-        expect(find.text('Integration network'), findsOneWidget);
+        // The network heading and invitation picker both show the selected name.
+        expect(find.text('Integration network'), findsNWidgets(2));
         expect(find.text(actionLabel), findsOneWidget);
         await tester.tap(find.text(actionLabel));
         await tester.pumpAndSettle();

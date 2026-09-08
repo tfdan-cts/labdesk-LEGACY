@@ -216,65 +216,16 @@ void main() {
     });
   });
 
-  group('server profile control', () {
-    const profiles = [
-      ProfileRow(
-          name: 'Lab network',
-          host: 'a',
-          relay: 'a',
-          api: '',
-          hasKey: true,
-          active: true),
-      ProfileRow(
-          name: 'Personal Tailnet',
-          host: 'b',
-          relay: 'b',
-          api: '',
-          hasKey: true,
-          active: false),
-    ];
-
-    testWidgets('profiles stay in Settings and selecting one reports the pick',
-        (tester) async {
-      String? picked;
-      await tester.pumpWidget(_wrap(ConsoleShell(
-        machines: const [],
-        profiles: profiles,
-        profileName: 'Lab network',
-        onProfileSelected: (name) => picked = name,
-      )));
-      expect(find.text('Lab network'), findsNothing);
-      expect(find.text('Personal Tailnet'), findsNothing);
-      await tester.tap(_nav(ConsoleSection.settings));
-      await tester.pumpAndSettle();
-      expect(find.byType(SettingsScreen), findsOneWidget);
-      expect(find.text('Lab network'), findsOneWidget);
-      await tester.tap(find.text('Personal Tailnet'));
-      await tester.pumpAndSettle();
-      expect(picked, 'Personal Tailnet');
-      await tester.tap(_nav(ConsoleSection.home));
-      await tester.pumpAndSettle();
-      expect(find.text('Lab network'), findsNothing);
-      expect(find.text('Personal Tailnet'), findsNothing);
-    });
-
-    testWidgets(
-        'without an activation callback Settings preserves profile data',
-        (tester) async {
-      await tester.pumpWidget(_wrap(const ConsoleShell(
-        machines: [],
-        profiles: profiles,
-        profileName: 'Lab network',
-        initialSection: ConsoleSection.settings,
-      )));
-      await tester.tap(find.text('Personal Tailnet'));
-      await tester.pumpAndSettle();
-      final settings =
-          tester.widget<SettingsScreen>(find.byType(SettingsScreen));
-      expect(settings.onActivate, isNull);
-      expect(
-          settings.profiles.where((p) => p.active).single.name, 'Lab network');
-    });
+  testWidgets('Settings directs network management to Labnets', (tester) async {
+    await tester.pumpWidget(_wrap(const ConsoleShell(
+      machines: [],
+      initialSection: ConsoleSection.settings,
+    )));
+    expect(find.byType(SettingsScreen), findsOneWidget);
+    expect(find.textContaining('Manage encrypted networks and machine access under Labnets.'), findsOneWidget);
+    await tester.tap(_nav(ConsoleSection.home));
+    await tester.pumpAndSettle();
+    expect(find.byType(SettingsScreen), findsNothing);
   });
 
   group('hosted sections', () {
@@ -672,6 +623,7 @@ void _machineRouteTests() {
     await tester.pumpAndSettle();
     expect(find.text('HOSTED AUTOMATION'), findsOneWidget);
     expect(changes.last, ConsoleSection.automation);
+    await tester.ensureVisible(find.widgetWithText(Tab, 'Machines'));
     await tester.tap(find.widgetWithText(Tab, 'Machines'));
     await tester.pumpAndSettle();
     expect(find.byType(FleetConsole), findsOneWidget);

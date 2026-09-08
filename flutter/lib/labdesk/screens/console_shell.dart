@@ -38,7 +38,7 @@ enum ConsoleSection {
 /// The two views of the fleet. Health used to be a section of its own that
 /// showed one machine, chosen on Fleet first; it is a tab here so the whole
 /// fleet's figures sit beside the reachability table they belong with.
-enum FleetTab { machines, health, alerts, jobs, automation }
+enum FleetTab { machines, health, alerts, updates, jobs, automation }
 
 const primaryConsoleSections = [
   ConsoleSection.home,
@@ -172,6 +172,7 @@ class ConsoleShell extends StatefulWidget {
     this.onTermsPressed,
     this.machineHealthFooter,
     this.alertsBuilder,
+    this.updatesBuilder,
     this.hosted = const {},
     this.sectionRequest,
     this.subItems = const {},
@@ -197,6 +198,7 @@ class ConsoleShell extends StatefulWidget {
   final VoidCallback? onTermsPressed;
   final Widget Function(String machineId)? machineHealthFooter;
   final WidgetBuilder? alertsBuilder;
+  final WidgetBuilder? updatesBuilder;
 
   /// What the Health tab accounts for, when that is not the same list.
   ///
@@ -307,6 +309,7 @@ class _ConsoleShellState extends State<ConsoleShell> {
     _helpTopic = switch (_section) {
       ConsoleSection.home => 'home',
       ConsoleSection.fleet => switch (_fleetTab) {
+          FleetTab.updates => 'updates',
           FleetTab.jobs => 'jobs',
           FleetTab.automation => 'automation',
           _ => 'fleet'
@@ -582,6 +585,9 @@ class _ConsoleShellState extends State<ConsoleShell> {
                       FleetTab.alerts => widget.alertsBuilder?.call(context) ??
                           const Center(
                               child: Text('Alerts require the connected client.')),
+                      FleetTab.updates => widget.updatesBuilder?.call(context) ??
+                          const Center(
+                              child: Text('Updates require the connected client.')),
                       FleetTab.jobs => widget.hosted[ConsoleSection.tools]
                               ?.call(context) ??
                           const _HostedElsewhere(section: ConsoleSection.tools),
@@ -714,6 +720,7 @@ class _FleetTabsState extends State<_FleetTabs> with TickerProviderStateMixin {
           Tab(text: 'Machines', height: 52),
           Tab(text: 'Health', height: 52),
           Tab(text: 'Alerts', height: 52),
+          Tab(text: 'Updates', height: 52),
           Tab(text: 'Jobs', height: 52),
           Tab(text: 'Automation', height: 52)
         ],

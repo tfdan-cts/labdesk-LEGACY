@@ -4555,7 +4555,7 @@ dependencies = [
 
 [[package]]
 name = "labdesk"
-version = "1.4.0-alpha.6"
+version = "1.4.0-alpha.8"
 dependencies = [
  "android-wakelock",
  "android_logger",
@@ -4668,7 +4668,7 @@ dependencies = [
 
 [[package]]
 name = "labdesk-portable-packer"
-version = "1.4.0-alpha.6"
+version = "1.4.0-alpha.8"
 dependencies = [
  "brotli",
  "dirs 5.0.1",

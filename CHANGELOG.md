@@ -3,6 +3,16 @@
 LabDesk's own versions. The RustDesk core underneath is stated in the README, not versioned here.
 Rules: `docs/VERSIONING.md`.
 
+## 1.4.0-alpha.8+80 — private candidate
+
+- Add expiring installer links, Labnet invitations and scoped sharing controls.
+- Align Connect capabilities, fleet administration and naming with account permissions.
+- Add exit selection, separate local and exit LAN access, and subnet hosting consent.
+- Add update notifications, automatic weekly windows and scheduled fleet updates.
+- Package the complete standalone updater and MSI with Labnet runtime 0.78.1-labdesk.3.
+
+Live endpoint, routing and compatible service acceptance remain release gates.
+
 ## 1.4.0-alpha.6+78 — private candidate
 
 - Patch dependencies selected for the Windows runtime and pin Rust 1.98.1.

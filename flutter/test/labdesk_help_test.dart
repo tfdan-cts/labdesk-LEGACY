@@ -28,10 +28,51 @@ Future<void> mount(WidgetTester tester,
 }
 
 void main() {
+  test('technical chapters cover each feature and separate encryption layers',
+      () {
+    for (final topic in helpTopics) {
+      expect(topic.manual.length, greaterThanOrEqualTo(2));
+      for (final chapter in topic.manual) {
+        expect(chapter.isManual, isTrue);
+        expect(chapter.references, isNotEmpty);
+      }
+    }
+    expect(searchHelp('ChaCha20').any((r) => r.entry.id == 'manual-wireguard'),
+        isTrue);
+    expect(
+        searchHelp('secretbox')
+            .any((r) => r.entry.id == 'manual-session-encryption'),
+        isTrue);
+  });
+
+  testWidgets(
+      'manual mode presents architecture rather than only state definitions',
+      (tester) async {
+    await mount(tester, topic: 'labnets');
+    expect(find.text('WireGuard encryption and the private network'),
+        findsNothing);
+    await tester.tap(find.byKey(const ValueKey('help-mode-true')));
+    await tester.pumpAndSettle();
+    await tester.scrollUntilVisible(
+        find.byKey(const ValueKey('help-entry-manual-wireguard')), 500,
+        scrollable: find.descendant(
+            of: find.byKey(const ValueKey('help-content-labnets-false')),
+            matching: find.byType(Scrollable)));
+    expect(find.text('WireGuard encryption and the private network'),
+        findsOneWidget);
+    expect(find.textContaining('ChaCha20-Poly1305'), findsOneWidget);
+    await tester.tap(find.byKey(const ValueKey('help-mode-false')));
+    await tester.pumpAndSettle();
+    expect(find.text('WireGuard encryption and the private network'),
+        findsNothing);
+    expect(find.text('Labnet, invitation, pending & approved'), findsOneWidget);
+  });
+
   test('manual covers every destination and glossary with traceable guidance',
       () {
     expect(helpTopics.map((t) => t.id).toSet(), {
       'home',
+      'updates',
       'fleet',
       'jobs',
       'automation',

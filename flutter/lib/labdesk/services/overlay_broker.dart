@@ -227,14 +227,17 @@ class OverlayBroker {
   OverlayBroker captureScope({String? targetPeerId}) {
     final credential = token();
     final organization = organizationId?.call();
+    final controllerPeer = peerId();
+    final controller = machineIdOf(controllerPeer);
     final target = targetPeerId == null ? null : machineIdOf(targetPeerId);
     return OverlayBroker(
       baseUrl: baseUrl,
       token: () => credential,
       organizationId: () => organization,
       sign: sign,
-      peerId: peerId,
-      machineIdOf: (id) => id == targetPeerId ? target! : machineIdOf(id),
+      peerId: () => controllerPeer,
+      machineIdOf: (id) => id == targetPeerId ? target! :
+          id == controllerPeer ? controller : machineIdOf(id),
       http: _http,
     );
   }
@@ -426,10 +429,12 @@ class OverlayBroker {
   /// organization. An id [machineIdOf] does not hold is sent empty rather than
   /// as a peer id, because a machine lab-desk.net cannot name is one it must
   /// refuse.
-  Future<SessionGrant> session(String targetPeerId) async {
+  Future<SessionGrant> session(String targetPeerId, {String mode = 'desktop'}) async {
     final j = await _human('POST', '/console/overlay/session', {
       'controller': machineIdOf(peerId()),
       'target': machineIdOf(targetPeerId),
+      'mode': mode,
+      'permissionsVersion': 1,
     });
     final ticket = j['ticket'];
     return SessionGrant(
@@ -439,6 +444,14 @@ class OverlayBroker {
         ticket: ticket is Map ? '${ticket['secret'] ?? ''}' : '');
   }
 
+  Future<Map<String, dynamic>> connectPermissions(String targetPeerId) =>
+      _human('GET', '/console/org/machines/${Uri.encodeComponent(machineIdOf(targetPeerId))}/connect-permissions');
+
+  Future<Map<String, dynamic>> setConnectPermissions(String targetPeerId,
+          List<String> capabilities, int revision) =>
+      _human('PUT', '/console/org/machines/${Uri.encodeComponent(machineIdOf(targetPeerId))}/connect-permissions',
+          {'capabilities': capabilities, 'revision': revision});
+
   /// True only after the target's privileged agent installed the one-time
   /// ticket in its listener. A WireGuard connection alone cannot prove this.
   Future<bool> sessionReady(String id) async =>
@@ -446,6 +459,17 @@ class OverlayBroker {
               '/console/overlay/session/${Uri.encodeComponent(id)}/ready'))[
           'ready'] ==
       true;
+
+  /// Recheck the exact claimed connection before using its cached terminal.
+  Future<bool> sessionAuthorized(String id, String targetPeerId, String mode) async {
+    final query = Uri(queryParameters: {
+      'mode': mode,
+      'controller': machineIdOf(peerId()),
+      'target': machineIdOf(targetPeerId),
+    }).query;
+    return (await _human('GET',
+        '/console/overlay/session/${Uri.encodeComponent(id)}/ready?$query'))['authorized'] == true;
+  }
 
   /// Best effort: a session that is over is over whether or not the release
   /// lands; the server sweeps what a dead client leaves behind.
@@ -533,6 +557,111 @@ class OverlayBroker {
 
   Future<String> organizationRole() async =>
       _str((await _human('GET', '/console/org'))['role']);
+
+  Future<void> renameProfile(String name) =>
+      _human('PATCH', '/console/me/profile', {'name': name});
+
+  Future<void> renameMachine(String machineId, String name) => _human('PATCH',
+      '/console/org/machines/${Uri.encodeComponent(machineId)}',
+      {'displayName': name});
+
+  Future<void> renameFleet(String fleetId, String name) => _human('PATCH',
+      '/console/org/fleets/${Uri.encodeComponent(fleetId)}', {'name': name});
+
+  Future<Map<String, dynamic>> downloadLinks() =>
+      _human('GET', '/console/download-links');
+
+  Future<Map<String, dynamic>> createDownloadLink(String platform,
+          {String? fleetId}) =>
+      _human('POST', '/console/download-links', {
+        'platform': platform,
+        if (fleetId != null) 'fleetId': fleetId,
+      });
+
+  Future<void> revokeDownloadLink(String id) =>
+      _human('DELETE', '/console/download-links/${Uri.encodeComponent(id)}');
+
+  Future<Map<String, dynamic>> updates() =>
+      _human('GET', '/console/org/updates');
+
+  Future<void> setUpdatePolicy(List<String> machineIds,
+          {required bool automatic,
+          required ({List<int> days, int startMinute, int windowMinutes})? weekly}) =>
+      _human('PUT', '/console/org/update-policies', {
+        'machineIds': machineIds,
+        'automatic': automatic,
+        'weekly': weekly == null ? null : {
+          'days': weekly.days,
+          'startMinute': weekly.startMinute,
+          'windowMinutes': weekly.windowMinutes,
+        },
+      });
+
+  Future<Map<String, dynamic>> scheduleUpdates(List<String> machineIds,
+          {required String action, required DateTime startsAt,
+          required DateTime endsAt}) =>
+      _human('POST', '/console/org/update-commands', {
+        'machineIds': machineIds,
+        'action': action,
+        'startsAt': startsAt.millisecondsSinceEpoch ~/ 1000,
+        'endsAt': endsAt.millisecondsSinceEpoch ~/ 1000,
+      });
+
+  Future<Map<String, dynamic>> cancelUpdate(String commandId) =>
+      _human('DELETE', '/console/org/update-commands/${Uri.encodeComponent(commandId)}');
+
+  Future<Map<String, dynamic>> labnetInvitations(String labnetId) =>
+      _human('GET', '/console/overlay/labnets/${Uri.encodeComponent(labnetId)}/invitations');
+
+  Future<Map<String, dynamic>> createLabnetInvitation(String labnetId,
+          {required String kind, required String delivery, String? email,
+          List<String> capabilities = const []}) =>
+      _human('POST', '/console/overlay/labnets/${Uri.encodeComponent(labnetId)}/invitations', {
+        'kind': kind, 'delivery': delivery, 'capabilities': capabilities,
+        if (email != null) 'email': email,
+      });
+
+  Future<Map<String, dynamic>> revokeLabnetInvitation(String labnetId, String invitationId) =>
+      _human('DELETE', '/console/overlay/labnets/${Uri.encodeComponent(labnetId)}/invitations/${Uri.encodeComponent(invitationId)}');
+
+  Future<void> setLabnetAccess(String labnetId, String accessId, List<String> capabilities) =>
+      _human('PATCH', '/console/overlay/labnets/${Uri.encodeComponent(labnetId)}/access/${Uri.encodeComponent(accessId)}', {'capabilities': capabilities});
+
+  Future<Map<String, dynamic>> sharedLabnets() => _human('GET', '/console/shared-labnets');
+
+  Future<Map<String, dynamic>> leaveSharedLabnet(String accessId) =>
+      _human('DELETE', '/console/shared-labnets/${Uri.encodeComponent(accessId)}');
+
+  Future<Map<String, dynamic>> machineRouting(String machineId) =>
+      _human('GET', '/console/overlay/machines/${Uri.encodeComponent(machineId)}/routing');
+
+  Future<Map<String, dynamic>> hostingOffers() => _machine('GET', '/agent/overlay/routing');
+
+  Future<Map<String, dynamic>> setMachineRouting(String machineId,
+          {required String? exitId, required int revision, required bool allowLocalLan}) =>
+      _human('PUT', '/console/overlay/machines/${Uri.encodeComponent(machineId)}/routing',
+          {'exitId': exitId, 'revision': revision, 'allowLocalLan': allowLocalLan});
+
+  Future<Map<String, dynamic>> exitOffers(String labnetId) =>
+      _human('GET', '/console/overlay/labnets/${Uri.encodeComponent(labnetId)}/exits');
+
+  Future<Map<String, dynamic>> offerExit(String labnetId, String machineId, {bool allowExitLan = false}) =>
+      _human('POST', '/console/overlay/labnets/${Uri.encodeComponent(labnetId)}/exits',
+          {'machineId': machineId, 'allowExitLan': allowExitLan});
+
+  Future<Map<String, dynamic>> revokeExit(String exitId) =>
+      _human('DELETE', '/console/overlay/exits/${Uri.encodeComponent(exitId)}');
+
+  Future<Map<String, dynamic>> subnets(String labnetId) =>
+      _human('GET', '/console/overlay/labnets/${Uri.encodeComponent(labnetId)}/subnets');
+
+  Future<Map<String, dynamic>> shareSubnet(String labnetId,
+          {required String machineId, required String name, required String cidr}) =>
+      _human('POST', '/console/overlay/labnets/${Uri.encodeComponent(labnetId)}/subnets',
+          {'machineId': machineId, 'name': name, 'cidr': cidr});
+
+  Future<Map<String, dynamic>> removeSubnet(String subnetId) =>
+      _human('DELETE', '/console/overlay/subnets/${Uri.encodeComponent(subnetId)}');
 
   /// The service applies organization and fleet authorization and returns its
   /// newest 500 events. A malformed response is not an empty alert list.
@@ -624,6 +753,8 @@ class OverlayBroker {
     final device = mine['device'] is Map ? mine['device'] as Map : const {};
     return LabnetInbox(
       enrolled: device['enrolled'] == true,
+      machineId: device['machineId'] is String && (device['machineId'] as String).trim().isNotEmpty
+          ? device['machineId'] as String : null,
       overlayIp:
           device['overlayIp'] is String ? device['overlayIp'] as String : null,
       invitations: [
@@ -642,17 +773,12 @@ class OverlayBroker {
             fullAccess: l['fullAccess'] == true,
             fleetId: l['fleetId'] is String ? l['fleetId'] as String : null,
             syncPending: l['syncPending'] == true,
-            // Every labnet this route answers is one the same caller may
-            // manage: it is scoped to their organization and narrowed to their
-            // fleets by the predicate `ownedLabnet` applies to every write
-            // (`narrowed`, src/worker/routes/overlay.ts). What their role may
-            // then do with it is `rule:write`, which the server checks on each
-            // call and this client does not model.
-            owner: true,
+            owner: l['editable'] == true,
             members: [
               for (final m in _rows(l['members']))
                 LabnetMember(
                   deviceId: _str(m['machineId']),
+                  machineName: m['machineName'] is String ? m['machineName'] as String : null,
                   status: _str(m['status']),
                   overlayIp: m['overlayIp'] is String
                       ? m['overlayIp'] as String

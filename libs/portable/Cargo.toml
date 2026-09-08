@@ -1,6 +1,6 @@
 [package]
 name = "labdesk-portable-packer"
-version = "1.4.0-alpha.6"
+version = "1.4.0-alpha.8"
 edition = "2021"
 description = "LabDesk Remote Desktop"
 

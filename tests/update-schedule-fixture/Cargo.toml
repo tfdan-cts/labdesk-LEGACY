@@ -1,0 +1,18 @@
+[package]
+name = "labdesk-update-schedule-fixture"
+version = "0.1.0"
+edition = "2021"
+publish = false
+
+[workspace]
+
+[dependencies]
+anyhow = "1"
+chrono = "0.4"
+lazy_static = "1"
+serde = "1"
+serde_derive = "1"
+serde_json = "1"
+tokio = { version = "1", features = ["rt", "time", "net"] }
+toml = "0.7"
+uuid = { version = "1", features = ["v4"] }

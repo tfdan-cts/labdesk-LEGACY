@@ -8,7 +8,7 @@ use std::{
         mpsc::{channel, Receiver, Sender},
         Mutex,
     },
-    time::{Duration, Instant},
+    time::Duration,
 };
 
 #[cfg(target_os = "macos")]
@@ -57,6 +57,37 @@ fn acquire_mac_update_lock() -> ResultType<MacUpdateLock> {
         return Err(err.into());
     }
     Ok(MacUpdateLock { _file: handle })
+}
+
+#[path = "update_schedule.rs"]
+mod schedule;
+
+pub(crate) fn update_status() -> Result<String, String> { schedule::read_status().map_err(|e| e.to_string()) }
+pub(crate) fn update_policy() -> Result<String, String> { schedule::read_policy().map_err(|e| e.to_string()) }
+pub(crate) fn set_update_policy(value: &str) -> Result<String, String> { schedule::write_policy(value).map_err(|e| e.to_string()) }
+pub(crate) fn is_newer_release(candidate: &str, current: &str) -> bool {
+    schedule::compare_versions(candidate, current) == Some(std::cmp::Ordering::Greater)
+}
+pub(crate) fn android_release_available(metadata: &serde_json::Value, version: &str) -> bool {
+    schedule::android_release_available(metadata, version)
+}
+
+#[cfg(any(target_os = "android", target_os = "ios"))]
+pub(crate) fn mobile_update_status() -> String {
+    let url = crate::common::SOFTWARE_UPDATE_URL.lock().unwrap().clone();
+    let supported = cfg!(target_os = "android");
+    let error = if supported { config::Config::get_option("labdesk-update-policy-error") }
+        else { "No iOS update distribution is configured for this app.".into() };
+    serde_json::json!({"currentVersion": crate::VERSION,
+        "availableVersion": if supported && !url.is_empty() { url.rsplit('/').next() } else { None },
+        "state": if !supported { "unsupported" } else if url.is_empty() { "idle" } else { "available" },
+        "error": if error.is_empty() { None } else { Some(error) },
+        "capabilities": {"check": supported, "install": false, "scheduling": false}}).to_string()
+}
+pub(crate) fn request_local_update(action: &str) -> Result<String, String> {
+    schedule::queue_local(action).map_err(|e| e.to_string())?;
+    manually_check_update().map_err(|e| e.to_string())?;
+    update_status()
 }
 
 enum UpdateMsg {
@@ -143,34 +174,17 @@ fn start_auto_update_check() -> Sender<UpdateMsg> {
 
 fn start_auto_update_check_(rx_msg: Receiver<UpdateMsg>) {
     std::thread::sleep(INITIAL_CHECK_DELAY);
-    if let Err(e) = check_update(false) {
-        log::error!("Error checking for updates: {}", e);
-    }
-
-    let mut last_check_time = Instant::now();
-    let mut check_interval = DUR_ONE_DAY;
+    #[cfg(target_os = "macos")]
+    wait_for_failed_update_retry();
     loop {
-        let recv_res = rx_msg.recv_timeout(check_interval);
-        match &recv_res {
-            Ok(UpdateMsg::CheckUpdate) | Err(_) => {
-                if last_check_time.elapsed() < MIN_INTERVAL {
-                    // log::debug!("Update check skipped due to minimum interval.");
-                    continue;
-                }
-                // Don't check update if there are alive connections.
-                if !has_no_active_conns() {
-                    check_interval = RETRY_INTERVAL;
-                    continue;
-                }
-                if let Err(e) = check_update(matches!(recv_res, Ok(UpdateMsg::CheckUpdate))) {
-                    log::error!("Error checking for updates: {}", e);
-                    check_interval = RETRY_INTERVAL;
-                } else {
-                    last_check_time = Instant::now();
-                    check_interval = DUR_ONE_DAY;
-                }
-            }
+        if let Err(error) = schedule::tick() {
+            log::warn!("[update] Scheduled check deferred: {}", error);
+        }
+        match rx_msg.recv_timeout(Duration::from_secs(60)) {
             Ok(UpdateMsg::Exit) => break,
+            Ok(UpdateMsg::CheckUpdate) => schedule::request_check(),
+            Err(std::sync::mpsc::RecvTimeoutError::Disconnected) => break,
+            Err(std::sync::mpsc::RecvTimeoutError::Timeout) => {}
         }
     }
 }
@@ -217,6 +231,7 @@ fn check_update(manually: bool) -> ResultType<()> {
             format!("{}/labdesk-{}-x86-sciter.exe", download_url, version)
         };
         log::info!("[update] lab-desk.net offers {} over {}", &version, crate::VERSION);
+        schedule::before_download()?;
         // What the asset has to hash to, learned before a byte of it is
         // fetched. There is no unverified path from here: an update whose
         // digest cannot be read is an update that does not happen.
@@ -272,6 +287,8 @@ fn check_update(manually: bool) -> ResultType<()> {
             // The trusted elevated receiver hashes its own protected copy
             // against the digest authenticated above before executing it.
             #[cfg(target_os = "windows")]
+            {
+            schedule::before_handoff(version)?;
             crate::platform::install_verified_update(
                 file_path
                     .to_str()
@@ -279,6 +296,7 @@ fn check_update(manually: bool) -> ResultType<()> {
                 &expected_sha256,
                 true,
             )?;
+            }
             // Nothing installs on the other desktop platforms from here, but a
             // download that does not match still has to fail the check loudly
             // and be deleted rather than left in the temp directory.
@@ -790,50 +808,14 @@ fn wait_for_failed_update_retry() {
 /// Called from `start_os_service()` which runs as root via LaunchDaemon.
 #[cfg(target_os = "macos")]
 pub fn start_auto_update_macos() {
-    let spawn_result = std::thread::Builder::new()
-        .name("labdesk-auto-update".to_owned())
-        .spawn(|| {
-            log::info!("[root-update] Auto-update scheduler thread started.");
-            std::thread::sleep(INITIAL_CHECK_DELAY);
-            wait_for_failed_update_retry();
-            let mut interval = DUR_ONE_DAY;
-            loop {
-                log::info!("[root-update] Running scheduled update check...");
-                let no_active_conns = has_no_active_conns_ipc();
-                if !no_active_conns {
-                    log::info!("[root-update] Active session in progress, retrying in 10 min.");
-                    interval = MIN_INTERVAL;
-                } else {
-                    match check_update_as_root() {
-                        Ok(update_started) => {
-                            if update_started {
-                                // The replacement script is detached and may fail
-                                // after this process returns. Always retry at the
-                                // failure interval until the new daemon replaces us.
-                                interval = RETRY_INTERVAL;
-                            } else {
-                                interval = DUR_ONE_DAY;
-                            }
-                        }
-                        Err(e) => {
-                            log::error!("[root-update] Update check failed: {}", e);
-                            interval = RETRY_INTERVAL;
-                        }
-                    }
-                }
-                std::thread::sleep(interval);
-            }
-        });
-    if let Err(err) = spawn_result {
-        log::error!("[root-update] Failed to start scheduler thread: {}", err);
-    }
+    start_auto_update();
 }
 
 #[cfg(target_os = "macos")]
 pub fn check_update_as_root() -> ResultType<bool> {
     let _update_lock = acquire_mac_update_lock()?;
     // Allow-auto-update setting
-    if !config::Config::get_bool_option(config::keys::OPTION_ALLOW_AUTO_UPDATE) {
+    if !schedule::install_authorized() {
         log::info!("[root-update] Auto update is disabled, skipping.");
         return Ok(false);
     }
@@ -897,6 +879,7 @@ pub fn check_update_as_root() -> ResultType<bool> {
     // What the disk image has to hash to, learned before it is fetched. A root
     // installer is never pointed at bytes nobody vouched for.
     let expected_sha256 = get_published_sha256(&dmg_url)?;
+    schedule::before_download()?;
     let client = create_http_client_with_url_strict(&dmg_url)?;
     // Use mktemp so a local user cannot pre-create a predictable path and
     // permanently deny updates for a reused service PID.
@@ -960,6 +943,10 @@ pub fn check_update_as_root() -> ResultType<bool> {
         return Err(e);
     }
     // Install silently as root
+    if let Err(error) = schedule::before_handoff(&version) {
+        std::fs::remove_dir_all(&private_tmp).ok();
+        return Err(error);
+    }
     let result = crate::platform::update_from_dmg_as_root(&tmp_path, &version);
     // Clean up download directory
     if let Err(e) = std::fs::remove_dir_all(&private_tmp) {
@@ -1073,35 +1060,7 @@ fn linux_asset_name(kind: &str, version: &str, arch: &str) -> String {
 /// `--server` is the desktop user's process and cannot install a package.
 #[cfg(target_os = "linux")]
 pub fn start_auto_update_linux() {
-    let spawned = std::thread::Builder::new()
-        .name("labdesk-auto-update".to_owned())
-        .spawn(|| {
-            log::info!("[root-update] The unattended update loop has started.");
-            std::thread::sleep(INITIAL_CHECK_DELAY);
-            loop {
-                let interval = if !has_no_active_conns_ipc() {
-                    log::info!("[root-update] A session is in progress, retrying in 10 minutes.");
-                    MIN_INTERVAL
-                } else {
-                    match check_update_as_root_linux() {
-                        // The install runs in a transient systemd unit that
-                        // outlives this process, so there is nothing more to do
-                        // here: either it replaces this service or the retry
-                        // interval brings us back.
-                        Ok(true) => RETRY_INTERVAL,
-                        Ok(false) => DUR_ONE_DAY,
-                        Err(err) => {
-                            log::error!("[root-update] The update check failed: {}", err);
-                            RETRY_INTERVAL
-                        }
-                    }
-                };
-                std::thread::sleep(interval);
-            }
-        });
-    if let Err(err) = spawned {
-        log::error!("[root-update] Failed to start the update loop: {}", err);
-    }
+    start_auto_update();
 }
 
 /// One unattended check, running as root. Returns whether an install was handed
@@ -1114,7 +1073,7 @@ pub fn start_auto_update_linux() {
 /// package it cannot install.
 #[cfg(target_os = "linux")]
 pub fn check_update_as_root_linux() -> ResultType<bool> {
-    if !config::Config::get_bool_option(config::keys::OPTION_ALLOW_AUTO_UPDATE) {
+    if !schedule::install_authorized() {
         log::info!("[root-update] Auto update is off, skipping.");
         return Ok(false);
     }
@@ -1158,6 +1117,7 @@ pub fn check_update_as_root_linux() -> ResultType<bool> {
     }
     // What the asset has to hash to, learned before a byte of it is fetched.
     let expected_sha256 = get_published_sha256(&asset_url)?;
+    schedule::before_download()?;
     log::info!(
         "[root-update] lab-desk.net offers {} over {}; the release publishes sha256 {} for {}",
         version,
@@ -1209,6 +1169,10 @@ pub fn check_update_as_root_linux() -> ResultType<bool> {
         bail!("[root-update] The download path is not valid UTF-8");
     };
     log::info!("[root-update] Handing {} to the update helper.", path);
+    if let Err(error) = schedule::before_handoff(&version) {
+        std::fs::remove_dir_all(&dir).ok();
+        return Err(error);
+    }
     crate::platform::install_update_as_root(path)?;
     Ok(true)
 }
