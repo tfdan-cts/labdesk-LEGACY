@@ -83,6 +83,7 @@ const _humanLabnets = {
       'name': 'Lab',
       'fullAccess': true,
       'fleetId': null,
+      'editable': true,
       'members': [
         {'machineId': 'm-1', 'status': 'approved', 'overlayIp': '100.64.0.5'},
         {'machineId': 'M3', 'status': 'pending', 'overlayIp': null},
@@ -179,7 +180,7 @@ void main() {
       'machine POST /agent/overlay/labnets/L1/leave {}',
       'machine DELETE /agent/overlay/enrol -',
       'human GET /console/org/machines -',
-      'human POST /console/overlay/session {"controller":"m-1","target":"M2"}',
+      'human POST /console/overlay/session {"controller":"m-1","target":"M2","mode":"desktop","permissionsVersion":1}',
       'human DELETE /console/overlay/session/s1 -',
       'human POST /console/overlay/labnets {"name":"Office"}',
       'human PATCH /console/overlay/labnets/L1 {"fullAccess":true}',
@@ -241,10 +242,7 @@ void main() {
     final l = inbox.labnets.single;
     expect(l.name, 'Lab');
     expect(l.fullAccess, isTrue);
-    // Neither route answers `owner`. Every labnet this one does answer is
-    // scoped to the caller's organization and narrowed to their fleets by the
-    // same predicate every write applies, so the console offers the owner's
-    // actions on all of them and the server decides.
+    // The human route explicitly supplies current management authority.
     expect(l.owner, isTrue);
     // The member id is `machineId`, which is what `invite` and `removeMember`
     // send back and what the Network section matches this machine against.
@@ -267,12 +265,12 @@ void main() {
   test('a session names both ends by the machine id, never by the peer id', () async {
     wire.reply = {'id': 's1', 'targetAddr': '100.64.0.9:21118', 'targetIdPk': 'pk='};
     await broker().session('900000001');
-    expect(jsonDecode(wire.calls.single.body!), {'controller': 'm-1', 'target': 'M2'});
+    expect(jsonDecode(wire.calls.single.body!), {'controller': 'm-1', 'target': 'M2', 'mode': 'desktop', 'permissionsVersion': 1});
     // A machine the organization's list does not hold is named to nobody
     // rather than named by a peer id the server would look up as a machine id.
     wire.calls.clear();
     await broker().session('700000002');
-    expect(jsonDecode(wire.calls.single.body!), {'controller': 'm-1', 'target': ''});
+    expect(jsonDecode(wire.calls.single.body!), {'controller': 'm-1', 'target': '', 'mode': 'desktop', 'permissionsVersion': 1});
   });
 
   test('a machine with no key of its own is refused before anything is sent', () async {

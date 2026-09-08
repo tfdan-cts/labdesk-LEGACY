@@ -1783,12 +1783,14 @@ pub fn run_after_install() -> ResultType<()> {
 }
 
 pub fn run_before_uninstall() -> ResultType<()> {
+    crate::labdesk::labnet::cleanup_local_lan_for_uninstall().map_err(|e| anyhow!(e))?;
     run_cmds(get_before_uninstall(true), true, "before_install")
 }
 
 fn get_before_uninstall(kill_self: bool) -> String {
     let app_name = crate::get_app_name();
     let ext = app_name.to_lowercase();
+    let (_, _, _, exe) = get_install_info();
     let filter = if kill_self {
         "".to_string()
     } else {
@@ -1797,6 +1799,8 @@ fn get_before_uninstall(kill_self: bool) -> String {
     format!(
         "
     chcp 65001
+    \"{exe}\" --cleanup-local-lan
+    if errorlevel 1 exit /b 1
     sc stop {app_name}
     sc delete {app_name}
     taskkill /F /IM {broker_exe}
@@ -3255,10 +3259,13 @@ pub fn try_lock_tray_single_instance() -> bool {
 pub fn uninstall_service(show_new_window: bool, _: bool) -> bool {
     log::info!("Uninstalling service...");
     let filter = format!(" /FI \"PID ne {}\"", get_current_pid());
+    let (_, _, _, exe) = get_install_info();
     Config::set_option("stop-service".into(), "Y".into());
     let cmds = format!(
         "
     chcp 65001
+    \"{exe}\" --cleanup-local-lan
+    if errorlevel 1 exit /b 1
     sc stop {app_name}
     sc delete {app_name}
     if exist \"%PROGRAMDATA%\\Microsoft\\Windows\\Start Menu\\Programs\\Startup\\{app_name} Tray.lnk\" del /f /q \"%PROGRAMDATA%\\Microsoft\\Windows\\Start Menu\\Programs\\Startup\\{app_name} Tray.lnk\"

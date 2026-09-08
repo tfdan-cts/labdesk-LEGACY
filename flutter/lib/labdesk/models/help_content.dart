@@ -1,14 +1,18 @@
+part 'help_manual.dart';
+
 /// User documentation reviewed against these named native and service sources.
 /// References are internal traceability, not links or executable instructions.
 class HelpEntry {
   const HelpEntry(this.id, this.title, this.meaning, this.action,
-      this.technical, this.references);
+      this.technical, this.references,
+      {this.isManual = false});
   final String id;
   final String title;
   final String meaning;
   final String action;
   final String technical;
   final List<String> references;
+  final bool isManual;
   String get searchText => '$title $meaning $action $technical'.toLowerCase();
 }
 
@@ -18,6 +22,7 @@ class HelpTopic {
   final String title;
   final String summary;
   final List<HelpEntry> entries;
+  List<HelpEntry> get manual => _helpManuals[id] ?? const [];
 }
 
 const _home = [
@@ -66,10 +71,44 @@ const _organization = [
 ];
 
 const helpTopics = <HelpTopic>[
+  HelpTopic('updates', 'Downloads & updates',
+      'Understand update requests, recurring maintenance windows and machine progress.', [
+    HelpEntry(
+        "installer-share-link",
+        "Installer share link, expiry & revocation",
+        "An installer share link lets its recipient download the selected platform’s current stable installer repeatedly for 24 hours. It is different from a single-use Labnet invitation and does not itself enroll a machine.",
+        "Create a link for a published platform and select a fleet when required. Copy the secret URL while it is shown: it appears only at creation and cannot be recovered from the link list. Revoke an unwanted link or create a replacement after expiry.",
+        "The service checks the link’s expiry, revocation and issuer’s current authority on each use, then resolves the current stable installer. It streams the download through the grant rather than redirecting the recipient to a permanent artifact URL. Listed metadata does not contain the secret URL.",
+        ["labdesk-site/src/worker/routes/download-links.ts", "flutter/lib/labdesk/services/overlay_broker.dart"]),
+    HelpEntry("update-version",
+        "Reported version, available update & unsupported",
+        "The installed version is the version last reported by the machine. An available update is offered by its updater. Missing status means the machine has not supplied a usable report; unsupported means it explicitly lacks that capability.",
+        "Read the report time and the Check, Install and Schedule capabilities before choosing machines. An old report does not establish the current installed version.",
+        "The GUI displays machine updater status independently of the published release. Version text alone does not prove upgrade ordering, platform compatibility or installation success.",
+        ["flutter/lib/labdesk/screens/local_update_controls.dart", "flutter/lib/labdesk/screens/fleet_updates_screen.dart", "labdesk-site/src/app/pages/updates.tsx"]),
+    HelpEntry("update-window",
+        "One-time request & weekly maintenance window",
+        "A one-time check looks for a release without requesting installation. Download and install requests installation during a bounded execution window. Automatic updates repeat within selected weekly windows.",
+        "In Fleet Updates, choose machines and either a one-time action or automatic policy. One-time dates use your local timezone; weekly schedules use each machine’s own timezone. Installation waits for idle time.",
+        "The GUI converts one-time dates to UTC instants; the service accepts a start within 366 days and an execution window up to 24 hours. Weekly days use Sunday zero and allow a 15–1440 minute window, including overnight windows. Turning off automatic updates does not cancel separate queued requests.",
+        ["flutter/lib/labdesk/screens/local_update_controls.dart", "flutter/lib/labdesk/screens/fleet_updates_screen.dart", "labdesk-site/src/app/pages/updates.tsx"]),
+    HelpEntry("update-progress",
+        "Queued, deferred, installing & completed",
+        "Queued means a request is waiting. Deferred means installation is waiting for idle time or its window. Installing means handoff is in progress. Completed requires the machine to report the new running version. Failed, cancelled and expired are different terminal outcomes.",
+        "Use the machine report timestamp and request error to decide the next step. Cancel while preparation is still cancellable; once installation begins the service can refuse cancellation. Do not retry blindly after an uncertain response.",
+        "A successful save is not an agent acknowledgement. Desired policy revision and reported applied revision remain separate. A machine that misses the execution window must not run that request later.",
+        ["flutter/lib/labdesk/screens/local_update_controls.dart", "flutter/lib/labdesk/screens/fleet_updates_screen.dart", "labdesk-site/src/app/pages/updates.tsx"]),
+    HelpEntry("update-managed",
+        "Managed policy & local update settings",
+        "An enrolled machine follows its organization’s update policy. Local settings cannot override it. Unmanaged machines can check, request a one-time installation, or configure automatic updates when their updater supports those actions.",
+        "Owners and Fleet Admins manage updates within their assigned fleets. On an unmanaged desktop, use Settings for a weekly window or the available-update prompt for a one-time action. An explicit older automatic preference may appear as every day, all day until narrowed.",
+        "Local controls read privileged service state asynchronously and re-read it after writes. A one-time local installation does not enable automatic updates. Unknown capability or management state disables mutations rather than inferring support.",
+        ["flutter/lib/labdesk/screens/local_update_controls.dart", "flutter/lib/labdesk/screens/fleet_updates_screen.dart", "labdesk-site/src/app/pages/updates.tsx"]),
+  ]),
   HelpTopic(
       'home',
       'Home & dashboard',
-      'Read your overview, choose meaningful scopes, and make a dashboard that fits your work.',
+      'Home brings machine availability, health and performance into a dashboard you can arrange. Choose the machines and reports that matter to you.',
       [
         HelpEntry(
             'reports',
@@ -110,7 +149,7 @@ const helpTopics = <HelpTopic>[
   HelpTopic(
       'fleet',
       'Fleet states & Health',
-      'Separate reachability, freshness, resource pressure, and connection measurements.',
+      'Fleet organizes enrolled machines and their reported health. Use it to find a machine, understand its condition and open its management tools.',
       [
         HelpEntry(
             'reachability',
@@ -163,7 +202,7 @@ const helpTopics = <HelpTopic>[
   HelpTopic(
       'jobs',
       'Jobs, tools & terminal',
-      'Run a tool on explicit targets, understand the result, and use a shell when needed.',
+      'Tools inspect or change a selected machine; Terminal provides an interactive command session. Review the target and expected effect before running work.',
       [
         HelpEntry(
             'tool-selection',
@@ -205,42 +244,73 @@ const helpTopics = <HelpTopic>[
               'flutter/lib/labdesk/screens/connect_screen.dart'
             ]),
       ]),
-  HelpTopic('automation', 'Automation',
-      'Understand when a local rule fires and what its result means.', [
-    HelpEntry(
-        'rules',
-        'Rule, trigger, target, action & cooldown',
-        'A rule combines a condition, target machines, an action, and an optional cooldown. Triggers include coming online, going offline, a metric above a threshold, uptime above a limit, and a schedule. Actions include a command, notification, Wake-on-LAN, and opening a desktop session.',
-        'Read the rule sentence, targets, action, and platform before enabling it. Disable a rule to stop future automatic evaluations. Use the run log to check what actually happened.',
-        'These desktop rules are evaluated by the local console while LabDesk is open. They are not a promise of server-side scheduling after the application closes. The engine establishes a baseline before firing a newly loaded rule.',
-        _automation),
-    HelpEntry(
-        'rule-timing',
-        'Transitions, continuous duration & schedules',
-        '“Comes online” and “goes offline” refer to changes the console observed. Unknown is not treated as an offline transition. “For N minutes” requires the condition to stay true continuously. A schedule runs at its next due slot while the console is evaluating rules.',
-        'Keep the console open for desktop automation. Expect a condition timer to reset if the condition clears. Do not expect missed schedule slots to replay when you reopen the application.',
-        'Online/offline triggers compare consecutive known states. Level conditions latch after firing and re-arm after the condition becomes false. Cooldown bounds repeat firings per rule and machine. Time-of-day schedules use the console clock.',
-        _automation),
-    HelpEntry(
-        'run-now',
-        'Run now & run outcomes',
-        'Run now deliberately tests a rule’s action against its targets without waiting for its trigger. A run without a reported outcome is still pending, not successful. A reported success or failure applies to that action attempt.',
-        'Use Run now only when you intend the action to happen. Read the result detail and inspect the target before retrying a failed or interrupted operation.',
-        'Run now bypasses the trigger and cooldown and writes to the same run log. Outcome is nullable: no result yet, success, or failure. Sending a Wake-on-LAN request does not by itself prove that the machine woke up.',
-        _automation),
-  ]),
+  HelpTopic(
+      'automation',
+      'Automation',
+      'Automation runs chosen actions when a rule matches machine state or a schedule. Desktop rules operate while this console is open.',
+      [
+        HelpEntry(
+            'rules',
+            'Rule, trigger, target, action & cooldown',
+            'A rule combines a condition, target machines, an action, and an optional cooldown. Triggers include coming online, going offline, a metric above a threshold, uptime above a limit, and a schedule. Actions include a command, notification, Wake-on-LAN, and opening a desktop session.',
+            'Read the rule sentence, targets, action, and platform before enabling it. Disable a rule to stop future automatic evaluations. Use the run log to check what actually happened.',
+            'These desktop rules are evaluated by the local console while LabDesk is open. They are not a promise of server-side scheduling after the application closes. The engine establishes a baseline before firing a newly loaded rule.',
+            _automation),
+        HelpEntry(
+            'rule-timing',
+            'Transitions, continuous duration & schedules',
+            '“Comes online” and “goes offline” refer to changes the console observed. Unknown is not treated as an offline transition. “For N minutes” requires the condition to stay true continuously. A schedule runs at its next due slot while the console is evaluating rules.',
+            'Keep the console open for desktop automation. Expect a condition timer to reset if the condition clears. Do not expect missed schedule slots to replay when you reopen the application.',
+            'Online/offline triggers compare consecutive known states. Level conditions latch after firing and re-arm after the condition becomes false. Cooldown bounds repeat firings per rule and machine. Time-of-day schedules use the console clock.',
+            _automation),
+        HelpEntry(
+            'run-now',
+            'Run now & run outcomes',
+            'Run now deliberately tests a rule’s action against its targets without waiting for its trigger. A run without a reported outcome is still pending, not successful. A reported success or failure applies to that action attempt.',
+            'Use Run now only when you intend the action to happen. Read the result detail and inspect the target before retrying a failed or interrupted operation.',
+            'Run now bypasses the trigger and cooldown and writes to the same run log. Outcome is nullable: no result yet, success, or failure. Sending a Wake-on-LAN request does not by itself prove that the machine woke up.',
+            _automation),
+      ]),
   HelpTopic(
       'labnets',
       'Labnets & network',
-      'Distinguish membership, tunnel readiness, and a machine’s own network report.',
+      'Labnets provide private encrypted connections between approved machines. Membership controls who can join; access rules control which connections are allowed.',
       [
-        HelpEntry(
-            'membership',
-            'Labnet, invitation, pending & approved',
-            'A labnet is an authorized network grouping. An invitation waits for a decision on the invited machine. A pending member has not approved; an approved member has accepted. Membership alone does not prove that its tunnel is currently ready.',
-            'Review the invitation and inviter on the receiving machine before accepting or declining. Use owner controls to manage a labnet when your account has that permission.',
-            'Invitation approval is a machine decision. Organization selection is an account view and does not approve invitations, enroll the device, or enable networking. Fleet membership and labnet membership are separate concepts.',
-            _labnets),
+    HelpEntry(
+        "membership",
+        "Labnet, invitation, pending & approved",
+        "A Labnet is an authorized network grouping. An invitation can include a person, a machine or both. A newly invited machine remains pending until it accepts through its own authenticated channel. Approved membership does not prove that the tunnel is currently ready.",
+        "Review the selected Labnet and requested access before deciding. If a machine is included, choose an enrolled machine you manage and then review the separate consent request on that machine. Owners and Fleet Admins manage Labnets within their authorized scope.",
+        "Account acceptance and machine approval are separate decisions. Choosing an organization does not approve an invitation, enroll a device or enable networking. A machine can belong to multiple Labnets; organization fleets and Labnet memberships remain separate.",
+        ["labdesk-site/src/worker/routes/labnet-invitations.ts", "labdesk-site/src/worker/labnet-sharing.ts"]),
+    HelpEntry(
+        "shared-invitations",
+        "Shared Labnet, guest & single-use invitation",
+        "A shared Labnet gives an invited account access to that selected network. It does not add the guest to the organization or expose its unrelated fleets. Invitation links expire after 48 hours and can be accepted or refused only once.",
+        "Sign in to review the network, invitation kind and granted Connect permissions. Opening the link does not accept it. Use the named recipient account when the invitation is email-bound. Ask for a new invitation if it has expired or already been used.",
+        "Acceptance records scoped guest access. Machine access still needs signed machine consent. No Connect capabilities are granted by default, and machine-only invitations cannot grant a person remote-control permissions. Revocation can leave cleanup pending while network changes are confirmed.",
+        ["labdesk-site/src/worker/routes/labnet-invitations.ts", "labdesk-site/src/worker/labnet-sharing.ts"]),
+    HelpEntry(
+        "connect-permissions",
+        "Connect capabilities & pending permission changes",
+        "Network membership and permission to operate a machine are separate. A session may allow viewing, control, files, terminal or another specific mode. A viewer organization role does not itself grant screen viewing.",
+        "Choose the intended connection mode and inspect the target permissions. Wait while the target has not acknowledged a policy change. If LabDesk asks you to update the target, update that machine before retrying the connection.",
+        "The signed session grant limits capabilities to target policy, local permissions and any explicit guest grant. Control requires view; administrator terminal requires terminal. Saved passwords and local approval do not replace managed authorization, and a session cannot expand its grant after connection.",
+        ["labdesk-site/src/worker/routes/connect-permissions.ts", "labdesk-site/src/worker/routes/overlay.ts", "src/labdesk/ticket.rs"]),
+    HelpEntry(
+        "exit-routing",
+        "Exit node, normal connection & LAN access",
+        "An exit node offers an internet route through another approved machine. Normal connection clears the selected exit. Allowing access to the client’s local LAN and allowing access to the exit machine’s LAN are two different permissions.",
+        "Use only choices the machine reports as supported. Read the latest report and wait for the applied selection to match the saved choice. Hosting requires consent on the exit machine; offering it from the console does not activate it.",
+        "A saved preference is desired state, not a daemon acknowledgement. Exit selection, client-local LAN access and exit-side LAN isolation have separate capability and state reports. An active provider route or acknowledged selection does not establish working internet egress.",
+        ["labdesk-site/src/worker/routes/exit-routing.ts", "flutter/lib/labdesk/models/exit_routing.dart", "flutter/lib/labdesk/screens/exit_routing_controls.dart"]),
+    HelpEntry(
+        "subnet-sharing",
+        "Shared subnet, routing host & cleanup pending",
+        "A shared subnet offers a specific network range through an approved routing machine. It is separate from an internet exit and does not expose a whole LAN simply because a machine joins a Labnet.",
+        "Choose the routing machine, name and intended CIDR range. Review the consent request on that machine. After removing an offer or membership, keep watching pending cleanup until the service confirms the relevant network changes.",
+        "Subnet sharing uses NetBird network resources, a routing host and explicit policy. Provider configuration alone is not an endpoint reachability test. Revocation removes the relevant authorization immediately, while provider cleanup can remain pending; independent membership or other grants can still allow a path.",
+        ["labdesk-site/src/worker/routes/exit-routing.ts", "flutter/lib/labdesk/models/exit_routing.dart", "flutter/lib/labdesk/screens/exit_routing_controls.dart"]),
         HelpEntry(
             'access',
             'Restricted access & full access',
@@ -270,7 +340,7 @@ const helpTopics = <HelpTopic>[
   HelpTopic(
       'device',
       'This device',
-      'Set up the computer you are using and read the service’s actual state.',
+      'This device shows the identity, enrollment and local services of the machine you are using. Network enablement and remote-control permissions are separate controls.',
       [
         HelpEntry(
             'identity',
@@ -304,7 +374,7 @@ const helpTopics = <HelpTopic>[
   HelpTopic(
       'sessions',
       'Sessions & Connect',
-      'Choose a connection mode and understand what an open session provides.',
+      'Connect opens remote capabilities such as desktop control, file transfer and terminal. Sessions lets you return to connections that are already open.',
       [
         HelpEntry(
             'connect-modes',
@@ -331,7 +401,7 @@ const helpTopics = <HelpTopic>[
   HelpTopic(
       'organizations',
       'Organizations & settings',
-      'Keep account access, machine enrollment, and connection configuration distinct.',
+      'Organizations separate people, fleets and permissions. Settings controls your local preferences and advanced connection configuration.',
       [
         HelpEntry(
             'organization-context',
@@ -362,44 +432,47 @@ const helpTopics = <HelpTopic>[
             'Help follows the application theme and respects reduced motion. Terms are displayed as a review draft under TrapLab Studios; the UI does not convert viewing the text into legal acceptance.',
             _organization),
       ]),
-  HelpTopic('glossary', 'Glossary',
-      'Plain-language definitions of the terms used across the console.', [
-    HelpEntry(
-        'glossary-fleet',
-        'Fleet, group & organization',
-        'An organization is an account and authorization boundary. A fleet is a server-owned grouping inside an organization. A local group is an organizational label held by the connection inventory.',
-        'Use the organization selector for account context and the fleet filter for a narrower set of machines. Do not expect a local group to grant organization access.',
-        'Dashboard filtering uses server fleet IDs and machine membership, not MachineRow.group.',
-        _home),
-    HelpEntry(
-        'glossary-collector',
-        'Collector, sample, timestamp & cadence',
-        'The collector reads measurements on a machine. A sample is one recorded reading. A timestamp states when a reading was taken or reported. Cadence is the configured reporting interval.',
-        'Read the timestamp before treating a number as current. A refresh is a request to fetch data, not proof that a fresh sample was collected.',
-        'Collector percentages and history can be absent independently. Configured cadence and actual delivery can differ because of service or network conditions.',
-        _health),
-    HelpEntry(
-        'glossary-scope',
-        'Scope, contributor & aggregate',
-        'Scope is the set of machines a view or report includes. A contributor is a machine with a usable value in a calculation. An aggregate combines values, such as a current average.',
-        'Check the names and contributor count before comparing averages. A missing machine is not a zero-valued contributor.',
-        'Home’s optional average excludes missing and stale values and identifies contributing machines. Per-machine reports retain individual names.',
-        _home),
-    HelpEntry(
-        'glossary-overlay',
-        'Overlay, relay, enrollment & session ticket',
-        'An overlay is the labnet connection layer between participating machines. A relay is an intermediate connection path. Enrollment registers a machine. A session ticket authorizes a particular connection attempt.',
-        'Check both membership and readiness when a labnet connection fails. Viewing an organization is not enrollment, and receiving a ticket is not proof that a session has opened.',
-        'Session preparation checks tunnel and target readiness, then tracks the grant for cleanup when the session ends or setup fails.',
-        _labnets),
-    HelpEntry(
-        'glossary-resource',
-        'Filesystem, throughput, counter & uptime',
-        'A filesystem is a storage volume or mounted storage area. Throughput is data transferred per unit of time. A counter is a running total. Uptime is elapsed time since boot.',
-        'Do not compare cumulative adapter byte totals directly with a session byte-per-second rate. Use the Disk tool to see individual volumes behind the fullest-filesystem summary.',
-        'The health model reports worst-filesystem used percentage and uptime seconds. Network adapter counters are cumulative; session rates are formatted separately.',
-        _health),
-  ]),
+  HelpTopic(
+      'glossary',
+      'Glossary',
+      'Understand the words used throughout LabDesk, including the difference between a machine being online, reporting current data and allowing a connection.',
+      [
+        HelpEntry(
+            'glossary-fleet',
+            'Fleet, group & organization',
+            'An organization is an account and authorization boundary. A fleet is a server-owned grouping inside an organization. A local group is an organizational label held by the connection inventory.',
+            'Use the organization selector for account context and the fleet filter for a narrower set of machines. Do not expect a local group to grant organization access.',
+            'Dashboard filtering uses server fleet IDs and machine membership, not MachineRow.group.',
+            _home),
+        HelpEntry(
+            'glossary-collector',
+            'Collector, sample, timestamp & cadence',
+            'The collector reads measurements on a machine. A sample is one recorded reading. A timestamp states when a reading was taken or reported. Cadence is the configured reporting interval.',
+            'Read the timestamp before treating a number as current. A refresh is a request to fetch data, not proof that a fresh sample was collected.',
+            'Collector percentages and history can be absent independently. Configured cadence and actual delivery can differ because of service or network conditions.',
+            _health),
+        HelpEntry(
+            'glossary-scope',
+            'Scope, contributor & aggregate',
+            'Scope is the set of machines a view or report includes. A contributor is a machine with a usable value in a calculation. An aggregate combines values, such as a current average.',
+            'Check the names and contributor count before comparing averages. A missing machine is not a zero-valued contributor.',
+            'Home’s optional average excludes missing and stale values and identifies contributing machines. Per-machine reports retain individual names.',
+            _home),
+        HelpEntry(
+            'glossary-overlay',
+            'Overlay, relay, enrollment & session ticket',
+            'An overlay is the labnet connection layer between participating machines. A relay is an intermediate connection path. Enrollment registers a machine. A session ticket authorizes a particular connection attempt.',
+            'Check both membership and readiness when a labnet connection fails. Viewing an organization is not enrollment, and receiving a ticket is not proof that a session has opened.',
+            'Session preparation checks tunnel and target readiness, then tracks the grant for cleanup when the session ends or setup fails.',
+            _labnets),
+        HelpEntry(
+            'glossary-resource',
+            'Filesystem, throughput, counter & uptime',
+            'A filesystem is a storage volume or mounted storage area. Throughput is data transferred per unit of time. A counter is a running total. Uptime is elapsed time since boot.',
+            'Do not compare cumulative adapter byte totals directly with a session byte-per-second rate. Use the Disk tool to see individual volumes behind the fullest-filesystem summary.',
+            'The health model reports worst-filesystem used percentage and uptime seconds. Network adapter counters are cumulative; session rates are formatted separately.',
+            _health),
+      ]),
 ];
 
 String helpTopicForContext(String context) => switch (context) {
@@ -423,7 +496,7 @@ List<({HelpTopic topic, HelpEntry entry})> searchHelp(String query) {
   if (words.isEmpty) return const [];
   return [
     for (final topic in helpTopics)
-      for (final entry in topic.entries)
+      for (final entry in [...topic.entries, ...topic.manual])
         if (words.every((word) =>
             '${topic.title.toLowerCase()} ${entry.searchText}'.contains(word)))
           (topic: topic, entry: entry)

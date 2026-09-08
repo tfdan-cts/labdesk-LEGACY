@@ -1,3 +1,4 @@
+pub mod connect_permissions;
 pub mod collector;
 pub mod disk;
 pub mod identity;

@@ -27,10 +27,12 @@ class _World {
   int brokerStatus = 200;
   int deleteStatus = 200;
   String link = 'P2P';
+  String? statusJson;
   Completer<String>? waitingStatus;
   Completer<(int, String)>? waitingReady;
   final acknowledgements = <bool>[];
   bool ticketReady = true;
+  bool authorized = true;
   int nextGrant = 0;
 
   Future<String> call(
@@ -39,7 +41,7 @@ class _World {
     if (waitingStatus != null) return waitingStatus!.future;
     final up = statuses.isEmpty ? true : statuses.removeAt(0);
     return jsonEncode(
-        {'output': _status(targetUp: up).replaceAll('P2P', link)});
+        {'output': statusJson ?? _status(targetUp: up).replaceAll('P2P', link)});
   }
 
   Future<(int, String)> http(
@@ -50,6 +52,9 @@ class _World {
     if (method == 'DELETE') return (deleteStatus, '{}');
     if (url.path.endsWith('/ready')) {
       if (waitingReady != null) return waitingReady!.future;
+      if (url.queryParameters.containsKey('mode')) {
+        return (brokerStatus, jsonEncode({'authorized': authorized}));
+      }
       return (
         brokerStatus,
         jsonEncode({
@@ -90,6 +95,106 @@ class _World {
 }
 
 void main() {
+  test('an existing window revalidates only its original exact mode', () async {
+    for (final mode in ['desktop', 'files', 'camera', 'terminal', 'terminal_admin', 'rdp', 'tcp']) {
+      final w = _World();
+      final session = w.session();
+      expect(await session.prepare('1', mode: mode), isTrue);
+      expect(await session.revalidate('1', mode: mode), isTrue);
+      expect(await session.revalidate('1', mode: mode), isTrue);
+      final mismatched = switch (mode) {
+        'terminal' => 'terminal_admin',
+        'terminal_admin' => 'terminal',
+        'rdp' => 'tcp',
+        'tcp' => 'rdp',
+        _ => 'terminal',
+      };
+      expect(await session.revalidate('1', mode: mismatched), isFalse);
+      expect(w.nextGrant, 1);
+    }
+  });
+
+  test('repeated commands revalidate their own grant without minting', () async {
+    final w = _World();
+    final session = w.session();
+    expect(await session.prepare('1', mode: 'terminal', owner: 'command'), isTrue);
+    for (var i = 0; i < 120; i++) {
+      expect(await session.revalidate('1', mode: 'terminal', owner: 'command'), isTrue);
+    }
+    expect(w.nextGrant, 1);
+    expect(await session.revalidate('1', mode: 'terminal'), isFalse);
+    expect(await session.revalidate('1', mode: 'desktop', owner: 'command'), isFalse);
+    w.authorized = false;
+    expect(await session.revalidate('1', mode: 'terminal', owner: 'command'), isFalse);
+    expect(w.nextGrant, 1);
+  });
+
+  test('reuse refuses account switches and switches during authorization', () async {
+    final w = _World();
+    final session = w.session();
+    await session.prepare('1', mode: 'terminal', owner: 'command');
+    w.token = 'token-b';
+    expect(await session.revalidate('1', mode: 'terminal', owner: 'command'), isFalse);
+    w.token = 'token-a';
+    w.waitingReady = Completer<(int, String)>();
+    final checking = session.revalidate('1', mode: 'terminal', owner: 'command');
+    await Future<void>.delayed(Duration.zero);
+    w.organization = 'org-b';
+    w.waitingReady!.complete((200, '{"authorized":true}'));
+    expect(await checking, isFalse);
+  });
+
+  test('closing one mode releases only its grant in either order', () async {
+    for (final closed in ['desktop', 'files']) {
+      final w = _World();
+      final session = w.session();
+      await session.prepare('1');
+      await session.prepare('1', mode: 'files');
+      await session.noteOpenSessions(['1'], owners: {'1': {'desktop', 'files'}});
+      final kept = closed == 'desktop' ? 'files' : 'desktop';
+      await session.noteOpenSessions(['1'], owners: {'1': {kept}});
+      final closedId = closed == 'desktop' ? 's1' : 's2';
+      expect(w.requests.where((r) => r.method == 'DELETE').map((r) => r.path),
+          ['/console/overlay/session/$closedId']);
+      expect(session.hasGrants, isTrue);
+      expect(w.options['labdesk-overlay-required-1'], 'Y');
+      await session.noteOpenSessions([], owners: {});
+      expect(w.requests.where((r) => r.method == 'DELETE'), hasLength(2));
+      expect(session.hasGrants, isFalse);
+    }
+  });
+
+  test('closing a command link preserves a visible terminal grant', () async {
+    final w = _World();
+    final session = w.session();
+    await session.prepare('1', mode: 'terminal');
+    await session.prepare('1', mode: 'terminal', owner: 'command');
+    await session.noteOpenSessions(['1'], owners: {'1': {'terminal', 'command'}});
+    await session.noteOpenSessions(['1'], owners: {'1': {'terminal'}});
+    expect(w.requests.where((r) => r.method == 'DELETE').map((r) => r.path),
+        ['/console/overlay/session/s2']);
+    expect(await session.revalidate('1', mode: 'terminal'), isTrue);
+    expect(await session.revalidate('1', mode: 'terminal', owner: 'command'), isFalse);
+  });
+
+  test('an acknowledged idle lazy peer can be dialed without a warmup probe',
+      () async {
+    const idle = '{"daemonStatus":"Connected","netbirdIp":"100.64.0.3/16",'
+        '"lazyConnectionEnabled":true,"peers":{"details":[{"fqdn":"b",'
+        '"netbirdIp":"100.64.0.9","publicKey":"x","status":"Idle",'
+        '"connectionType":"-"}]}}';
+    final ready = _World()..statusJson = idle;
+    expect(await ready.session().prepare('1'), isTrue);
+    expect(ready.options['labdesk-overlay-required-1'], 'Y');
+    expect(ready.options['labdesk-ticket-1'], 'c2VjcmV0');
+
+    final unready = _World()
+      ..statusJson = idle
+      ..ticketReady = false;
+    expect(await unready.session().prepare('1'), isFalse);
+    expect(unready.options.values, everyElement(isEmpty));
+  });
+
   test('account rejection is reported before stalled grant cleanup', () async {
     final w = _World();
     final releasing = Completer<void>();

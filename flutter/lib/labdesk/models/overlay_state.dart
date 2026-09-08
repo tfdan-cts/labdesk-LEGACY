@@ -48,6 +48,7 @@ class OverlayState {
     this.managementError = '',
     this.signalConnected = false,
     this.signalError = '',
+    this.lazyConnectionEnabled = false,
     this.peers = const [],
     this.daemonVersion = '',
     this.error = '',
@@ -65,6 +66,7 @@ class OverlayState {
   final String managementError;
   final bool signalConnected;
   final String signalError;
+  final bool lazyConnectionEnabled;
   final List<OverlayPeer> peers;
   final String daemonVersion;
 
@@ -126,6 +128,7 @@ class OverlayState {
       managementError: _str(management['error']),
       signalConnected: signal['connected'] == true,
       signalError: _str(signal['error']),
+      lazyConnectionEnabled: json['lazyConnectionEnabled'] == true,
       peers: peers,
       daemonVersion: _str(json['daemonVersion']),
     );

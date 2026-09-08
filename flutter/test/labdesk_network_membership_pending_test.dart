@@ -29,6 +29,7 @@ Map<String, dynamic> _labnets(String status, {String machineId = 'this-machine'}
           'name': 'Workshop',
           'fullAccess': false,
           'owner': true,
+          'editable': true,
           'syncPending': true,
           'members': [
             {'machineId': machineId, 'deviceId': machineId, 'status': status},

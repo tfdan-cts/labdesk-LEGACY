@@ -36,7 +36,7 @@ LabDesk versions identify the application, service, and bundled Labnet runtime t
 
 ## Labnet milestone
 
-The current private candidate is `1.4.0-alpha.6+78`, packaged as MSI `1.4.78`.
+The current private candidate is `1.4.0-alpha.8+80`, packaged as MSI `1.4.80`.
 The next acceptable release is `1.4.0`, after matching Windows installations on Zenbook
 and Foundry work across separate internet connections with Tailscale stopped on both.
 Acceptance covers enrollment, encrypted desktop/control/file operations, the enabled
@@ -57,7 +57,8 @@ The compiler archives are verified against the official Rust distribution checks
 This milestone is accepted on the Windows x64 installations named above. Updating the
 shared compiler setting does not establish compatibility for macOS, Linux, Android,
 Windows ARM64 or the legacy Sciter builds; those require their own validation. The
-standalone portable packer is not part of this candidate's signed MSI acceptance.
+standalone portable packer carries the complete application payload and is included
+alongside the MSI in this candidate's signed update inventory.
 
 ## History, and why 1.2.0
 

@@ -34,7 +34,8 @@ void main() {
       expect(rows.single.id, '201');
       expect(rows.single.status, LabDeskPeerStatus.online);
     });
-    test('a machine listed by several sources appears once, from the first '
+    test(
+        'a machine listed by several sources appears once, from the first '
         'source that named it', () {
       final rows = buildMachineRows(
         peers: [
@@ -48,11 +49,31 @@ void main() {
       );
 
       expect(rows.length, 2,
-          reason: 'recent, favourites and the current tab overlap; a machine in '
+          reason:
+              'recent, favourites and the current tab overlap; a machine in '
               'two of them is still one machine');
       expect(rows.firstWhere((r) => r.id == '101').displayName, 'Workshop NAS',
           reason: 'the earlier source wins, so a later store cannot overwrite '
               'the name the operator just saw');
+    });
+
+    test(
+        'canonical managed names replace cached aliases without duplicating peers',
+        () {
+      final rows = buildMachineRows(
+        peers: [
+          _peer('101', hostname: 'old-host', alias: 'Old local alias'),
+          _peer('102', hostname: 'local-host', alias: 'Personal alias'),
+        ],
+        organizationPeers: [_peer('101', hostname: 'Office workstation')],
+        store: LabDeskPeerStatusStore(),
+        historyOf: (_) => const [],
+      );
+      expect(rows.length, 2);
+      expect(rows.firstWhere((row) => row.id == '101').displayName,
+          'Office workstation');
+      expect(rows.firstWhere((row) => row.id == '102').displayName,
+          'Personal alias');
     });
 
     test('rows carry the status the store holds, not a guess', () {
@@ -98,8 +119,7 @@ void main() {
         historyOf: (_) => const [],
       );
 
-      expect(rows.map((r) => r.displayName).toList(),
-          ['alpha', 'beta', 'zeta'],
+      expect(rows.map((r) => r.displayName).toList(), ['alpha', 'beta', 'zeta'],
           reason: 'the alias is what is shown, so it is what sorts');
     });
 

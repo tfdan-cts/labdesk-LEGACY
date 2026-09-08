@@ -23,6 +23,76 @@ OverlayBroker _broker(_Wire w) =>
     OverlayBroker(baseUrl: 'https://lab-desk.net', token: () => 't', http: w.call);
 
 void main() {
+  test('Labnet management follows server authority and preserves shared names', () async {
+    final w = _Wire()..reply = {'labnets': [
+      {'id': 'managed', 'name': 'Fleet network', 'editable': true, 'members': [
+        {'machineId': 'guest', 'machineName': 'Guest laptop', 'status': 'pending'},
+      ]},
+      {'id': 'readonly', 'name': 'Read only', 'editable': false},
+      {'id': 'legacy', 'name': 'Unconfirmed'},
+    ]};
+    final inbox = await _broker(w).inbox();
+    expect(inbox.labnets.map((labnet) => labnet.owner), [true, false, false]);
+    expect(inbox.labnets.first.members.single.machineName, 'Guest laptop');
+    expect(inbox.withRemovalResults({('managed', 'guest'): 'removing'})
+        .labnets.first.members.single.machineName, 'Guest laptop');
+  });
+
+  test('fleet update actions preserve captured scope and exact UTC instants', () async {
+    final calls = <(String, String, Map<String, String>, Map<String, dynamic>?)>[];
+    var org = 'original', token = 'original-token';
+    final broker = OverlayBroker(baseUrl: 'https://lab-desk.net',
+      token: () => token, organizationId: () => org,
+      http: (method, uri, headers, body) async {
+        calls.add((method, uri.path, headers, body == null ? null : jsonDecode(body) as Map<String, dynamic>));
+        return (200, '{}');
+      }).captureScope();
+    org = 'other'; token = 'other-token';
+    await broker.updates();
+    await broker.setUpdatePolicy(['machine1'], automatic: true,
+        weekly: (days: [0, 6], startMinute: 1380, windowMinutes: 120));
+    await broker.scheduleUpdates(['machine1'], action: 'install',
+        startsAt: DateTime.parse('2026-09-10T02:00:00-05:00'),
+        endsAt: DateTime.parse('2026-09-10T03:00:00-05:00'));
+    await broker.cancelUpdate('command/one');
+    expect(calls.map((call) => (call.$1, call.$2)), [
+      ('GET', '/console/org/updates'), ('PUT', '/console/org/update-policies'),
+      ('POST', '/console/org/update-commands'), ('DELETE', '/console/org/update-commands/command%2Fone'),
+    ]);
+    expect(calls.every((call) => call.$3['x-labdesk-organization'] == 'original'
+        && call.$3['authorization'] == 'Bearer original-token'), isTrue);
+    expect(calls[1].$4?['weekly'], {'days': [0, 6], 'startMinute': 1380, 'windowMinutes': 120});
+    expect(calls[2].$4?['startsAt'], DateTime.utc(2026, 9, 10, 7).millisecondsSinceEpoch ~/ 1000);
+    expect(calls[2].$4?['endsAt'], DateTime.utc(2026, 9, 10, 8).millisecondsSinceEpoch ~/ 1000);
+  });
+
+  test('canonical names use the human account and machine IDs', () async {
+    final w = _Wire();
+    final broker = _broker(w);
+    await broker.renameProfile('Ada');
+    await broker.renameMachine('machine/one', 'Bench');
+    await broker.renameFleet('fleet/one', 'Workshop');
+    expect(w.calls, [
+      'PATCH /console/me/profile {"name":"Ada"}',
+      'PATCH /console/org/machines/machine%2Fone {"displayName":"Bench"}',
+      'PATCH /console/org/fleets/fleet%2Fone {"name":"Workshop"}',
+    ]);
+  });
+
+  test('installer links list, create and revoke use scoped human routes', () async {
+    final w = _Wire()..reply = {'links': [], 'platforms': []};
+    final broker = _broker(w);
+    expect(await broker.downloadLinks(), {'links': [], 'platforms': []});
+    w.reply = {'id': 'link1', 'url': 'https://lab-desk.net/s/d/secret'};
+    expect((await broker.createDownloadLink('windows-x86_64', fleetId: 'fleet1'))['id'], 'link1');
+    await broker.revokeDownloadLink('link/1');
+    expect(w.calls, [
+      'GET /console/download-links',
+      'POST /console/download-links {"platform":"windows-x86_64","fleetId":"fleet1"}',
+      'DELETE /console/download-links/link%2F1',
+    ]);
+  });
+
   test('the fleet is read with its hot row in one request', () async {
     final w = _Wire()
       ..byPath['/console/org/machines'] = {

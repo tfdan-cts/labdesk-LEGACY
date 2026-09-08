@@ -21,9 +21,6 @@ import 'package:flutter_hbb/desktop/pages/desktop_home_page.dart';
 import 'package:flutter_hbb/desktop/pages/desktop_setting_page.dart';
 import 'package:flutter_hbb/desktop/pages/labdesk_machine_link.dart';
 import 'package:flutter_hbb/desktop/pages/labdesk_terminal_rpc.dart';
-import 'package:flutter_hbb/desktop/widgets/update_progress.dart'
-    show handleUpdate;
-import 'package:flutter_hbb/models/state_model.dart';
 import 'package:get/get.dart';
 import 'package:flutter_hbb/models/peer_model.dart';
 import 'package:flutter_hbb/models/platform_model.dart';
@@ -33,6 +30,7 @@ import 'package:provider/provider.dart';
 import 'package:url_launcher/url_launcher.dart';
 
 import 'console_data.dart';
+import 'screens/local_update_controls.dart';
 import 'models/automation_models.dart';
 import 'models/chat_transcript.dart';
 import 'models/console_rpc.dart';
@@ -43,6 +41,7 @@ import 'models/net_view.dart';
 import 'models/tool_models.dart';
 import 'screens/actions_screen.dart';
 import 'screens/alerts_screen.dart';
+import 'screens/fleet_updates_screen.dart';
 import 'screens/automation_screen.dart';
 import 'screens/connect_screen.dart';
 import 'screens/console_shell.dart';
@@ -59,6 +58,7 @@ import 'models/labnet.dart';
 import 'screens/enrol_card.dart';
 import 'screens/labnet_card.dart';
 import 'screens/network_screen.dart';
+import 'screens/labnet_sharing_controls.dart';
 import 'screens/selfheal_card.dart';
 import 'services/overlay_broker.dart';
 import 'services/overlay_daemon.dart';
@@ -351,6 +351,7 @@ class _LabDeskConsolePageState extends State<LabDeskConsolePage> {
     try {
       final remote = <String, int>{};
       final terminal = <String, int>{};
+      final owners = <String, Set<String>>{};
       final presentWindows = <int>{};
       for (final type in [
         WindowType.RemoteDesktop,
@@ -369,6 +370,13 @@ class _LabDeskConsolePageState extends State<LabDeskConsolePage> {
           // A busy window is not a closed session. Retain its last successful
           // response until it answers again or the window manager removes it.
           for (final id in _windowPeerIds[w] ?? const <String>[]) {
+            (owners[id] ??= <String>{}).add(switch (type) {
+              WindowType.RemoteDesktop => 'desktop',
+              WindowType.Terminal => 'terminal',
+              WindowType.FileTransfer => 'files',
+              WindowType.ViewCamera => 'camera',
+              _ => 'tcp',
+            });
             if (type == WindowType.RemoteDesktop) remote[id] = w;
             if (type == WindowType.Terminal) terminal[id] = w;
           }
@@ -386,10 +394,13 @@ class _LabDeskConsolePageState extends State<LabDeskConsolePage> {
         ..clear()
         ..addAll(terminal);
       // A granted direct path is released once its session has come and gone.
+      for (final id in LabDeskMachineLink.openIds) {
+        (owners[id] ??= <String>{}).add('command');
+      }
       await _overlay.noteOpenSessions([
         ..._windowPeerIds.values.expand((ids) => ids),
         ...LabDeskMachineLink.openIds,
-      ]);
+      ], owners: owners);
 
       // Chat transcripts of the desktop sessions that are open.
       final chats = <String, SessionChat>{};
@@ -557,7 +568,7 @@ class _LabDeskConsolePageState extends State<LabDeskConsolePage> {
     final generation = _connectionGeneration;
     final tw = _terminalWindowOf[id];
     if (tw != null) {
-      final admission = await _prepareManagedLink(id);
+      final admission = await _prepareManagedLink(id, window: true);
       if (!desktopSessionAccess.accepts(authority)) return cancelled;
       if (admission != null) {
         return {'lines': <String>[], 'reason': admission};
@@ -1026,17 +1037,56 @@ class _LabDeskConsolePageState extends State<LabDeskConsolePage> {
 
     switch (action) {
       case RowAction.rename:
+        final epoch = _accountEpoch;
+        final credential = bind.mainGetLocalOption(key: 'access_token');
+        final machine = _orgByPeer[id];
+        final broker = _broker.captureScope(targetPeerId: id);
+        bool current() => mounted && epoch == _accountEpoch &&
+            credential == bind.mainGetLocalOption(key: 'access_token');
+        if (machine != null) {
+          if (!_currentAccount(epoch, credential)) return;
+          renameDialog(
+            oldName: machine.name,
+            validator: (value) {
+              final name = value?.trim() ?? '';
+              return name.isEmpty || name.length > 128 ||
+                  RegExp(r'[\x00-\x1f\x7f]').hasMatch(name)
+                  ? 'Use 1–128 characters without control characters.' : null;
+            },
+            onSubmit: (name) async {
+              if (name == machine.name) return;
+              if (!_currentAccount(epoch, credential) ||
+                  _machineIdOfPeer(id) != machine.id) return;
+              try {
+                await broker.renameMachine(machine.id, name.trim());
+                if (!_currentAccount(epoch, credential)) return;
+                await _pollInbox();
+              } on OverlayBrokerException catch (e) {
+                if (current()) showToast(e.message);
+              } catch (_) {
+                if (current()) showToast('Machine name could not be saved. Try again.');
+              }
+            },
+          );
+          return;
+        }
         final inAb = gFFI.abModel.find(id);
         final oldName = inAb != null && inAb.alias.isNotEmpty
             ? inAb.alias
             : await bind.mainGetPeerOption(id: id, key: 'alias');
+        if (!current()) return;
         renameDialog(
           oldName: oldName,
           onSubmit: (newName) async {
-            if (newName == oldName) return;
+            if (newName == oldName || !current()) return;
+            if (_orgByPeer.containsKey(id)) {
+              showToast('This machine is now managed. Reopen Rename to change its organization name.');
+              return;
+            }
             if (inAb != null) {
               await gFFI.abModel.changeAlias(id: id, alias: newName);
             }
+            if (!current()) return;
             await bind.mainSetPeerAlias(id: id, alias: newName);
             // The stores are filled from events, so the rename only reaches
             // the table once they are re-read. Without this the row keeps the
@@ -1261,18 +1311,50 @@ class _LabDeskConsolePageState extends State<LabDeskConsolePage> {
   }
 
   void _editDisplayName() {
+    final session = _readSessionContext();
+    if (session == null) {
+      showToast('Sign in to change your display name.');
+      return;
+    }
+    final epoch = _accountEpoch;
+    final broker = _broker.captureScope();
+    bool current() => mounted && epoch == _accountEpoch &&
+        session == _readSessionContext();
     renameDialog(
       oldName: _displayName,
+      validator: (value) {
+        final name = value?.trim() ?? '';
+        return name.isEmpty || name.length > 128 ||
+            RegExp(r'[\x00-\x1f\x7f]').hasMatch(name)
+            ? 'Use 1–128 characters without control characters.' : null;
+      },
       onSubmit: (name) async {
+        if (!current()) return;
+        try {
+          await broker.renameProfile(name.trim());
+        } on OverlayBrokerException catch (e) {
+          if (current()) showToast(e.message);
+          return;
+        } catch (_) {
+          if (current()) showToast('Display name could not be saved. Try again.');
+          return;
+        }
+        if (!current()) return;
         Map<String, dynamic> info = {};
         try {
           final j = jsonDecode(bind.mainGetLocalOption(key: 'user_info'));
           if (j is Map) info = Map<String, dynamic>.from(j);
         } catch (_) {}
         info['display_name'] = name.trim();
-        await bind.mainSetLocalOption(
-            key: 'user_info', value: jsonEncode(info));
-        if (mounted) setState(() {});
+        info['name'] = name.trim();
+        try {
+          await bind.mainSetLocalOption(
+              key: 'user_info', value: jsonEncode(info));
+        } catch (_) {
+          if (current()) showToast('Display name saved. Sign in again to refresh the local name.');
+          return;
+        }
+        if (current()) setState(() {});
       },
     );
   }
@@ -1284,8 +1366,9 @@ class _LabDeskConsolePageState extends State<LabDeskConsolePage> {
     final canWrite = _organization.ready &&
         machineId.isNotEmpty &&
         membership
-            .any((item) => item.role == 'owner' || item.role == 'technician');
+            .any((item) => const ['owner', 'fleet_admin', 'technician'].contains(item.role));
     final epoch = _accountEpoch;
+    final credential = bind.mainGetLocalOption(key: 'access_token');
     final broker = _broker.captureScope();
     return ReportingControl(
       key: ValueKey('$_shownContext/$machineId'),
@@ -1293,14 +1376,14 @@ class _LabDeskConsolePageState extends State<LabDeskConsolePage> {
       currentSeconds: _orgByPeer[peerId]?.state.flushSeconds,
       disabledReason: canWrite
           ? null
-          : 'An owner or technician can change reporting intervals.',
+          : 'An owner, fleet admin or technician can change reporting intervals.',
       onSave: canWrite
           ? (seconds) async {
-              if (!mounted || epoch != _accountEpoch) {
+              if (!_currentAccount(epoch, credential)) {
                 throw StateError('Organization changed. Reopen the machine.');
               }
               await broker.setReportingInterval(machineId, seconds);
-              if (!mounted || epoch != _accountEpoch) return;
+              if (!_currentAccount(epoch, credential)) return;
               await _pollInbox();
             }
           : null,
@@ -1877,7 +1960,7 @@ class _LabDeskConsolePageState extends State<LabDeskConsolePage> {
   /// path on, lab-desk.net is asked for the grant and the target is waited for
   /// before the client dials; without it, or if anything short of that
   /// happens, the session goes the way it always has.
-  Future<String?> _prepareManagedLink(String id) async {
+  Future<String?> _prepareManagedLink(String id, {bool window = false}) async {
     final authority = desktopSessionAccess.capture();
     final generation = _connectionGeneration;
     const cancelled = 'Labnet connection cancelled.';
@@ -1895,11 +1978,25 @@ class _LabDeskConsolePageState extends State<LabDeskConsolePage> {
     }
     final bool ready;
     try {
-      ready = await _overlay.prepare(id, onAuthenticationFailure: (e) {
+      void rejected(OverlayBrokerException e) {
         if (desktopSessionAccess.accepts(authority)) {
           _organization.invalidate(e.message);
         }
-      });
+      }
+      final reuse = window || LabDeskMachineLink.isOpen(id);
+      if (!reuse) {
+        // A closed command link no longer owns a usable transport. End its
+        // previous grant before issuing the ticket for the replacement.
+        await _overlay.release(id, owner: 'command');
+        if (generation != _connectionGeneration || !mounted ||
+            !desktopSessionAccess.accepts(authority)) return cancelled;
+      }
+      ready = reuse
+          ? await _overlay.revalidate(id, mode: 'terminal',
+              owner: window ? null : 'command', onAuthenticationFailure: rejected)
+          : await _overlay.prepare(id, mode: 'terminal', owner: 'command',
+              onAuthenticationFailure: rejected);
+      if (reuse && !window && !LabDeskMachineLink.isOpen(id)) return cancelled;
     } on OverlayBrokerException catch (e) {
       if (e.signInAgain && desktopSessionAccess.accepts(authority)) {
         _organization.invalidate(e.message);
@@ -1929,13 +2026,49 @@ class _LabDeskConsolePageState extends State<LabDeskConsolePage> {
         final state = await _enrolment.refresh();
         if (generation != _connectionGeneration || !mounted ||
             !desktopSessionAccess.accepts(authority)) return;
-        final ready =
-            state.phase == LabnetPhase.on && await _overlay.prepare(id,
-                onAuthenticationFailure: (e) {
+        final mode = terminalAdmin ? 'terminal_admin' : isTerminal ? 'terminal' : isFileTransfer ? 'files' : isViewCamera ? 'camera' : isRDP ? 'rdp' : isTcpTunneling ? 'tcp' : 'desktop';
+        final type = isTerminal || terminalAdmin ? WindowType.Terminal :
+            isFileTransfer ? WindowType.FileTransfer : isViewCamera ? WindowType.ViewCamera :
+            isRDP || isTcpTunneling ? WindowType.PortForward : WindowType.RemoteDesktop;
+        final owner = terminalAdmin ? 'terminal' : isRDP ? 'tcp' : mode;
+        void rejected(OverlayBrokerException e) {
           if (desktopSessionAccess.accepts(authority)) {
             _organization.invalidate(e.message);
           }
-        });
+        }
+        var ready = false;
+        if (state.phase == LabnetPhase.on) {
+          var existing = false;
+          var answered = true;
+          // Every window family focuses an existing peer instead of opening
+          // another transport. Refresh that fact before issuing any ticket.
+          for (final window in labDeskWinManager.windowsOfType(type)) {
+            final peers = await _ask(window, kWindowEventGetRemoteList)
+                .timeout(const Duration(seconds: 5), onTimeout: () => null);
+            if (generation != _connectionGeneration || !mounted ||
+                !desktopSessionAccess.accepts(authority)) return;
+            if (peers is! String) {
+              answered = false;
+              break;
+            }
+            if (peers.split(',').contains(id)) {
+              existing = true;
+              break;
+            }
+          }
+          if (!answered) {
+            _overlay.lastError = 'The connection window did not answer. Try again.';
+          } else if (existing) {
+            ready = await _overlay.revalidate(id, mode: mode,
+                onAuthenticationFailure: rejected);
+          } else {
+            await _overlay.release(id, owner: owner);
+            if (generation != _connectionGeneration || !mounted ||
+                !desktopSessionAccess.accepts(authority)) return;
+            ready = await _overlay.prepare(id, mode: mode,
+                onAuthenticationFailure: rejected);
+          }
+        }
         if (generation != _connectionGeneration || !mounted ||
             !desktopSessionAccess.accepts(authority)) return;
         if (!ready) {
@@ -2042,6 +2175,22 @@ class _LabDeskConsolePageState extends State<LabDeskConsolePage> {
   /// so the machines offered and this machine itself are named the same way
   /// rather than by the peer id the rest of the console uses.
   Widget _network(BuildContext context) => NetworkScreen(
+        extraContent: LabnetSharingControls(
+          organization: _organization,
+          daemon: _daemon,
+          localMachineId: _inbox.machineId ?? '',
+          localEnrolled: _inbox.enrolled,
+          labnets: _inbox.labnets,
+          machines: [
+            for (final machine in _orgMachines)
+              NetworkMachine(id: machine.id, name: machine.name),
+          ],
+          canManageMachines: _organization.ready &&
+              _organization.organizations.any((membership) =>
+                  membership.id == _organization.activeId &&
+                  const ['owner', 'fleet_admin', 'technician']
+                      .contains(membership.role)),
+        ),
         inbox: _inbox.withRemovalResults(_removalResults),
         thisMachineId: _machineIdOfPeer(_thisPeerId),
         machines: [
@@ -2190,6 +2339,12 @@ class _LabDeskConsolePageState extends State<LabDeskConsolePage> {
                             }
                           }
                         },
+                        updatesBuilder: (_) => FleetUpdatesScreen(
+                          organization: _organization,
+                          fleetNames: {
+                            for (final fleet in _fleets) fleet.id: fleet.name,
+                          },
+                        ),
                         alertsBuilder: (_) => AlertsScreen(
                           organization: _organization,
                           machineNames: {
@@ -2268,40 +2423,9 @@ class _LabDeskConsolePageState extends State<LabDeskConsolePage> {
     );
   }
 
-  /// A new version is available from lab-desk.net. The core sets
-  /// [stateGlobal.updateUrl] after its check on start and once a day; the
-  /// banner offers the in-app update the stock client already implements
-  /// (download, then a one-time elevation to install and relaunch).
-  Widget _updateBanner() => Obx(() {
-        final url = stateGlobal.updateUrl.value;
-        if (url.isEmpty || _updateDismissed) return const SizedBox.shrink();
-        final version = url.substring(url.lastIndexOf('/') + 1);
-        final theme = Theme.of(context);
-        return Material(
-          color: theme.colorScheme.primary.withOpacity(0.12),
-          child: Padding(
-            padding: const EdgeInsets.symmetric(horizontal: 20, vertical: 10),
-            child: Row(children: [
-              Icon(Icons.system_update_alt,
-                  size: 18, color: theme.colorScheme.primary),
-              const SizedBox(width: 12),
-              Expanded(
-                child: Text(
-                  '${translate('LabDesk')} $version ${translate('is available. Update installs in place and relaunches.')}',
-                  style: theme.textTheme.bodyMedium,
-                ),
-              ),
-              TextButton(
-                onPressed: () => handleUpdate(url),
-                child: Text(translate('Update now')),
-              ),
-              TextButton(
-                onPressed: () => setState(() => _updateDismissed = true),
-                child: Text(translate('Later')),
-              ),
-            ]),
-          ),
-        );
-      });
-  bool _updateDismissed = false;
+  Widget _updateBanner() => LocalUpdateControls(
+        banner: true,
+        readOption: (key) => bind.mainGetOption(key: key),
+        writeOption: (key, value) => bind.mainSetOption(key: key, value: value),
+      );
 }

@@ -1,6 +1,7 @@
 import 'dart:convert';
 
 import '../models/overlay_state.dart';
+import '../models/exit_routing.dart';
 
 /// One labnet daemon action, carried out by the privileged LabDesk process.
 ///
@@ -107,4 +108,31 @@ class OverlayDaemon {
       _fail('up', setupKey: setupKey, managementUrl: managementUrl);
 
   Future<String?> down() => _fail('down');
+
+  /// The privileged service fetches the signed machine preference itself. No
+  /// provider identifier, CLI argument or acknowledgement comes from Flutter.
+  Future<ExitRoutingReadback> routing({bool applyPending = false}) async {
+    final (output, error) = await _run(applyPending ? 'routing-sync' : 'routing-status');
+    if (error != null) return ExitRoutingReadback(error: error);
+    try {
+      final value = jsonDecode(output!);
+      if (value is Map<String, dynamic>) return ExitRoutingReadback.fromJson(value);
+    } catch (_) {}
+    return const ExitRoutingReadback(error: 'The service returned an unreadable routing state.');
+  }
+
+  /// Changes forwarding policy on the exit machine, not this client's local
+  /// route exceptions. The service verifies the patched daemon's live capability.
+  Future<String?> setExitLanAllowed(bool allowed) =>
+      _fail(allowed ? 'exit-isolation-disable' : 'exit-isolation-enable');
+
+  /// The privileged service prepares and verifies the offer's exact LAN policy
+  /// before signing consent. The UI cannot forge hosting capability reports.
+  Future<String?> decideExit(String offerId, {required bool accept}) =>
+      _fail('exit-consent', setupKey: jsonEncode({'offerId': offerId, 'accept': accept}));
+
+  /// Resolves the owned offer and its CIDR inside the privileged service, verifies
+  /// live router capability, and rejects conflicting exit LAN isolation.
+  Future<String?> decideSubnet(String offerId, {required bool accept}) =>
+      _fail('subnet-consent', setupKey: jsonEncode({'offerId': offerId, 'accept': accept}));
 }

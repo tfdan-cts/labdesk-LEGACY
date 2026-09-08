@@ -953,6 +953,16 @@ pub fn main_get_http_status(url: String) -> Option<String> {
 }
 
 pub fn main_get_option(key: String) -> String {
+    #[cfg(any(target_os = "android", target_os = "ios"))]
+    if key == "labdesk-update-status" { return crate::updater::mobile_update_status(); }
+    #[cfg(any(target_os = "android", target_os = "ios"))]
+    if key == "labdesk-update-policy" { return r#"{"revision":0,"automatic":false,"weekly":null}"#.into(); }
+    #[cfg(not(any(target_os = "android", target_os = "ios")))]
+    if matches!(key.as_str(), "labdesk-update-status" | "labdesk-update-policy") {
+        use crate::labdesk::labnet::{serve_here_or_over_ipc, LabnetRequest};
+        let request = if key == "labdesk-update-status" { LabnetRequest::UpdateStatus } else { LabnetRequest::UpdatePolicyRead };
+        return serve_here_or_over_ipc(request).unwrap_or_else(|error| serde_json::json!({"error": error}).to_string());
+    }
     get_option(key)
 }
 
@@ -973,6 +983,33 @@ pub fn main_show_option(_key: String) -> SyncReturn<bool> {
 }
 
 pub fn main_set_option(key: String, value: String) {
+    #[cfg(any(target_os = "android", target_os = "ios"))]
+    if matches!(key.as_str(), "labdesk-update-policy" | "labdesk-update-action") {
+        #[cfg(target_os = "android")]
+        if key == "labdesk-update-action" && value == "check" {
+            config::Config::set_option("labdesk-update-policy-error".into(), String::new());
+            std::thread::spawn(|| hbb_common::allow_err!(crate::common::do_check_software_update()));
+            return;
+        }
+        config::Config::set_option("labdesk-update-policy-error".into(), "Automatic installation and update schedules are unavailable on this mobile app.".into());
+        return;
+    }
+    #[cfg(not(any(target_os = "android", target_os = "ios")))]
+    if key == "labdesk-update-action" {
+        use crate::labdesk::labnet::{serve_here_or_over_ipc, LabnetRequest};
+        if let Err(error) = serve_here_or_over_ipc(LabnetRequest::UpdateAction { action: value }) {
+            log::warn!("Local update request refused: {}", error);
+        }
+        return;
+    }
+    #[cfg(not(any(target_os = "android", target_os = "ios")))]
+    if key == "labdesk-update-policy" {
+        use crate::labdesk::labnet::{serve_here_or_over_ipc, LabnetRequest};
+        if let Err(error) = serve_here_or_over_ipc(LabnetRequest::UpdatePolicyWrite { value }) {
+            log::warn!("Update preference save refused: {}", error);
+        }
+        return;
+    }
     #[cfg(target_os = "android")]
     {
         let is_permission_option = key.eq(config::keys::OPTION_ENABLE_CLIPBOARD)

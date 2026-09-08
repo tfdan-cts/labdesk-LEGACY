@@ -30,6 +30,17 @@
 // caller names: the netbird argument lists are fixed in `netbird_args`.
 
 use serde_derive::{Deserialize, Serialize};
+#[path = "route_selection.rs"]
+mod route_selection;
+#[path = "local_lan.rs"]
+mod local_lan;
+
+/// Called only by the elevated uninstall helper, before removing the service.
+/// Stop the writer first so its refresh thread cannot reinstall removed filters.
+#[cfg(windows)]
+pub fn cleanup_local_lan_for_uninstall() -> Result<(), String> {
+    local_lan::platform::uninstall(&crate::get_app_name())
+}
 #[cfg(not(any(target_os = "android", target_os = "ios")))]
 use std::path::{Path, PathBuf};
 
@@ -46,7 +57,13 @@ pub enum LabnetRequest {
     /// `main_agent_enrol` for a process that cannot read the key: answers the machine id.
     Enrol { token: String },
     /// Commit a one-time ticket spend in the machine's privileged ledger.
-    SpendTicket { id: String, expires_at: i64 },
+    ConnectPolicyRequired,
+    /// Fixed local update operations; neither a signing oracle nor a file path.
+    UpdateStatus,
+    UpdatePolicyRead,
+    UpdatePolicyWrite { value: String },
+    UpdateAction { action: String },
+    SpendTicket { id: String, expires_at: i64, permissions: Option<super::ticket::ConnectPermissions> },
     /// Recheck a previously claimed managed session; no arbitrary path or body.
     AuthorizeTicket { id: String },
     /// Drive the bundled netbird daemon. `action` is one of `install`, `start`, `up`,
@@ -70,6 +87,11 @@ impl std::fmt::Debug for LabnetRequest {
                 .field("path", path)
                 .finish_non_exhaustive(),
             Self::Enrol { .. } => formatter.debug_struct("Enrol").finish_non_exhaustive(),
+            Self::ConnectPolicyRequired => formatter.write_str("ConnectPolicyRequired"),
+            Self::UpdateStatus => formatter.write_str("UpdateStatus"),
+            Self::UpdatePolicyRead => formatter.write_str("UpdatePolicyRead"),
+            Self::UpdatePolicyWrite { .. } => formatter.write_str("UpdatePolicyWrite"),
+            Self::UpdateAction { action } => formatter.debug_struct("UpdateAction").field("action", action).finish(),
             Self::SpendTicket { id, .. } => formatter.debug_struct("SpendTicket").field("id", id).finish_non_exhaustive(),
             Self::AuthorizeTicket { id } => formatter.debug_struct("AuthorizeTicket").field("id", id).finish_non_exhaustive(),
             Self::Daemon {
@@ -92,7 +114,8 @@ impl LabnetRequest {
     pub fn ipc_timeout_ms(&self) -> u64 {
         match self {
             Self::Sign { .. } => 3_000,
-            Self::SpendTicket { .. } | Self::AuthorizeTicket { .. } => 5_000,
+            Self::ConnectPolicyRequired | Self::SpendTicket { .. } | Self::AuthorizeTicket { .. } => 5_000,
+            Self::UpdateStatus | Self::UpdatePolicyRead | Self::UpdatePolicyWrite { .. } | Self::UpdateAction { .. } => 5_000,
             Self::Enrol { .. } => 30_000,
             Self::Daemon { .. } => 120_000,
         }
@@ -111,6 +134,8 @@ const SERVICE_NAME: &str = "labdesk-netbird";
 /// The only control plane the daemon may be pointed at (docs/LABNET-SERVER.md).
 #[cfg(not(any(target_os = "android", target_os = "ios")))]
 const MANAGEMENT_HOST: &str = "nb.lab-desk.net";
+#[cfg(not(any(target_os = "android", target_os = "ios")))]
+static ROUTING_OPERATION: std::sync::Mutex<()> = std::sync::Mutex::new(());
 
 /// Serve one request in the privileged process, or say why not. Blocking: it signs,
 /// makes an HTTPS request or waits on a netbird process, so the IPC handler runs it off
@@ -125,9 +150,14 @@ pub fn serve(request: LabnetRequest) -> Result<String, String> {
     }
     match request {
         LabnetRequest::Sign { method, path, body } => sign_console_request(&method, &path, body.as_bytes(), sign_here),
-        LabnetRequest::SpendTicket { id, expires_at } => super::ticket::spend_here(&id, expires_at)
+        LabnetRequest::ConnectPolicyRequired => super::ticket::policy_required_here().map(|v| v.to_string()).map_err(|e| e.to_string()),
+        LabnetRequest::UpdateStatus => crate::updater::update_status(),
+        LabnetRequest::UpdatePolicyRead => crate::updater::update_policy(),
+        LabnetRequest::UpdatePolicyWrite { value } => crate::updater::set_update_policy(&value),
+        LabnetRequest::UpdateAction { action } => crate::updater::request_local_update(&action),
+        LabnetRequest::SpendTicket { id, expires_at, permissions } => super::ticket::spend_here(&id, expires_at, permissions.as_ref())
             .map(|spent| spent.to_string()).map_err(|err| err.to_string()),
-        LabnetRequest::AuthorizeTicket { id } => super::ticket::authority_here(&id, false)
+        LabnetRequest::AuthorizeTicket { id } => super::ticket::authority_here(&id, false, None)
             .map(|authorized| authorized.to_string()).map_err(|err| err.to_string()),
         LabnetRequest::Enrol { token } => {
             super::identity::enrol(&token, &hbb_common::config::Config::get_id())
@@ -154,7 +184,7 @@ fn sign_console_request(method: &str, path: &str, body: &[u8], signer: impl FnOn
     let allowed = matches!((method, path),
         ("POST" | "DELETE", "/agent/overlay/enrol")
         | ("POST", "/agent/overlay/self")
-        | ("GET", "/agent/overlay/inbox"))
+        | ("GET", "/agent/overlay/inbox" | "/agent/overlay/routing"))
         || (method == "POST" && (consent_id("/agent/overlay/invites/", "/decide")
             || consent_id("/agent/overlay/labnets/", "/leave")));
     if !allowed || body.len() > 16 * 1024 {
@@ -329,6 +359,10 @@ pub fn netbird_args(
         ],
         "down" => vec![s("down")],
         "status" => vec![s("status"), s("--json")],
+        "routes-list" => vec![s("networks"), s("list")],
+        "exit-isolation-state" => vec![s("networks"), s("exit-isolation")],
+        "exit-isolation-on" => vec![s("up"), s("--block-lan-access=true")],
+        "exit-isolation-off" => vec![s("up"), s("--block-lan-access=false")],
         _ => return None,
     };
     args.push(s("--daemon-addr"));
@@ -478,6 +512,66 @@ fn owned_windows_service_is_configured(binary: &Path, dir: &Path) -> bool {
 
 #[cfg(not(any(target_os = "android", target_os = "ios")))]
 fn daemon(action: &str, setup_key: &str, management_url: &str) -> Result<String, String> {
+    if matches!(action, "exit-isolation-on" | "exit-isolation-off") {
+        return Err("Exit LAN policy changes require the checked consent operation".into());
+    }
+    if matches!(action, "exit-consent" | "subnet-consent") {
+        if !management_url.is_empty() { return Err("Exit consent does not accept a management URL".into()); }
+        #[derive(Deserialize)]
+        #[serde(rename_all = "camelCase", deny_unknown_fields)]
+        struct Decision { offer_id: String, accept: bool }
+        let decision: Decision = serde_json::from_str(setup_key).map_err(|_| "Invalid exit consent")?;
+        if decision.offer_id.len() != 36 || !route_selection::valid_exit_id(&format!("ld-{}", decision.offer_id)) { return Err("Invalid exit offer identifier".into()); }
+        let _lock = ROUTING_OPERATION.lock().map_err(|_| "Routing operation unavailable")?;
+        let intent = routing_http("GET", "/agent/overlay/routing", "")?;
+        let subnet = action == "subnet-consent";
+        let offers = intent[if subnet { "subnetOffers" } else { "offers" }].as_array().ok_or("Missing hosting offers")?;
+        let offer = offers.iter().find(|offer| offer["id"].as_str() == Some(decision.offer_id.as_str())).ok_or("Exit offer no longer pending")?;
+        let cidr = if subnet {
+            let cidr = offer["cidr"].as_str().ok_or("Missing offered subnet")?;
+            let (ip, bits) = cidr.split_once('/').ok_or("Invalid offered subnet")?;
+            let ip: std::net::IpAddr = ip.parse().map_err(|_| "Invalid offered subnet address")?;
+            let bits: u8 = bits.parse().map_err(|_| "Invalid offered subnet prefix")?;
+            if bits == 0 || bits > if ip.is_ipv4() { 32 } else { 128 } { return Err("Invalid offered subnet prefix".into()); }
+            Some(cidr)
+        } else { None };
+        if decision.accept {
+            let allow_lan = if subnet { true } else { offer["allowExitLan"].as_bool().ok_or("Missing exit LAN policy")? };
+            if allow_lan && intent["isolationRequired"].as_bool() != Some(false) { return Err("Revoke isolated exit offers and finish their cleanup before allowing LAN access".into()); }
+            if !allow_lan && intent["lanAccessRequired"].as_bool() != Some(false) { return Err("Revoke LAN-enabled exit and subnet offers and finish cleanup before isolating this host".into()); }
+            let state: serde_json::Value = serde_json::from_str(&daemon("exit-isolation-state", "", "")?).map_err(|e| e.to_string())?;
+            if state["version"].as_u64() != Some(1) || state["supported"].as_bool() != Some(true) { return Err("The running VPN does not support safe exit hosting".into()); }
+            if subnet && (state["allowExitLan"].as_bool() != Some(true) || state["active"].as_bool() != Some(false)) { return Err("Disable exit LAN isolation before approving subnet sharing".into()); }
+            if !subnet { set_exit_isolation_profile(allow_lan)?; }
+            routing_operation_locked(true)?;
+        }
+        let path = format!("/agent/overlay/{}/{}/decide", if subnet { "subnets" } else { "exits" }, decision.offer_id);
+        let mut body = serde_json::json!({ "accept": decision.accept });
+        if let Some(cidr) = cidr { body["cidr"] = serde_json::json!(cidr); }
+        return Ok(routing_http("POST", &path, &body.to_string())?.to_string());
+    }
+    if matches!(action, "exit-isolation-enable" | "exit-isolation-disable") {
+        let _lock = ROUTING_OPERATION.lock().map_err(|_| "Routing operation unavailable")?;
+        if !setup_key.is_empty() || !management_url.is_empty() { return Err("Exit isolation takes no caller-supplied arguments".into()); }
+        if action == "exit-isolation-disable" && routing_http("GET", "/agent/overlay/routing", "")?["isolationRequired"].as_bool() != Some(false) {
+            return Err("Revoke isolated exit offers and finish cleanup before allowing exit users onto this LAN".into());
+        }
+        if action == "exit-isolation-enable" && routing_http("GET", "/agent/overlay/routing", "")?["lanAccessRequired"].as_bool() != Some(false) {
+            return Err("Revoke LAN-enabled exit and subnet offers and finish cleanup before isolating this host".into());
+        }
+        let before: serde_json::Value = serde_json::from_str(&daemon("exit-isolation-state", "", "")?).map_err(|e| e.to_string())?;
+        if before["version"].as_u64() != Some(1) || before["supported"].as_bool() != Some(true) {
+            return Err("This VPN daemon cannot enforce exit-side LAN isolation".into());
+        }
+        set_exit_isolation_profile(action == "exit-isolation-disable")?;
+        return routing_operation_locked(true);
+    }
+    if matches!(action, "routing-sync" | "routing-status") {
+        if !setup_key.is_empty() || !management_url.is_empty() {
+            return Err("Routing IPC accepts no caller-supplied route identifiers or arguments".into());
+        }
+        return routing_operation(action == "routing-sync");
+    }
     // This is served only after the privileged-process check in `serve`. It
     // lets onboarding verify that its IPC service exists before minting a token.
     if action == "agent-status" {
@@ -490,6 +584,8 @@ fn daemon(action: &str, setup_key: &str, management_url: &str) -> Result<String,
         ));
     }
     let binary = netbird_binary()?;
+    #[cfg(windows)]
+    if matches!(action, "start" | "up") { local_lan::platform::recover_before_start(&binary)?; }
     let mut reconfigure = false;
     // An unanswered socket can also mean an installed service is stopped. Do not
     // try to install over it; the caller starts it after ensuring installation.
@@ -545,6 +641,123 @@ fn daemon(action: &str, setup_key: &str, management_url: &str) -> Result<String,
     // Dropped here, so the key is gone before the answer is returned.
     drop(key_file);
     result
+}
+
+#[cfg(not(any(target_os = "android", target_os = "ios")))]
+fn set_exit_isolation_profile(allow_lan: bool) -> Result<String, String> {
+    let args = netbird_args(if allow_lan { "exit-isolation-off" } else { "exit-isolation-on" }, "", Path::new(""), "", &state_dir(), daemon_addr()).ok_or("Missing exit isolation command")?;
+    run_netbird(&netbird_binary()?, &args)
+}
+
+#[cfg(not(any(target_os = "android", target_os = "ios")))]
+fn routing_http(method: &str, path: &str, body: &str) -> Result<serde_json::Value, String> {
+    // Called only inside the privileged routing operation. The console cannot
+    // sign acknowledgements or choose their reported values.
+    let signature: serde_json::Value = serde_json::from_str(&sign_here(method, path, body.as_bytes())?).map_err(|e| e.to_string())?;
+    let url = format!("{}{}", crate::LABDESK_SITE, path);
+    let client = crate::hbbs_http::create_http_client_with_url_strict(&url).map_err(|e| e.to_string())?;
+    let method = method.parse::<reqwest::Method>().map_err(|e| e.to_string())?;
+    let response = client.request(method, &url)
+        .header("Content-Type", "application/json")
+        .header("X-LD-Machine", signature["machine"].as_str().ok_or("Missing machine")?)
+        .header("X-LD-Ts", signature["ts"].as_str().ok_or("Missing timestamp")?)
+        .header("X-LD-Sig", signature["sig"].as_str().ok_or("Missing signature")?)
+        .timeout(std::time::Duration::from_secs(20)).body(body.to_owned()).send().map_err(|e| e.to_string())?;
+    if !response.status().is_success() { return Err(format!("Routing broker refused request: {}", response.status())); }
+    let text = response.text().map_err(|e| e.to_string())?;
+    if text.len() > 64 * 1024 { return Err("Routing broker response too large".into()); }
+    serde_json::from_str(&text).map_err(|e| e.to_string())
+}
+
+#[cfg(not(any(target_os = "android", target_os = "ios")))]
+fn routing_operation(sync: bool) -> Result<String, String> {
+    let _lock = ROUTING_OPERATION.lock().map_err(|_| "Routing operation unavailable")?;
+    routing_operation_locked(sync)
+}
+
+#[cfg(not(any(target_os = "android", target_os = "ios")))]
+fn routing_operation_locked(sync: bool) -> Result<String, String> {
+    use std::io::Write;
+    let read_routes = || -> Result<Vec<route_selection::Route>, String> {
+        route_selection::parse_routes(&daemon("routes-list", "", "")?)
+    };
+    let mut routes = read_routes()?;
+    let mut result = serde_json::json!({
+        "selectionSupported": true, "hostingSupported": false,
+        "clientLocalLanSupported": cfg!(windows), "exitLanSupported": false,
+        "subnetSharingSupported": false, "egressVerified": false,
+        "status": "unknown", "appliedExitId": null,
+    });
+    if let Ok(text) = daemon("exit-isolation-state", "", "") {
+        if let Ok(isolation) = serde_json::from_str::<serde_json::Value>(&text) {
+            if isolation["version"].as_u64() == Some(1) {
+                result["hostingSupported"] = isolation["supported"].clone();
+                result["exitIsolationActive"] = isolation["active"].clone();
+                result["allowExitLan"] = isolation["allowExitLan"].clone();
+                result["exitLanSupported"] = isolation["supported"].clone();
+                result["subnetSharingSupported"] = serde_json::json!(isolation["supported"].as_bool() == Some(true) && isolation["allowExitLan"].as_bool() == Some(true) && isolation["active"].as_bool() == Some(false));
+            }
+        }
+    }
+    if sync {
+        let intent = routing_http("GET", "/agent/overlay/routing", "")?;
+        let revision = intent["revision"].as_u64().filter(|v| *v <= 9_007_199_254_740_991).ok_or("Invalid routing revision")?;
+        let desired_exit = if intent["exitId"].is_null() { None } else { Some(intent["exitId"].as_str().ok_or("Invalid exit identity")?) };
+        let desired_network = if desired_exit.is_none() { None } else { intent["networkId"].as_str() };
+        let allow_local_lan = intent["allowLocalLan"].as_bool().ok_or("Missing client LAN policy")?;
+        let machine = super::identity::AgentIdentity::load_existing().map_err(|e| e.to_string())?.ok_or("Not enrolled")?;
+        let path = super::identity::AgentIdentity::path().with_file_name("routing-revision.json");
+        match std::fs::read_to_string(&path) {
+            Ok(text) => {
+                let saved: serde_json::Value = serde_json::from_str(&text).map_err(|_| "Routing revision ledger is unreadable; refusing stale commands")?;
+                if saved["machine"].as_str() == Some(machine.machine_id()) && saved["revision"].as_u64().ok_or("Invalid saved revision")? > revision {
+                    return Err("Stale routing preference refused".into());
+                }
+            }
+            Err(e) if e.kind() == std::io::ErrorKind::NotFound => {}
+            Err(e) => return Err(e.to_string()),
+        }
+        // Persist before changing routes. A torn ledger fails closed on the next
+        // request; no command can silently restore an older selection after restart.
+        let mut options = std::fs::OpenOptions::new(); options.write(true).create(true).truncate(true);
+        #[cfg(unix)] { use std::os::unix::fs::OpenOptionsExt; options.mode(0o600); }
+        let mut file = options.open(&path).map_err(|e| e.to_string())?;
+        let record = serde_json::json!({ "machine": machine.machine_id(), "revision": revision }).to_string();
+        file.write_all(record.as_bytes()).and_then(|_| file.sync_all()).map_err(|e| e.to_string())?;
+        drop(file);
+        #[cfg(windows)] crate::platform::set_path_permission_for_portable_service_shmem_file(&path).map_err(|e| e.to_string())?;
+        result["revision"] = revision.into();
+        let apply = || -> Result<Vec<route_selection::Route>, String> {
+            if intent["unavailable"].as_bool() != Some(false) || (desired_exit.is_some() && desired_network.is_none()) {
+                return Err("Selected exit is unavailable; Direct was not requested".into());
+            }
+            let commands = route_selection::selection_commands(&routes, desired_network)?;
+            let binary = netbird_binary()?;
+            #[cfg(windows)]
+            local_lan::platform::apply(desired_exit.is_some() && !allow_local_lan, &binary, super::netview::attached_lan_prefixes()?)?;
+            #[cfg(not(windows))]
+            if desired_exit.is_some() && !allow_local_lan { return Err("Client-local LAN enforcement is unavailable on this platform".into()); }
+            for command in commands {
+                // Global flags must precede `--`, which protects daemon-returned IDs.
+                let mut args = vec!["--daemon-addr".to_owned(), daemon_addr().to_owned()];
+                args.extend(command);
+                run_netbird(&binary, &args)?;
+            }
+            let readback = read_routes()?;
+            let selected: Vec<_> = readback.iter().filter(|r| r.is_exit() && r.selected).collect();
+            if desired_network.map_or(!selected.is_empty(), |id| selected.len() != 1 || selected[0].id != id) {
+                return Err("Daemon did not confirm the requested exit selection".into());
+            }
+            Ok(readback)
+        };
+        match apply() {
+            Ok(readback) => { routes = readback; result["status"] = if desired_exit.is_some() { "selected" } else { "direct" }.into(); result["appliedExitId"] = intent["exitId"].clone(); result["localLanBlocked"] = (desired_exit.is_some() && !allow_local_lan).into(); }
+            Err(error) => { result["status"] = "unavailable".into(); result["error"] = error.into(); }
+        }
+        routing_http("POST", "/agent/overlay/routing/ack", &result.to_string())?;
+    }
+    result["routes"] = serde_json::Value::Array(routes.iter().map(|route| serde_json::json!({ "id": route.id, "networks": route.networks, "selected": route.selected, "isExit": route.is_exit() })).collect());
+    Ok(result.to_string())
 }
 
 /// Run the bundled netbird with none of the `NB_*` environment it would let outrank the
@@ -788,6 +1001,12 @@ fn reconcile(reported: &mut Option<String>) -> Result<(), String> {
         }
         *reported = Some(body);
     }
+    // Remote intent remains pending while offline and is applied by the service
+    // even after the Flutter window closes. Routing failure does not invent a
+    // successful egress state or disable the independent Labnet connection.
+    if let Err(error) = request("routing-sync") {
+        hbb_common::log::debug!("[labnet] Routing reconciliation pending: {}", error);
+    }
     // Disable may have arrived while the network request was running.
     if wants_labnet(
         &Config::get_option("labdesk-labnet-enabled"),
@@ -857,7 +1076,7 @@ mod tests {
         };
         assert!(sign.ipc_timeout_ms() < enrol.ipc_timeout_ms());
         // Authority includes a bounded 3-second HTTPS round trip plus IPC overhead.
-        assert_eq!(LabnetRequest::SpendTicket { id: "ticket".into(), expires_at: 200 }.ipc_timeout_ms(), 5_000);
+        assert_eq!(LabnetRequest::SpendTicket { id: "ticket".into(), expires_at: 200, permissions: None }.ipc_timeout_ms(), 5_000);
         assert_eq!(LabnetRequest::AuthorizeTicket { id: "ticket".into() }.ipc_timeout_ms(), 5_000);
         assert!(enrol.ipc_timeout_ms() < daemon.ipc_timeout_ms());
     }
@@ -915,6 +1134,8 @@ mod tests {
             ("GET", "/agent/tickets"), ("POST", "/agent/job/j1/complete"),
             ("GET", "/agent/overlay/inbox?extra=1"), ("PATCH", "/agent/overlay/self"),
             ("POST", "/agent/overlay/invites/../decide"), ("POST", "/agent/overlay/labnets/a/b/leave"),
+            ("POST", "/agent/overlay/exits/123abc/decide"), ("POST", "/agent/overlay/subnets/123abc/decide"),
+            ("POST", "/agent/overlay/routing/ack"),
         ] {
             let result = sign_console_request(method, path, b"", |_, _, _| Ok("signature".into()));
             assert!(result.is_err(), "console signed {method} {path}");

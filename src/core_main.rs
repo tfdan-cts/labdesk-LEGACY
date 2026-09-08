@@ -273,9 +273,16 @@ pub fn core_main() -> Option<Vec<String>> {
                     log::error!("Failed to after-install: {}", err);
                 }
                 return None;
+            } else if args[0] == "--cleanup-local-lan" {
+                if let Err(error) = crate::labdesk::labnet::cleanup_local_lan_for_uninstall() {
+                    eprintln!("Cannot remove LabDesk LAN isolation: {error}. Service and filters were retained; retry uninstall elevated after resolving this error.");
+                    std::process::exit(1);
+                }
+                return None;
             } else if args[0] == "--before-uninstall" {
                 if let Err(err) = platform::run_before_uninstall() {
                     log::error!("Failed to before-uninstall: {}", err);
+                    std::process::exit(1);
                 }
                 return None;
             } else if args[0] == "--silent-install" {

@@ -379,11 +379,14 @@ pub enum Data {
     /// connect ticket: handed by the daemon to the `--server` that answers
     /// logins (src/labdesk/ticket.rs) over the main channel, and claimed once
     /// in src/server/connection.rs. Answered with `Empty`.
+    RequireConnectTicket,
     ConnectTicket {
         id: String,
         controller_peer_id: String,
         secret_hash: String,
         expires_at: i64,
+        #[serde(default)]
+        permissions: Option<crate::labdesk::ticket::ConnectPermissions>,
     },
     /// The connect tickets this process has claimed since the last ask. The
     /// daemon sends it empty as the question and reads the ids out of the
@@ -1049,13 +1052,18 @@ async fn handle(data: Data, stream: &mut Connection) {
                 .unwrap_or_else(|_| Err("The labnet request was dropped".to_owned()));
             allow_err!(stream.send(&Data::LabnetResult(answer)).await);
         }
+        Data::RequireConnectTicket => {
+            crate::labdesk::ticket::require_ticket_in_listener();
+            allow_err!(stream.send(&Data::Empty).await);
+        }
         Data::ConnectTicket {
             id,
             controller_peer_id,
             secret_hash,
             expires_at,
+            permissions,
         } => {
-            if !crate::server::insert_pending_ticket(id, controller_peer_id, secret_hash, expires_at) {
+            if !crate::server::insert_pending_ticket_scoped(id, controller_peer_id, secret_hash, expires_at, permissions) {
                 log::debug!("A connect ticket was redelivered; keeping the first");
             }
             allow_err!(stream.send(&Data::Empty).await);

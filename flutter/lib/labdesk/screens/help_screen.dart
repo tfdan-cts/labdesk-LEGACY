@@ -19,6 +19,7 @@ class _HelpScreenState extends State<HelpScreen> {
   final _scroll = ScrollController();
   late String _selected;
   String _query = '';
+  bool _manual = false;
   HelpTopic get _topic =>
       helpTopics.firstWhere((topic) => topic.id == _selected);
 
@@ -66,7 +67,13 @@ class _HelpScreenState extends State<HelpScreen> {
     final searching = _query.trim().isNotEmpty;
     final results = searching
         ? searchHelp(_query)
-        : [for (final entry in _topic.entries) (topic: _topic, entry: entry)];
+        : [
+            for (final entry in [
+              ...(_manual ? _topic.manual : <HelpEntry>[]),
+              ..._topic.entries
+            ])
+              (topic: _topic, entry: entry)
+          ];
     return CallbackShortcuts(
         bindings: {
           const SingleActivator(LogicalKeyboardKey.keyF, control: true):
@@ -102,6 +109,23 @@ class _HelpScreenState extends State<HelpScreen> {
                                 _query = value;
                                 if (_scroll.hasClients) _scroll.jumpTo(0);
                               })),
+                      const SizedBox(height: 16),
+                      Wrap(spacing: 12, runSpacing: 8, children: [
+                        for (final manual in [false, true])
+                          ChoiceChip(
+                            key: ValueKey('help-mode-$manual'),
+                            label: Text(manual
+                                ? 'Technical manual'
+                                : 'Guide & glossary'),
+                            selected: _manual == manual,
+                            onSelected: (_) => setState(() {
+                              _manual = manual;
+                              _search.clear();
+                              _query = '';
+                              if (_scroll.hasClients) _scroll.jumpTo(0);
+                            }),
+                          ),
+                      ]),
                       const SizedBox(height: 16),
                       Expanded(child: LayoutBuilder(builder: (context, c) {
                         final narrow = c.maxWidth < 820 ||
@@ -224,26 +248,34 @@ class _HelpScreenState extends State<HelpScreen> {
                   child: Text(entry.title, style: theme.textTheme.titleLarge)),
               const SizedBox(height: 10),
               Text(entry.meaning, style: const TextStyle(height: 1.6)),
-              const SizedBox(height: 14),
-              Text('What you can do', style: theme.textTheme.titleSmall),
-              const SizedBox(height: 6),
-              Text(entry.action, style: const TextStyle(height: 1.6)),
-              const SizedBox(height: 10),
-              ExpansionTile(
-                  key: ValueKey('help-technical-${entry.id}'),
-                  tilePadding: EdgeInsets.zero,
-                  childrenPadding: const EdgeInsets.only(bottom: 14),
-                  expandedCrossAxisAlignment: CrossAxisAlignment.stretch,
-                  expansionAnimationStyle: reduced
-                      ? AnimationStyle.noAnimation
-                      : AnimationStyle(duration: Duration(milliseconds: 180)),
-                  title: const Text('Technical details'),
-                  children: [
-                    Text(entry.technical,
-                        style: TextStyle(
-                            height: 1.6,
-                            color: theme.colorScheme.onSurfaceVariant))
-                  ]),
+              if (entry.isManual) ...[
+                for (final paragraph in entry.technical.split('\n\n'))
+                  Padding(
+                      padding: const EdgeInsets.only(top: 16),
+                      child:
+                          Text(paragraph, style: const TextStyle(height: 1.6))),
+              ] else ...[
+                const SizedBox(height: 14),
+                Text('What you can do', style: theme.textTheme.titleSmall),
+                const SizedBox(height: 6),
+                Text(entry.action, style: const TextStyle(height: 1.6)),
+                const SizedBox(height: 10),
+                ExpansionTile(
+                    key: ValueKey('help-technical-${entry.id}'),
+                    tilePadding: EdgeInsets.zero,
+                    childrenPadding: const EdgeInsets.only(bottom: 14),
+                    expandedCrossAxisAlignment: CrossAxisAlignment.stretch,
+                    expansionAnimationStyle: reduced
+                        ? AnimationStyle.noAnimation
+                        : AnimationStyle(duration: Duration(milliseconds: 180)),
+                    title: const Text('Technical details'),
+                    children: [
+                      Text(entry.technical,
+                          style: TextStyle(
+                              height: 1.6,
+                              color: theme.colorScheme.onSurfaceVariant))
+                    ]),
+              ],
               const Divider(height: 1),
             ])));
   }

@@ -2,6 +2,7 @@ const nativeBoundaryTypes = <String, String>{
   'getLocalFlutterOption': 'String',
   'mainGetOption': 'Future<String>',
   'mainGetOptionSync': 'String',
+  'mainGetPeerOptionSync': 'String',
   'mainGetError': 'Future<String>',
   'mainIsUsingPublicServer': 'Future<bool>',
   'mainGetLocalOption': 'String',

@@ -786,6 +786,19 @@ pub fn check_software_update() {
     let opt = LocalConfig::get_option(keys::OPTION_ENABLE_CHECK_UPDATE);
     if config::option2bool(keys::OPTION_ENABLE_CHECK_UPDATE, &opt) {
         std::thread::spawn(move || allow_err!(do_check_software_update()));
+        #[cfg(target_os = "android")]
+        if is_labdesk() {
+            static MOBILE_CHECKS: std::sync::Once = std::sync::Once::new();
+            MOBILE_CHECKS.call_once(|| {
+                std::thread::spawn(|| loop {
+                    // Mobile OS suspension may delay this; startup still checks immediately.
+                    std::thread::sleep(std::time::Duration::from_secs(3600));
+                    if config::option2bool(keys::OPTION_ENABLE_CHECK_UPDATE, &LocalConfig::get_option(keys::OPTION_ENABLE_CHECK_UPDATE)) {
+                        allow_err!(do_check_software_update());
+                    }
+                });
+            });
+        }
     }
 }
 
@@ -793,6 +806,12 @@ pub fn check_software_update() {
 // The update endpoint belongs to LabDesk.
 #[tokio::main(flavor = "current_thread")]
 pub async fn do_check_software_update() -> hbb_common::ResultType<()> {
+    #[cfg(target_os = "ios")]
+    if is_labdesk() {
+        // No iOS distribution is published in the release catalog.
+        publish_update_notice(String::new());
+        return Ok(());
+    }
     let (request, url) =
         hbb_common::version_check_request(hbb_common::VER_TYPE_LABDESK_CLIENT.to_string());
     let url = if is_labdesk() {
@@ -827,22 +846,36 @@ pub async fn do_check_software_update() -> hbb_common::ResultType<()> {
     let resp: hbb_common::VersionCheckResponse = serde_json::from_slice(&bytes)?;
     let response_url = resp.url;
     let latest_release_version = response_url.rsplit('/').next().unwrap_or_default();
-
-    if get_version_number(&latest_release_version) > get_version_number(crate::VERSION) {
-        #[cfg(feature = "flutter")]
-        {
-            let mut m = HashMap::new();
-            m.insert("name", "check_software_update_finish");
-            m.insert("url", &response_url);
-            if let Ok(data) = serde_json::to_string(&m) {
-                let _ = crate::flutter::push_global_event(crate::flutter::APP_TYPE_MAIN, data);
-            }
+    #[cfg(target_os = "android")]
+    if is_labdesk() {
+        if response_url.is_empty() {
+            publish_update_notice(String::new());
+            return Ok(());
         }
-        *SOFTWARE_UPDATE_URL.lock().unwrap() = response_url;
+        let metadata: serde_json::Value = client.get(format!("{}/api/version", LABDESK_SITE))
+            .send().await?.error_for_status()?.json().await?;
+        if !crate::updater::android_release_available(&metadata, latest_release_version) {
+            publish_update_notice(String::new());
+            return Ok(());
+        }
+    }
+
+    if if is_labdesk() { crate::updater::is_newer_release(latest_release_version, crate::VERSION) }
+        else { get_version_number(&latest_release_version) > get_version_number(crate::VERSION) } {
+        publish_update_notice(response_url);
     } else {
-        *SOFTWARE_UPDATE_URL.lock().unwrap() = "".to_string();
+        publish_update_notice(String::new());
     }
     Ok(())
+}
+
+fn publish_update_notice(url: String) {
+    *SOFTWARE_UPDATE_URL.lock().unwrap() = url.clone();
+    #[cfg(feature = "flutter")]
+    {
+        let event = serde_json::json!({"name": "check_software_update_finish", "url": url}).to_string();
+        let _ = crate::flutter::push_global_event(crate::flutter::APP_TYPE_MAIN, event);
+    }
 }
 
 #[inline]

@@ -45,6 +45,7 @@ class NetworkScreen extends StatelessWidget {
     this.onLeave,
     this.onRemove,
     this.onDelete,
+    this.extraContent,
   });
 
   final LabnetInbox inbox;
@@ -69,6 +70,7 @@ class NetworkScreen extends StatelessWidget {
   final void Function(String labnetId)? onLeave;
   final void Function(String labnetId, String deviceId)? onRemove;
   final void Function(String labnetId)? onDelete;
+  final Widget? extraContent;
 
   String _nameOf(String deviceId) {
     for (final m in machines) {
@@ -161,6 +163,7 @@ class NetworkScreen extends StatelessWidget {
             ),
             const SizedBox(height: 16),
           ],
+          if (extraContent != null) extraContent!,
         ],
       ),
     );
@@ -360,7 +363,8 @@ class _LabnetCard extends StatelessWidget {
                     ),
                   ),
                   const SizedBox(width: 8),
-                  Expanded(child: Text(nameOf(m.deviceId), style: C.of(context).body())),
+                  Expanded(child: Text(m.machineName?.trim().isNotEmpty == true
+                      ? m.machineName! : nameOf(m.deviceId), style: C.of(context).body())),
                   Text(
                     m.removalPending
                         ? 'Removal pending'

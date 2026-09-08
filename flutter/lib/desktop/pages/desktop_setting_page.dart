@@ -15,6 +15,7 @@ import 'package:flutter_hbb/desktop/widgets/remote_toolbar.dart';
 import 'package:flutter_hbb/labdesk/theme/console_theme.dart';
 import 'package:flutter_hbb/labdesk/theme/ld_icons.dart';
 import 'package:flutter_hbb/labdesk/theme/settings_skin.dart';
+import 'package:flutter_hbb/labdesk/screens/local_update_controls.dart';
 import 'package:flutter_hbb/mobile/widgets/dialog.dart';
 import 'package:flutter_hbb/models/platform_model.dart';
 import 'package:flutter_hbb/models/printer_model.dart';
@@ -541,8 +542,6 @@ class _GeneralState extends State<_General> {
   Widget other() {
     final incomingOnly = bind.isIncomingOnly();
     final outgoingOnly = bind.isOutgoingOnly();
-    final showAutoUpdate = (isWindows && bind.mainIsInstalled()) ||
-    (isMacOS && bind.mainIsInstalled() && bind.mainIsInstalledDaemon(prompt: false) && !bind.isCustomClient());
     final children = <Widget>[
       if (!isWeb && !incomingOnly)
         _OptionCheckBox(context, 'Confirm before closing multiple tabs',
@@ -610,12 +609,10 @@ class _GeneralState extends State<_General> {
           kOptionEnableCheckUpdate,
           isServer: false,
         ),
-      if (showAutoUpdate)
-        _OptionCheckBox(
-          context,
-          'Update automatically',
-          kOptionAllowAutoUpdate,
-          isServer: true,
+      if (!isWeb)
+        LocalUpdateControls(
+          readOption: (key) => bind.mainGetOption(key: key),
+          writeOption: (key, value) => bind.mainSetOption(key: key, value: value),
         ),
       if (isWindows && !outgoingOnly)
         _OptionCheckBox(

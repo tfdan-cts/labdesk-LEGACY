@@ -27,6 +27,63 @@ const AUTHORITY_TIMEOUT: Duration = Duration::from_secs(3);
 const LEASE_POLL: Duration = Duration::from_secs(15);
 const LEASE_GRACE: Duration = Duration::from_secs(60);
 
+static REQUIRE_TICKET: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(false);
+
+pub fn require_ticket_in_listener() {
+    REQUIRE_TICKET.store(true, std::sync::atomic::Ordering::SeqCst);
+}
+
+pub fn listener_requires_ticket() -> bool {
+    REQUIRE_TICKET.load(std::sync::atomic::Ordering::SeqCst)
+}
+
+#[cfg(not(any(target_os = "android", target_os = "ios")))]
+pub fn policy_required_here() -> ResultType<bool> {
+    if !crate::platform::is_root() { bail!("Not the privileged LabDesk process"); }
+    let marker = super::identity::AgentIdentity::path().with_file_name("connect-policy-required");
+    Ok(marker.try_exists()? || super::identity::AgentIdentity::load_existing()?.is_some_and(|identity| !identity.machine_id().is_empty()))
+}
+
+#[cfg(not(any(target_os = "android", target_os = "ios")))]
+pub fn refresh_listener_policy() -> bool {
+    if listener_requires_ticket() { return true; }
+    let answer = std::thread::spawn(|| crate::ipc::labnet(super::labnet::LabnetRequest::ConnectPolicyRequired)).join();
+    match answer {
+        Ok(Ok(value)) if value == "false" => false,
+        Ok(Ok(value)) if value == "true" => { require_ticket_in_listener(); true },
+        _ => crate::platform::is_installed(),
+    }
+}
+
+#[cfg(any(target_os = "android", target_os = "ios"))]
+pub fn refresh_listener_policy() -> bool { listener_requires_ticket() }
+
+/// A confirmed central policy never silently reverts to password access while offline.
+#[cfg(not(any(target_os = "android", target_os = "ios")))]
+pub async fn apply_connect_policy(text: &str) -> ResultType<Option<u64>> {
+    let answer: serde_json::Value = serde_json::from_str(text)?;
+    let revision = answer["connectPolicy"]["revision"].as_u64()
+        .ok_or_else(|| hbb_common::anyhow::anyhow!("The broker must support managed connection permissions"))?;
+    if !crate::platform::is_root() { bail!("Not the privileged LabDesk process"); }
+    let marker = super::identity::AgentIdentity::path().with_file_name("connect-policy-required");
+    match std::fs::OpenOptions::new().write(true).create_new(true).open(marker) {
+        Ok(file) => file.sync_all()?,
+        Err(e) if e.kind() == std::io::ErrorKind::AlreadyExists => (),
+        Err(e) => return Err(e.into()),
+    }
+    match ask(crate::ipc::Data::RequireConnectTicket).await? {
+        crate::ipc::Data::Empty => Ok(Some(revision)),
+        _ => bail!("The listener did not confirm central permissions"),
+    }
+}
+
+pub use super::connect_permissions::ConnectPermissions;
+
+#[cfg(any(target_os = "android", target_os = "ios"))]
+pub async fn apply_connect_policy(_: &str) -> ResultType<Option<u64>> {
+    bail!("Managed host connections require the desktop service");
+}
+
 /// The privileged process loads this once, then writes only on a matching claim.
 /// No ticket secret is persisted. Unreadable/corrupt storage is an error, never
 /// an empty ledger, because redelivery must not revive a spent credential.
@@ -45,7 +102,7 @@ lazy_static::lazy_static! {
 
 /// Only the machine service may persist claims, even when the desktop user changes.
 #[cfg(not(any(target_os = "android", target_os = "ios")))]
-pub fn spend_here(id: &str, expires_at: i64) -> ResultType<bool> {
+pub fn spend_here(id: &str, expires_at: i64, permissions: Option<&ConnectPermissions>) -> ResultType<bool> {
     if !crate::platform::is_root() {
         bail!("Not the privileged LabDesk process");
     }
@@ -55,7 +112,7 @@ pub fn spend_here(id: &str, expires_at: i64) -> ResultType<bool> {
     }
     let mut ledger = MACHINE_SPENT_TICKETS.lock().map_err(|_| hbb_common::anyhow::anyhow!("spent-ticket lock unavailable"))?;
     match ledger.as_mut() {
-        Ok(ledger) => ledger.spend_authorized(id, expires_at, now, || authority_here(id, true)),
+        Ok(ledger) => ledger.spend_authorized(id, expires_at, now, || authority_here(id, true, permissions)),
         Err(err) => bail!("spent-ticket storage unavailable: {}", err),
     }
 }
@@ -63,7 +120,7 @@ pub fn spend_here(id: &str, expires_at: i64) -> ResultType<bool> {
 /// Machine-signed authority checks never expose a general signing primitive to the UI.
 /// A fixed HTTPS origin, no redirects, bounded response and timeout keep login bounded.
 #[cfg(not(any(target_os = "android", target_os = "ios")))]
-pub fn authority_here(id: &str, claim: bool) -> ResultType<bool> {
+pub fn authority_here(id: &str, claim: bool, permissions: Option<&ConnectPermissions>) -> ResultType<bool> {
     use super::identity::{AgentIdentity, uplink_signed_msg};
     if !crate::platform::is_root() || !is_ticket_id(id) {
         bail!("Invalid machine ticket authority request");
@@ -72,13 +129,14 @@ pub fn authority_here(id: &str, claim: bool) -> ResultType<bool> {
     let method = if claim { "POST" } else { "GET" };
     let path = format!("/agent/ticket/{}/{}", id, if claim { "claimed" } else { "lease" });
     let ts = (hbb_common::get_time() / 1000).to_string();
-    let signature = identity.sign(&uplink_signed_msg(method, &path, &ts, b""))?;
+    let payload = if claim { serde_json::to_vec(&serde_json::json!({ "permissions": permissions }))? } else { Vec::new() };
+    let signature = identity.sign(&uplink_signed_msg(method, &path, &ts, &payload))?;
     let client = reqwest::blocking::Client::builder()
         .use_rustls_tls().https_only(true).redirect(reqwest::redirect::Policy::none())
         .timeout(AUTHORITY_TIMEOUT).connect_timeout(AUTHORITY_TIMEOUT).build()?;
     let response = client.request(method.parse()?, format!("{}{}", crate::LABDESK_SITE, path))
         .header("X-LD-Machine", identity.machine_id()).header("X-LD-Ts", ts)
-        .header("X-LD-Sig", signature).send()?;
+        .header("X-LD-Sig", signature).body(payload).send()?;
     let status = response.status().as_u16();
     let mut body = Vec::new();
     response.take(8193).read_to_end(&mut body)?;
@@ -151,10 +209,10 @@ pub async fn lease_ended(receiver: &mut Option<oneshot::Receiver<()>>) {
 /// Login validation is synchronous and may be inside Tokio. Run the bounded
 /// service request on a separate thread rather than nesting another runtime.
 #[cfg(not(any(target_os = "android", target_os = "ios")))]
-pub fn spend_on_machine(id: &str, expires_at: i64) -> ResultType<bool> {
+pub fn spend_on_machine(id: &str, expires_at: i64, permissions: Option<ConnectPermissions>) -> ResultType<bool> {
     // Even an elevated caller uses the designated service: separate process
     // caches of the same file would not serialize one-time spends.
-    let request = super::labnet::LabnetRequest::SpendTicket { id: id.to_owned(), expires_at };
+    let request = super::labnet::LabnetRequest::SpendTicket { id: id.to_owned(), expires_at, permissions };
     let answer = std::thread::Builder::new().name("labdesk-ticket-spend".into())
         .spawn(move || crate::ipc::labnet(request))?
         .join().map_err(|_| hbb_common::anyhow::anyhow!("ticket spend request failed"))??;
@@ -166,7 +224,7 @@ pub fn spend_on_machine(id: &str, expires_at: i64) -> ResultType<bool> {
 }
 
 #[cfg(any(target_os = "android", target_os = "ios"))]
-pub fn spend_on_machine(_: &str, _: i64) -> ResultType<bool> {
+pub fn spend_on_machine(_: &str, _: i64, _: Option<ConnectPermissions>) -> ResultType<bool> {
     bail!("machine ticket authentication requires the desktop service");
 }
 
@@ -243,6 +301,8 @@ pub struct Ticket {
     pub secret: String,
     pub controller_peer_id: String,
     pub expires_at: i64,
+    #[serde(default)]
+    pub permissions: Option<ConnectPermissions>,
 }
 
 /// The `tickets` member of a batch answer. Absent is empty; an entry that
@@ -258,7 +318,7 @@ pub fn tickets_in(text: &str) -> Vec<Ticket> {
                 .iter()
                 .filter_map(
                     |entry| match serde_json::from_value::<Ticket>(entry.clone()) {
-                        Ok(ticket) if is_ticket_id(&ticket.id) => Some(ticket),
+                        Ok(ticket) if is_ticket_id(&ticket.id) && ticket.permissions.as_ref().map_or(true, |p| p.valid()) => Some(ticket),
                         Ok(_) => None,
                         Err(err) => {
                             log::warn!("[ticket] Skipping a ticket the answer mis-shaped: {}", err);
@@ -312,6 +372,7 @@ pub async fn deliver(ticket: &Ticket) -> ResultType<()> {
         controller_peer_id: ticket.controller_peer_id.clone(),
         secret_hash: secret_hash(&ticket.secret),
         expires_at: ticket.expires_at,
+        permissions: ticket.permissions.clone(),
     };
     // `--server` answers `Empty` once the map holds the ticket, so a delivery
     // that was refused or dropped is an error here rather than a silent gap.
@@ -511,6 +572,7 @@ mod tests {
                 secret: "c2VjcmV0".into(),
                 controller_peer_id: "1935956186".into(),
                 expires_at: 1788480243,
+                permissions: None,
             }]
         );
         assert!(tickets_in(r#"{"ok":true}"#).is_empty());

@@ -27,7 +27,7 @@ use std::collections::BTreeMap;
 /// `machine_attr.value` is at most 4 KiB.
 pub const VALUE_LIMIT: usize = 4096;
 /// The netbird interface `src/labdesk/labnet.rs::netbird_args` names.
-const OVERLAY_INTERFACE: &str = "labdesk-netbird";
+const OVERLAY_INTERFACE: &str = "labdesk0";
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Address {
@@ -172,6 +172,15 @@ pub fn counters(networks: &Networks) -> BTreeMap<String, (String, u64, u64)> {
 pub fn adapters(networks: &Networks) -> Option<Vec<Adapter>> {
     let entries = walk()?;
     Some(collect(entries, &counters(networks)))
+}
+
+/// Untruncated interface prefixes for the service-owned LAN policy.
+pub fn attached_lan_prefixes() -> Result<Vec<(std::net::IpAddr, u8)>, String> {
+    walk().ok_or("Cannot enumerate LAN interfaces")?.into_iter()
+        .filter(|entry| entry.up && !entry.loopback && entry.name != OVERLAY_INTERFACE)
+        .filter_map(|entry| entry.address)
+        .map(|address| address.addr.parse().map(|ip| (ip, address.prefix)).map_err(|_| "Invalid LAN interface address".into()))
+        .collect()
 }
 
 pub fn prefix_v4(mask: u32) -> u8 {
@@ -469,7 +478,7 @@ mod tests {
                 entry("eno2", true, true, Some(v6("fe80::ab85:c576:989e:198b", 64))),
                 entry("eno2", true, true, Some(v4("10.1.10.110", 24))),
                 entry("tailscale0", false, false, Some(v4("100.89.139.104", 32))),
-                entry("labdesk-netbird", true, false, Some(v4("100.64.0.7", 16))),
+                entry("labdesk0", true, false, Some(v4("100.64.0.7", 16))),
             ],
             &counters,
         );
@@ -485,7 +494,7 @@ mod tests {
             vec![v4("10.1.10.110", 24), v6("fe80::ab85:c576:989e:198b", 64)],
             "a repeated address is listed once"
         );
-        assert_eq!(adapters[1].name, "labdesk-netbird");
+        assert_eq!(adapters[1].name, "labdesk0");
         assert_eq!(adapters[1].kind, "overlay");
         assert_eq!(adapters[2].name, "tailscale0");
         assert_eq!(adapters[2].kind, "other");

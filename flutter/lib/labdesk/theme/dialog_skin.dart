@@ -247,39 +247,42 @@ class LdDialog extends StatelessWidget {
               border: Border.all(color: C.hairline),
               boxShadow: DialogSkin.shadow,
             ),
-            child: Column(
-              mainAxisSize: MainAxisSize.min,
-              crossAxisAlignment: CrossAxisAlignment.stretch,
-              children: [
-                if (title != null) ...[
-                  Padding(
-                    padding: const EdgeInsets.fromLTRB(DialogSkin.pad,
-                        DialogSkin.pad - 2, DialogSkin.pad, DialogSkin.pad - 4),
-                    child: title!,
-                  ),
-                  const Divider(height: 1, thickness: 1, color: C.hairline),
-                ],
-                if (content != null)
-                  Flexible(
-                    child: SingleChildScrollView(
-                      padding: EdgeInsets.fromLTRB(
-                          DialogSkin.pad,
-                          title == null ? DialogSkin.pad : DialogSkin.pad - 4,
-                          DialogSkin.pad,
-                          DialogSkin.pad),
-                      child: DefaultTextStyle(style: C.body(), child: content!),
+            child: Material(
+              type: MaterialType.transparency,
+              child: Column(
+                mainAxisSize: MainAxisSize.min,
+                crossAxisAlignment: CrossAxisAlignment.stretch,
+                children: [
+                  if (title != null) ...[
+                    Padding(
+                      padding: const EdgeInsets.fromLTRB(DialogSkin.pad,
+                          DialogSkin.pad - 2, DialogSkin.pad, DialogSkin.pad - 4),
+                      child: title!,
                     ),
-                  ),
-                if (actions != null && actions!.isNotEmpty) ...[
-                  const Divider(height: 1, thickness: 1, color: C.hairline),
-                  Container(
-                    color: C.chrome,
-                    padding: const EdgeInsets.fromLTRB(
-                        DialogSkin.pad, 12, DialogSkin.pad, 12),
-                    child: LdDialogActions(children: actions!),
-                  ),
+                    const Divider(height: 1, thickness: 1, color: C.hairline),
+                  ],
+                  if (content != null)
+                    Flexible(
+                      child: SingleChildScrollView(
+                        padding: EdgeInsets.fromLTRB(
+                            DialogSkin.pad,
+                            title == null ? DialogSkin.pad : DialogSkin.pad - 4,
+                            DialogSkin.pad,
+                            DialogSkin.pad),
+                        child: DefaultTextStyle(style: C.body(), child: content!),
+                      ),
+                    ),
+                  if (actions != null && actions!.isNotEmpty) ...[
+                    const Divider(height: 1, thickness: 1, color: C.hairline),
+                    Container(
+                      color: C.chrome,
+                      padding: const EdgeInsets.fromLTRB(
+                          DialogSkin.pad, 12, DialogSkin.pad, 12),
+                      child: LdDialogActions(children: actions!),
+                    ),
+                  ],
                 ],
-              ],
+              ),
             ),
           ),
         ),

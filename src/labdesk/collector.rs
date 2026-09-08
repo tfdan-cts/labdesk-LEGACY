@@ -323,6 +323,14 @@ async fn run_ticket_inbox() {
         match request_signed(&identity, "GET", "/agent/tickets", "").await {
             Ok((status, text)) if (200..300).contains(&status) => {
                 failures = 0;
+                match ticket::apply_connect_policy(&text).await {
+                    Ok(Some(revision)) => {
+                        let body = serde_json::json!({"revision": revision, "permissionsVersion": 1}).to_string();
+                        post_signed(&identity, "/agent/connect-policy/ack", &body).await.ok();
+                    }
+                    Ok(None) => (),
+                    Err(error) => { log::warn!("[ticket] Central policy could not be applied: {}", error); sleep(TICKET_POLL).await; continue; }
+                }
                 for t in ticket::tickets_in(&text) {
                     if t.expires_at <= hbb_common::get_time() / 1000 || claims.contains_key(&t.id) {
                         continue;
@@ -820,7 +828,7 @@ async fn post_signed(
     request_signed(identity, "POST", path, body).await
 }
 
-async fn request_signed(
+pub(crate) async fn request_signed(
     identity: &AgentIdentity,
     method: &str,
     path: &str,

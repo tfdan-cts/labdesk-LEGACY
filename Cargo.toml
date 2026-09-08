@@ -1,6 +1,6 @@
 [package]
 name = "labdesk"
-version = "1.4.0-alpha.6"
+version = "1.4.0-alpha.8"
 authors = ["LabDesk contributors"]
 edition = "2021"
 build= "build.rs"
@@ -139,6 +139,8 @@ windows = { version = "0.61", features = [
     # state and addresses. Landed alone first, the way the two above were, so
     # CI proves the feature string before code is written against it.
     "Win32_NetworkManagement_IpHelper",
+    "Win32_NetworkManagement_WindowsFilteringPlatform",
+    "Win32_System_Rpc",
     # The other two thirds of that call. In windows-0.61.1 both
     # `GetAdaptersAddresses` and `IP_ADAPTER_ADDRESSES_LH` are written
     # `#[cfg(all(feature = "Win32_NetworkManagement_Ndis", feature =
