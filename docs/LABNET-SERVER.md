@@ -9,22 +9,67 @@ token lives only in the lab-desk.net Worker.
 This is the runbook for standing that server up and for handing its token to
 the Worker. Everything a client does is in `docs/CONSOLE.md`.
 
+## Current operating procedure (2026-09-07)
+
+Use this section for installation or recovery. The dated construction and
+hardening account below is historical evidence; it is not a sequence to replay.
+Read [LABNET-OPERATIONS.md](LABNET-OPERATIONS.md) for probes and alert acceptance
+and [LABNET-RECOVERY.md](LABNET-RECOVERY.md) for coordinated restoration.
+
+1. Preserve the existing administrative route. From a workstation with LAN access
+   to Homebox, the verified chain is
+   `ssh -o BatchMode=yes -J homebox@10.1.10.110,ubuntu@100.111.222.91 ubuntu@10.30.20.160`.
+   It depends on Homebox's existing Tailscale connection. Keep that connection intact;
+   it is administrative access, not evidence of LabDesk transport.
+2. For an existing server, inspect before changing anything:
+   `cd /home/ubuntu/netbird && sudo docker compose config --quiet`,
+   `sudo docker compose ps`, and `sudo systemctl --failed --no-pager`.
+   Do not print full rendered configuration, environment files, or token contents.
+3. For a replacement, obtain an approved isolated target and a coordinated recovery
+   set containing the server data, configuration, image digests, certificate state
+   and broker database checkpoint. Follow LABNET-RECOVERY.md. A stock upstream
+   installer does not recreate the hardening below, and an AVAILABLE boot backup
+   does not demonstrate a working restoration. Do not replay the bootstrap script
+   on production or redirect peers to a restored clone before recovery acceptance.
+4. Retain the measured runtime contract: TCP 443 with TLS-ALPN, UDP 3478, subnet-only
+   key-based SSH, no public 80, no Docker socket, file-provider Traefik routing, image
+   digests, capability drops and no-new-privileges. Traefik has a read-only root and
+   writable certificate volume; server/dashboard roots remain writable, and the
+   server configuration is mounted read-only. The containers default to uid 0;
+   capability drops do not make them non-root.
+5. Retain `disableGeoliteUpdate: true` and both local GeoLite/geonames databases in
+   the recovered NetBird data volume. Otherwise an egress-restricted server may fail
+   only on its next start. Containers cannot reach metadata or the production subnet.
+   Traefik's exception permits **all** outbound traffic from its address through
+   `enp0s6`; its purpose is ACME, but the actual rule has no port/destination restriction.
+   Other container internet egress is dropped. Tightening that exception requires
+   separate startup/reboot validation; this documentation change does not alter it.
+6. Validate public TLS, broker health/auth rejection, STUN, relay routing and the
+   authenticated VM-local API using the operations checker. Public `/api` returns
+   403; VM-local unauthenticated `/api` returns 401. A service token is still required
+   from an allowlisted source. Dashboard and `/oauth2` exclude Cloudflare's shared
+   ranges; only `/api` additionally admits them.
+7. Require separate installed-product transport, real restore and alert-delivery
+   evidence before declaring production ready. Neither zero peers nor a 426 relay
+   router response establishes a usable peer session. Internal relay `/health` 503
+   with `listeners:null` is not an automatic restart signal.
+
 ## What the VM needs
 
 Verified against NetBird's own documentation and the v0.78.0 source:
 
-- A Linux VM with at least 1 CPU and 2 GB of memory. The Oracle free tier
-  shape the owner chose (2 CPU, 12 GB) is well above that.
+- A Linux VM with at least 1 CPU and 2 GB of memory. The current Oracle
+  instance has 1 OCPU and 6 GB of memory; do not assume free-tier capacity.
 - A public name that resolves to the VM: `nb.lab-desk.net`. Add it in
   Cloudflare DNS as an `A` record with the proxy **off** (grey cloud). The
   clients speak gRPC over HTTP/2 and STUN over UDP, neither of which goes
   through Cloudflare's proxy.
-- Inbound TCP 80 and 443, and inbound UDP 3478, open on the VM's firewall and
+- Inbound TCP 443 and inbound UDP 3478, open on the VM's firewall and
   on the Oracle security list. Oracle's default list drops UDP; without 3478
   peers still connect, but relayed rather than direct.
 - Docker with the compose plugin, `curl`, `jq`.
 
-## Install
+## Historical bootstrap (superseded by the current procedure)
 
 ```
 curl -fsSL https://github.com/netbirdio/netbird/releases/download/v0.78.0/getting-started.sh | bash
@@ -32,7 +77,8 @@ curl -fsSL https://github.com/netbirdio/netbird/releases/download/v0.78.0/gettin
 
 Pick the bundled Traefik when asked. The script writes `docker-compose.yml`,
 `config.yaml` and `dashboard.env` and starts three containers: `traefik`,
-`dashboard` and `netbird-server`. TLS comes from Let's Encrypt over port 80.
+`dashboard` and `netbird-server`. The hardened deployment obtains Let's Encrypt
+certificates using TLS-ALPN on 443; port 80 is closed.
 
 Then open `https://nb.lab-desk.net`. With no users yet it redirects to
 `/setup`, where the first admin account is created. No external identity
@@ -69,9 +115,10 @@ wrangler secret put NETBIRD_TOKEN       # the personal access token
 
 Both are read at request time; nothing needs a redeploy.
 
-## Prove it
+## Verify API access
 
-From any machine:
+From the VM or an approved operator tunnel, with the service token loaded
+privately (the example shell variable must not be printed):
 
 ```
 curl -H "Authorization: Token $NETBIRD_TOKEN" https://nb.lab-desk.net/api/peers
@@ -217,10 +264,10 @@ survives until the next restart is not a rule.
   only and watched by fail2ban, so the pivot this would open is already behind three doors.
 - **No GRUB password.** Reaching the serial console requires Oracle tenancy credentials, which is
   already a larger compromise than anything a boot password would prevent.
-- **Read-only container roots not set.** Traefik writes `acme.json`, the server writes
-  `/var/lib/netbird`, and the dashboard's nginx writes its cache and run directories. Each would
-  need its own tmpfs mounts for a gain that `no-new-privileges` and an unprivileged user already
-  cover. Left as a deliberate choice rather than an oversight.
+- **Server and dashboard roots remain writable.** Traefik's root is read-only, with
+  `acme.json` in its writable certificate volume. The server writes `/var/lib/netbird`
+  and the dashboard rewrites built assets at startup. All three default to uid 0 with
+  capability restrictions; they are not configured as non-root users.
 - **Separate partitions for /home, /tmp and /var, a malware scanner, process accounting, remote
   log shipping, password ageing and PAM strength modules.** This host has no password logins and
   one service. These raise the Lynis score without reducing the ways in.
@@ -342,7 +389,8 @@ failure as fatal. A blanket egress block therefore does not break the control pl
 applied. It breaks it at the next restart, which on this box is the unattended-upgrade reboot at
 04:30, unattended, with nobody watching. That is a worse failure than the one it was preventing.
 
-So general egress stays open, deliberately, and the two drops that carry the real value stay:
+At that intermediate stage general egress was left open; this was superseded by
+"The compromise removed" below. The two drops already in place remained:
 containers cannot reach the cloud metadata service, and containers cannot reach the production
 subnet `10.30.20.0/24`, which is where the other machines live. Both were verified from inside
 each container's network namespace, and both are persisted.
@@ -380,8 +428,10 @@ Both files the loader globs for were already on the volume: `GeoLite2-City_20260
 
 So `disableGeoliteUpdate: true` went into `config.yaml`, and the log now reads
 `geolocation service has been initialized from /var/lib/netbird` with no fetch and no fatal. With
-the dependency gone, the egress rules went back on: containers reach nothing on the internet except
-Traefik, which needs Let's Encrypt. Measured after a reboot whose boot id was compared before and
+the dependency gone, the egress rules went back on: only Traefik can reach the internet.
+The exception allows all outbound traffic from Traefik's address through `enp0s6`,
+without a protocol, port or destination restriction; "for ACME only" describes its
+intent, not its enforcement. Measured after a reboot whose boot id was compared before and
 after, so the reboot cannot be assumed: all three containers back with zero restarts, no fatal
 lines, every route answering, Traefik reaching Let's Encrypt with 200 and `netbird-server` reaching
 nothing.
@@ -394,7 +444,8 @@ interface.
 ### The health endpoint, and why it stays 503
 
 `/health` on the server's internal port 9000 answered 503. It is not published, nothing consumes
-it, and it is not a symptom of a broken relay, but it was worth chasing rather than filing as noise.
+it. That status alone does not distinguish a broken relay from this combined-server
+listener-accounting defect; it must not trigger a restart or establish relay readiness.
 
 Two separate causes, found in order. First, `relay/healthcheck/healthcheck.go:160` dials
 `ServiceChecker.InstanceURL()`, which is the relay's exposed address, `rels://nb.lab-desk.net:443`.

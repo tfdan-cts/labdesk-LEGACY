@@ -1,16 +1,44 @@
-#!/bin/bash
+#!/bin/sh
+set -eu
 
-set -e
+# Migration-only names. Package identity alone cannot distinguish this fork
+# from an independently installed upstream product.
+legacy_owned_package() {
+    for legacy in rustdesk rustdesk-unattended-wayland; do
+        status=$(dpkg-query -W -f='${db:Status-Status}' "$legacy" 2>/dev/null || true)
+        [ "$status" = installed ] || continue
+        helper=/usr/share/rustdesk/labdesk-helper
+        unit=/usr/share/rustdesk/files/systemd/rustdesk.service
+        desktop=/usr/share/applications/rustdesk.desktop
+        owned=true
+        for file in "$helper" "$unit" "$desktop"; do
+            [ -f "$file" ] && [ ! -L "$file" ] || { owned=false; break; }
+            [ "$(stat -c %u "$file")" = 0 ] || { owned=false; break; }
+            owner=$(dpkg-query -S "$file" 2>/dev/null || true)
+            [ "$owner" = "$legacy: $file" ] || { owned=false; break; }
+        done
+        [ "$owned" = true ] || continue
+        grep -qx 'Description=LabDesk' "$unit" || continue
+        grep -qx 'Name=LabDesk' "$desktop" || continue
+        grep -q '^SITE="https://lab-desk.net"$' "$helper" || continue
+        printf '%s\n' "$legacy"
+    done
+}
 
-case $1 in
+case "${1:-}" in
+    --legacy-package)
+        legacy_owned_package
+        exit 0
+        ;;
     install|upgrade)
-		INITSYS=$(ls -al /proc/1/exe | awk -F' ' '{print $NF}' | awk -F'/' '{print $NF}')
-		if [ "systemd" == "${INITSYS}" ]; then
-			service rustdesk stop || true
-      sleep 1
-      rm -rf /usr/bin/libsciter-gtk.so
-		fi
+        legacy=$(legacy_owned_package)
+        if [ -n "$legacy" ]; then
+            echo "LabDesk: the previous LabDesk package needs a verified migration." >&2
+            echo "Use the LabDesk Linux installer to migrate it while preserving configuration." >&2
+            exit 1
+        fi
+        if command -v systemctl >/dev/null 2>&1; then
+            systemctl stop labdesk.service || true
+        fi
         ;;
 esac
-
-exit 0

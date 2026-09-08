@@ -19,7 +19,7 @@ class FmSkin {
   FmSkin._();
 
   /// A file row is read, not just clicked: name, modified and size have to sit
-  /// on one line with air around them. RustDesk's 30 was a Material list
+  /// on one line with air around them. LabDesk's 30 was a Material list
   /// density that left the three columns touching.
   static const rowHeight = 44.0;
 
@@ -28,7 +28,7 @@ class FmSkin {
   static const headerHeight = 30.0;
 
   /// The strip that names which machine a pane is showing.
-  static const paneHeaderHeight = 46.0;
+  static const paneHeaderHeight = 64.0;
 
   static const toolButtonSize = 30.0;
   static const toolGlyphSize = 17.0;
@@ -37,12 +37,10 @@ class FmSkin {
   /// and the window edge.
   static const gap = 7.0;
 
-  /// A pane, and the job queue: the same plane, the same hairline, the same
-  /// radius. Nothing in this window is a floating card.
+  /// Directory workspaces are flat planes separated by rules, not cards.
   static BoxDecoration get panel => BoxDecoration(
         color: C.surface,
-        borderRadius: C.rounded,
-        border: Border.all(color: C.hairline),
+        border: const Border(top: BorderSide(color: C.hairline)),
       );
 
   /// The path field and the search field: recessed to the background plane so
@@ -90,9 +88,9 @@ class FmGlyphs {
 /// A glyph on the pane surface and nothing else at rest; hover raises the same
 /// quiet pad the session toolbar uses, so the two windows agree about what a
 /// control under the cursor looks like. The filled chip behind every icon —
-/// which is what RustDesk drew here — is what made a row of eight controls
+/// which is what LabDesk drew here — is what made a row of eight controls
 /// read as eight buttons instead of one toolbar.
-class FmToolButton extends StatefulWidget {
+class FmToolButton extends StatelessWidget {
   const FmToolButton({
     super.key,
     required this.glyph,
@@ -102,155 +100,122 @@ class FmToolButton extends StatefulWidget {
     this.glyphSize,
   });
 
-  /// A path from [LdIcons] or [FmGlyphs].
   final String glyph;
-
-  /// Already translated.
   final String tooltip;
   final VoidCallback? onPressed;
-
-  /// Destructive. Red only under the cursor: a red mark sitting on a control
-  /// nobody has reached for is shouting about a file it has not been asked to
-  /// delete.
   final bool danger;
   final double? glyphSize;
 
   @override
-  State<FmToolButton> createState() => _FmToolButtonState();
-}
-
-class _FmToolButtonState extends State<FmToolButton> {
-  bool _hover = false;
-
-  @override
   Widget build(BuildContext context) {
-    final enabled = widget.onPressed != null;
-    final fg = !enabled
-        ? C.textFaint.withOpacity(0.55)
-        : _hover
-            ? (widget.danger ? C.bad : C.text)
-            : C.textMuted;
-    // No tooltip rather than an empty one: a Material tooltip with an empty
-    // message still opens an empty box under the cursor, which is what the
-    // controls that carry no message used to do.
-    final button = MouseRegion(
-        cursor: enabled ? SystemMouseCursors.click : SystemMouseCursors.basic,
-        onEnter: (_) => setState(() => _hover = true),
-        onExit: (_) => setState(() => _hover = false),
-        child: GestureDetector(
-          onTap: widget.onPressed,
-          child: AnimatedContainer(
-            duration: C.fast,
-            curve: Curves.easeOut,
-            width: FmSkin.toolButtonSize,
-            height: FmSkin.toolButtonSize,
-            alignment: Alignment.center,
-            decoration: BoxDecoration(
-              color: _hover && enabled ? C.surfaceHi : Colors.transparent,
-              borderRadius: C.roundedSm,
-              border: Border.all(
-                  color: _hover && enabled ? C.hairline : Colors.transparent),
-            ),
-            child: LdIcon(widget.glyph,
-                size: widget.glyphSize ?? FmSkin.toolGlyphSize, color: fg),
-          ),
-        ));
-    return widget.tooltip.isEmpty
+    final button = Semantics(
+      label: tooltip.isEmpty ? null : tooltip,
+      child: TextButton(
+        onPressed: onPressed,
+        style: _fileButtonStyle(danger: danger).copyWith(
+          fixedSize:
+              const WidgetStatePropertyAll(Size.square(FmSkin.toolButtonSize)),
+          padding: const WidgetStatePropertyAll(EdgeInsets.zero),
+        ),
+        child: Builder(
+            builder: (context) => LdIcon(glyph,
+                size: glyphSize ?? FmSkin.toolGlyphSize,
+                color: DefaultTextStyle.of(context).style.color!)),
+      ),
+    );
+    return tooltip.isEmpty
         ? button
         : Tooltip(
-            message: widget.tooltip,
+            message: tooltip,
+            excludeFromSemantics: true,
             waitDuration: const Duration(milliseconds: 300),
             child: button,
           );
   }
 }
 
+// Native buttons supply keyboard activation, disabled traversal and semantics.
+ButtonStyle _fileButtonStyle({bool filled = false, bool danger = false}) =>
+    ButtonStyle(
+      minimumSize: const WidgetStatePropertyAll(Size(0, FmSkin.toolButtonSize)),
+      tapTargetSize: MaterialTapTargetSize.shrinkWrap,
+      padding:
+          const WidgetStatePropertyAll(EdgeInsets.symmetric(horizontal: 12)),
+      textStyle: WidgetStatePropertyAll(C.small(w: FontWeight.w700)),
+      foregroundColor: WidgetStateProperty.resolveWith((states) {
+        if (states.contains(WidgetState.disabled)) return C.textFaint;
+        if (filled) return C.primaryFg;
+        return states.contains(WidgetState.hovered)
+            ? (danger ? C.bad : C.text)
+            : C.textMuted;
+      }),
+      backgroundColor: WidgetStateProperty.resolveWith((states) {
+        if (states.contains(WidgetState.disabled)) return Colors.transparent;
+        if (filled) {
+          return states.contains(WidgetState.pressed)
+              ? C.primaryFillDown
+              : states.contains(WidgetState.hovered)
+                  ? C.primaryFillHover
+                  : C.primaryFill;
+        }
+        return states.contains(WidgetState.hovered)
+            ? C.surfaceHi
+            : Colors.transparent;
+      }),
+      overlayColor: const WidgetStatePropertyAll(Colors.transparent),
+      shape: WidgetStateProperty.resolveWith((states) => RoundedRectangleBorder(
+            borderRadius: C.roundedSm,
+            side: BorderSide(
+              color: states.contains(WidgetState.focused)
+                  ? C.focusRing
+                  : Colors.transparent,
+              width: C.focusRingWidth,
+            ),
+          )),
+    );
+
 /// The one consequential control in a pane: move this selection to the other
 /// machine.
 ///
 /// It is the only filled surface in the window, which is the whole reason it
 /// can be found, and it is built identically in both panes so Send and Receive
-/// read as one pair of controls rather than as two ranks. Disabled it keeps the
-/// fill and drops to the surface ramp: an outlined disabled state made the pane
-/// with nothing selected look like it had been given a quieter button.
+/// read as one pair of controls. Disabled actions lose their fill and retain
+/// their label, matching the rest of the console.
 ///
 /// No direction arrow. Two mirrored arrows facing each other across the gap
 /// between the panes were the loudest thing in the window and said nothing the
 /// two words do not; direction is drawn where it is data, on the job tiles.
-class FmSendButton extends StatefulWidget {
-  const FmSendButton({
-    super.key,
-    required this.label,
-    required this.glyph,
-    required this.onPressed,
-  });
+class FmSendButton extends StatelessWidget {
+  const FmSendButton(
+      {super.key,
+      required this.label,
+      required this.glyph,
+      required this.onPressed});
 
-  /// Already translated.
   final String label;
-
-  /// Leading, as on every other labelled control in the console.
   final String glyph;
   final VoidCallback? onPressed;
 
   @override
-  State<FmSendButton> createState() => _FmSendButtonState();
+  Widget build(BuildContext context) => TextButton(
+        onPressed: onPressed,
+        style: _fileButtonStyle(filled: true),
+        child: Builder(
+            builder: (context) => Row(
+                  mainAxisSize: MainAxisSize.min,
+                  children: [
+                    LdIcon(glyph,
+                        size: 16,
+                        color: DefaultTextStyle.of(context).style.color!),
+                    const SizedBox(width: 8),
+                    Text(label),
+                  ],
+                )),
+      );
 }
 
-class _FmSendButtonState extends State<FmSendButton> {
-  bool _hover = false;
-  bool _down = false;
-
-  @override
-  Widget build(BuildContext context) {
-    final enabled = widget.onPressed != null;
-    final fg = enabled ? C.primaryFg : C.textFaint;
-
-    return MouseRegion(
-      cursor: enabled ? SystemMouseCursors.click : SystemMouseCursors.basic,
-      onEnter: (_) => setState(() => _hover = true),
-      onExit: (_) => setState(() => _hover = false),
-      child: GestureDetector(
-        onTapDown: enabled ? (_) => setState(() => _down = true) : null,
-        onTapUp: enabled ? (_) => setState(() => _down = false) : null,
-        onTapCancel: enabled ? () => setState(() => _down = false) : null,
-        onTap: widget.onPressed,
-        child: AnimatedContainer(
-          duration: C.fast,
-          curve: Curves.easeOut,
-          transform: Matrix4.translationValues(0, _down ? 1 : 0, 0),
-          height: FmSkin.toolButtonSize,
-          padding: const EdgeInsets.symmetric(horizontal: 12),
-          alignment: Alignment.center,
-          decoration: BoxDecoration(
-            color: !enabled
-                ? C.surfaceHi
-                : (_hover ? C.primaryFillHover : C.primaryFill),
-            borderRadius: C.roundedSm,
-            border: Border.all(color: enabled ? Colors.transparent : C.hairline),
-          ),
-          child: Row(
-            mainAxisSize: MainAxisSize.min,
-            children: [
-              LdIcon(widget.glyph, size: 16, color: fg),
-              const SizedBox(width: 8),
-              Text(widget.label,
-                  style: C.small(color: fg, w: FontWeight.w700)),
-            ],
-          ),
-        ),
-      ),
-    );
-  }
-}
-
-/// The frame around a pane.
-///
-/// One margin, one hairline, one radius, and a clip — so the column-head band
-/// can run to the panel's own edges instead of floating inside it.
-///
-/// [rail] drops the frame and leaves the column on the background plane behind
-/// a single rule. The job queue takes it: it is not a third file system, and
-/// three identical panels side by side said it was.
+/// Flat directory workspace. The queue uses a separate rail with a leading
+/// rule, because transfer activity is not a third file system.
 class FmPane extends StatelessWidget {
   const FmPane({super.key, required this.children, this.rail = false});
 
@@ -287,6 +252,7 @@ class FmPaneHeader extends StatelessWidget {
     required this.title,
     this.badge,
     this.trailing,
+    this.subtitle,
   });
 
   /// Already translated.
@@ -295,6 +261,7 @@ class FmPaneHeader extends StatelessWidget {
   /// The platform image, or whatever stands in while it is being fetched.
   final Widget? badge;
   final Widget? trailing;
+  final String? subtitle;
 
   @override
   Widget build(BuildContext context) {
@@ -321,8 +288,26 @@ class FmPaneHeader extends StatelessWidget {
             const SizedBox(width: 10),
           ],
           Expanded(
-            child: Text(title,
-                style: C.h2(), maxLines: 1, overflow: TextOverflow.ellipsis),
+            child: Tooltip(
+              message: title,
+              child: Column(
+                crossAxisAlignment: CrossAxisAlignment.start,
+                mainAxisAlignment: MainAxisAlignment.center,
+                children: [
+                  Text(title,
+                      style: C.h2(),
+                      maxLines: 1,
+                      overflow: TextOverflow.ellipsis),
+                  if (subtitle != null) ...[
+                    const SizedBox(height: 3),
+                    Text(subtitle!,
+                        style: C.small(color: C.textMuted),
+                        maxLines: 1,
+                        overflow: TextOverflow.ellipsis),
+                  ],
+                ],
+              ),
+            ),
           ),
           if (trailing != null) trailing!,
         ],
@@ -384,9 +369,11 @@ class FmColumnHead extends StatelessWidget {
         ],
       ),
     );
-    return MouseRegion(
-      cursor: SystemMouseCursors.click,
-      child: GestureDetector(onTap: onTap, child: child),
+    return TextButton(
+      onPressed: onTap,
+      style: _fileButtonStyle()
+          .copyWith(padding: const WidgetStatePropertyAll(EdgeInsets.zero)),
+      child: child,
     );
   }
 }
@@ -558,7 +545,9 @@ class _FmFileRowState extends State<FmFileRow> {
                   waitDuration: _tooltipWait,
                   message: widget.modified,
                   child: Text(
-                    widget.modified.trim(),
+                    widget.modifiedWidth < 145
+                        ? widget.modified.trim().split(' ').first
+                        : widget.modified.trim(),
                     overflow: TextOverflow.ellipsis,
                     style: C.data(size: 11.5, color: dataColor),
                   ),
@@ -800,13 +789,8 @@ class FmEmpty extends StatelessWidget {
       );
 }
 
-/// One step of the path.
-///
-/// The current directory is the only crumb at full strength; the ones behind it
-/// are a way back, which is a quieter job. A crumb is text with a hit area, not
-/// a Material TextButton — the button brought its own padding, its own ripple
-/// and its own minimum size into a 30-pixel-tall bar.
-class FmCrumb extends StatefulWidget {
+/// A keyboard-operable path step. The current directory has stronger type.
+class FmCrumb extends StatelessWidget {
   const FmCrumb(
       {super.key,
       required this.label,
@@ -818,33 +802,17 @@ class FmCrumb extends StatefulWidget {
   final VoidCallback onTap;
 
   @override
-  State<FmCrumb> createState() => _FmCrumbState();
-}
-
-class _FmCrumbState extends State<FmCrumb> {
-  bool _hover = false;
-
-  @override
-  Widget build(BuildContext context) {
-    final color = widget.current
-        ? C.text
-        : (_hover ? C.text : C.textMuted);
-    return MouseRegion(
-      cursor: SystemMouseCursors.click,
-      onEnter: (_) => setState(() => _hover = true),
-      onExit: (_) => setState(() => _hover = false),
-      child: GestureDetector(
-        onTap: widget.onTap,
-        child: Padding(
-          padding: const EdgeInsets.symmetric(horizontal: 5, vertical: 4),
-          child: Text(
-            widget.label,
-            style: C.small(
-                color: color,
-                w: widget.current ? FontWeight.w700 : FontWeight.w500),
-          ),
+  Widget build(BuildContext context) => TextButton(
+        onPressed: onTap,
+        style: _fileButtonStyle().copyWith(
+          padding:
+              const WidgetStatePropertyAll(EdgeInsets.symmetric(horizontal: 5)),
+          textStyle: WidgetStatePropertyAll(
+              C.small(w: current ? FontWeight.w700 : FontWeight.w500)),
+          foregroundColor:
+              WidgetStatePropertyAll(current ? C.text : C.textMuted),
         ),
-      ),
-    );
-  }
+        child: Text(label),
+      );
 }
+

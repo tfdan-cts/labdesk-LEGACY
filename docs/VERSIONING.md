@@ -1,16 +1,18 @@
 # Versioning
 
-LabDesk has a version of its own. It is not the version of the RustDesk core it is built on.
+LabDesk versions identify the application, service, and bundled Labnet runtime together.
 
 ## The rule
 
 - **Semantic versioning**, `MAJOR.MINOR.PATCH`, and a build number after `+`.
-  - `MAJOR` when an existing installation cannot be upgraded in place, or a server profile,
+  - `MAJOR` when an existing installation cannot be upgraded in place, or an identity,
     peer store or option written by the previous version can no longer be read.
   - `MINOR` for a new capability an operator can see: a section, a tool, a trigger, a probe.
   - `PATCH` for a fix that changes no interface and no stored data.
   - The build number (`+N`) increases by one on every version change and is never reused. It is
-    what Windows installer upgrade detection compares.
+    used in the Windows MSI version `MAJOR.MINOR.N`. The patch and prerelease suffix
+    remain in the application version. MSI requires major/minor at most 255 and
+    build between 1 and 65535; the packaging script rejects values outside those limits.
 - **One number, everywhere it is read.** The version is written in several places and they must
   agree. `scripts/set-version.ps1 <version>` rewrites all of them; nothing edits them by hand.
 
@@ -27,9 +29,35 @@ LabDesk has a version of its own. It is not the version of the RustDesk core it 
 - **A tag is a release.** `v<version>` on the commit that is released, created by the owner when
   the release pull request lands on `master`. A tag is never moved.
 - **Pre-releases** carry a suffix: `1.2.0-rc.1`. The build number still increases.
-- **The core version is stated, not versioned.** The RustDesk commit this is built on is in the
-  README's *Modifications* section (`1d09760ef`, release line 1.4.9). When the base moves, that
-  line moves and LabDesk takes at least a `MINOR` bump.
+- Cargo, lockfiles, Flutter and release filenames retain the prerelease suffix. RPM and
+  AppImage metadata use the numeric version; they are not Windows acceptance artifacts.
+- Baseline source attribution stays in the license and provenance documentation. It does
+  not select the product version, networking service, endpoints, or upgrade channel.
+
+## Labnet milestone
+
+The current private candidate is `1.4.0-alpha.6+78`, packaged as MSI `1.4.78`.
+The next acceptable release is `1.4.0`, after matching Windows installations on Zenbook
+and Foundry work across separate internet connections with Tailscale stopped on both.
+Acceptance covers enrollment, encrypted desktop/control/file operations, the enabled
+service surviving GUI exit and restart, membership removal, and recovery after a network
+change. Build or unit-test success alone does not close this milestone.
+
+Website and console releases use separate versions but must record their compatible
+application version, database migrations, and deployed Worker identity. Private alpha/RC
+artifacts are not promoted through the stable updater before the milestone passes.
+
+## Compiler and release scope
+
+The security candidate pins Rust 1.98.1 in `rust-toolchain.toml`. The manifest declares
+Rust 1.88 as the minimum required by the resolved dependencies. The Windows x64 Flutter
+build uses the same pinned compiler; it does not use the legacy Sciter compiler setting.
+The compiler archives are verified against the official Rust distribution checksums.
+
+This milestone is accepted on the Windows x64 installations named above. Updating the
+shared compiler setting does not establish compatibility for macOS, Linux, Android,
+Windows ARM64 or the legacy Sciter builds; those require their own validation. The
+standalone portable packer is not part of this candidate's signed MSI acceptance.
 
 ## History, and why 1.2.0
 

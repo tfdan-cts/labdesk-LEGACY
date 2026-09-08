@@ -52,20 +52,20 @@ esac
 
 if command -v apt-get >/dev/null 2>&1; then
     manager=apt
-    pattern="rustdesk-[0-9][^/]*-${arch}\.deb"
+    pattern="labdesk-[0-9][^/]*-${arch}\.deb"
 elif command -v zypper >/dev/null 2>&1; then
     manager=zypper
-    pattern="rustdesk-[0-9][^/]*\.${arch}-suse\.rpm"
+    pattern="labdesk-[0-9][^/]*\.${arch}-suse\.rpm"
 elif command -v dnf >/dev/null 2>&1; then
     manager=dnf
-    pattern="rustdesk-[0-9][^/]*\.${arch}\.rpm"
+    pattern="labdesk-[0-9][^/]*\.${arch}\.rpm"
 elif command -v yum >/dev/null 2>&1; then
     manager=yum
-    pattern="rustdesk-[0-9][^/]*\.${arch}\.rpm"
+    pattern="labdesk-[0-9][^/]*\.${arch}\.rpm"
 elif command -v pacman >/dev/null 2>&1; then
     [ "$arch" = "x86_64" ] || die "LabDesk ships an Arch package for x86_64 only, not $arch."
     manager=pacman
-    pattern="rustdesk-[0-9][^/]*-${arch}\.pkg\.tar\.zst"
+    pattern="labdesk-[0-9][^/]*-${arch}\.pkg\.tar\.zst"
 else
     die "no supported package manager found (looked for apt-get, zypper, dnf, yum, pacman).
 Install one of the .AppImage or .flatpak builds by hand instead:
@@ -103,7 +103,7 @@ Wait and retry, or download the package by hand:
     esac
 }
 
-# The asset names carry the upstream RustDesk version rather than the release
+# The asset names carry the application version rather than the release
 # tag, so the download URL has to come from the metadata. Parsed with grep and
 # sed because jq is not present on a stock image.
 asset_url() {
@@ -147,9 +147,57 @@ pkg="$tmp/${url##*/}"
 info "downloading ${url##*/}"
 curl -fsSL --retry 3 -o "$pkg" "$url" || die "download failed: $url"
 
+# The previous package used a shared name. Its owned unit and package summary
+# must both identify LabDesk before the installer can request its removal.
+legacy_rpm_package() {
+    unit=/usr/share/rustdesk/files/rustdesk.service
+    [ -f "$unit" ] && [ ! -L "$unit" ] || return 0
+    [ "$(rpm -qf --qf '%{NAME}' "$unit" 2>/dev/null || true)" = rustdesk ] || return 0
+    [ "$(rpm -q --qf '%{SUMMARY}' rustdesk 2>/dev/null || true)" = 'LabDesk remote administration client' ] || return 0
+    grep -qx 'Description=LabDesk' "$unit" || return 0
+    printf '%s\n' rustdesk
+}
+
+legacy_arch_package() {
+    unit=/usr/share/rustdesk/files/rustdesk.service
+    [ -f "$unit" ] && [ ! -L "$unit" ] || return 0
+    [ "$(LC_ALL=C pacman --query --owns --quiet "$unit" 2>/dev/null || true)" = rustdesk ] || return 0
+    LC_ALL=C pacman --query --info rustdesk 2>/dev/null |
+        grep -Eq '^Description[[:space:]]*:[[:space:]]*LabDesk remote administration client$' || return 0
+    grep -qx 'Description=LabDesk' "$unit" || return 0
+    printf '%s\n' rustdesk
+}
+
 info "installing $(basename "$pkg")"
+legacy_args=""
+if [ "$manager" = apt ]; then
+    package_name=$(dpkg-deb -f "$pkg" Package) || die "download is not a Debian package"
+    case "$package_name" in
+        labdesk) ;;
+        *) die "unexpected package identity: $package_name" ;;
+    esac
+    dpkg-deb --control "$pkg" "$tmp/control"
+    [ -f "$tmp/control/preinst" ] || die "package is missing the migration preflight"
+    legacy_packages=$(/bin/sh "$tmp/control/preinst" --legacy-package)
+    for legacy in $legacy_packages; do
+        case "$legacy" in
+            rustdesk|rustdesk-unattended-wayland) legacy_args="$legacy_args $legacy-" ;;
+            *) die "unexpected legacy package identity: $legacy" ;;
+        esac
+    done
+elif [ "$manager" = pacman ]; then
+    [ "$(LC_ALL=C pacman --query --file --quiet "$pkg")" = labdesk ] || die "unexpected Arch package identity"
+    legacy=$(legacy_arch_package)
+    [ -z "$legacy" ] || pacman --remove --noconfirm "$legacy"
+else
+    [ "$(rpm -qp --qf '%{NAME}' "$pkg")" = labdesk ] || die "unexpected RPM package identity"
+    legacy=$(legacy_rpm_package)
+    [ -z "$legacy" ] || rpm --erase "$legacy"
+fi
 case "$manager" in
-    apt) apt-get install -y "$pkg" ;;
+    # Word splitting is intentional: every extra word was checked above and is
+    # an apt removal request for a package proven to belong to this product.
+    apt) apt-get install -y "$pkg" $legacy_args ;;
     dnf) dnf install -y "$pkg" ;;
     yum) yum install -y "$pkg" ;;
     zypper) zypper --non-interactive install --allow-unsigned-rpm "$pkg" ;;
@@ -163,22 +211,22 @@ the package and check it yourself first:
         ;;
 esac
 
-command -v rustdesk >/dev/null 2>&1 || die "install finished but the rustdesk binary is not on PATH."
+command -v labdesk >/dev/null 2>&1 || die "install finished but the labdesk binary is not on PATH."
 
 # Apply every setting that was supplied and report the ones that did not take,
 # rather than dying part-way and leaving a half-pointed client with no record
 # of which settings landed.
 applied=""
 failed=""
-# `rustdesk --option` exits 0 whatever happens: in the shipped source every
+# `labdesk --option` exits 0 whatever happens: in the shipped source every
 # branch, including "Installation and administrative privileges required!",
 # returns None. Reading the value back is the only way to know whether the write
 # landed. This also catches the case below, where there is no session to write
 # to. The value is printed on its own line; take the last non-empty one.
 set_option() {
     [ -n "${2:-}" ] || return 0
-    rustdesk --option "$1" "$2" >/dev/null 2>&1 || true
-    actual=$(rustdesk --option "$1" 2>/dev/null | sed '/^[[:space:]]*$/d' | tail -n 1 || true)
+    labdesk --option "$1" "$2" >/dev/null 2>&1 || true
+    actual=$(labdesk --option "$1" 2>/dev/null | sed '/^[[:space:]]*$/d' | tail -n 1 || true)
     if [ "$actual" = "$2" ]; then
         applied="$applied $1"
     else
@@ -188,7 +236,7 @@ set_option() {
 
 if [ -n "${LABDESK_HOST:-}${LABDESK_RELAY:-}${LABDESK_API:-}${LABDESK_KEY:-}" ]; then
     if command -v systemctl >/dev/null 2>&1; then
-        systemctl is-active --quiet rustdesk || systemctl start rustdesk || true
+        systemctl is-active --quiet labdesk || systemctl start labdesk || true
     fi
     set_option custom-rendezvous-server "${LABDESK_HOST:-}"
     set_option relay-server "${LABDESK_RELAY:-}"
@@ -201,7 +249,7 @@ The client is installed but is not pointed at your server. Settings are written
 through the LabDesk instance running in a logged-in user's session, not through
 the root service, so on a machine nobody has logged into yet there is nothing to
 write to. Log in on this machine once, then set them:
-  sudo rustdesk --option custom-rendezvous-server <host>
+  sudo labdesk --option custom-rendezvous-server <host>
 Or set them in the GUI under Settings > Network."
     fi
 else
@@ -238,7 +286,7 @@ not apply. On a compositor with no X11 session at all, such as Hyprland or
 Sway, there is no login-screen workaround."
     fi
     if [ "$manager" = "apt" ] && [ "$arch" = "x86_64" ]; then
-        warn "LabDesk also publishes a separate 'rustdesk-unattended-wayland' deb that
+        warn "LabDesk also publishes a separate 'labdesk-unattended-wayland' deb that
 captures through DRM/KMS with no X11 switch. It is a distinct package on purpose
 because it bypasses the desktop's consent prompt and injects input as root, so
 install it deliberately rather than as part of a routine setup:
@@ -246,4 +294,4 @@ install it deliberately rather than as part of a routine setup:
     fi
 fi
 
-info "done. Launch LabDesk from your applications menu or run 'rustdesk'."
+info "done. Launch LabDesk from your applications menu or run 'labdesk'."

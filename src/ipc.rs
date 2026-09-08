@@ -23,10 +23,10 @@ pub(crate) use ipc_drm::connect_drm;
 #[cfg(not(any(target_os = "android", target_os = "ios")))]
 use crate::plugin::ipc::Plugin;
 use crate::{
-    common::{is_server, CheckTestNatType},
+    common::is_server,
     privacy_mode,
     privacy_mode::PrivacyModeState,
-    rendezvous_mediator::RendezvousMediator,
+    network_service::NetworkService,
     ui_interface::{get_local_option, set_local_option},
 };
 use bytes::Bytes;
@@ -397,7 +397,6 @@ pub enum Data {
     #[cfg(target_os = "windows")]
     ClipboardNonFile(Option<(String, Vec<ClipboardNonFile>)>),
     PrivacyModeState((i32, PrivacyModeState, String)),
-    TestRendezvousServer,
     Deployed,
     #[cfg(not(any(target_os = "android", target_os = "ios")))]
     Keyboard(DataKeyboard),
@@ -521,7 +520,7 @@ pub enum Data {
     #[cfg(target_os = "windows")]
     PortForwardSessionCount(Option<usize>),
     SocksWs(Option<Box<(Option<config::Socks5Server>, String)>>),
-    // Linux asks this too: `res/rustdesk.service` runs the update loop as root and
+    // Linux asks this too: `res/labdesk.service` runs the update loop as root and
     // connections live in the desktop user's `--server`, so the only way root can
     // know whether a session is in progress is to ask.
     #[cfg(any(target_os = "macos", target_os = "linux"))]
@@ -800,7 +799,7 @@ impl Drop for CheckIfRestart {
             if allow_insecure_tls_fallback_changed {
                 hbb_common::tls::reset_tls_cache();
             }
-            RendezvousMediator::restart();
+            NetworkService::restart();
         }
         if self.audio_input != Config::get_option("audio-input") {
             crate::audio_service::restart();
@@ -844,7 +843,7 @@ async fn handle(data: Data, stream: &mut Connection) {
                 }
                 #[cfg(any(target_os = "macos", target_os = "linux"))]
                 if crate::is_main() {
-                    // below part is for main windows can be reopen during rustdesk installation and installing service from UI
+                    // below part is for main windows can be reopen during labdesk installation and installing service from UI
                     // this make new ipc server (domain socket) can be created.
                     std::fs::remove_file(&Config::ipc_path("")).ok();
                     #[cfg(target_os = "linux")]
@@ -890,13 +889,13 @@ async fn handle(data: Data, stream: &mut Connection) {
                 allow_err!(stream.send(&Data::Socks(Config::get_socks())).await);
             }
             Some(data) => {
-                let _nat = CheckTestNatType::new();
+
                 if data.proxy.is_empty() {
                     Config::set_socks(None);
                 } else {
                     Config::set_socks(Some(data));
                 }
-                RendezvousMediator::restart();
+                NetworkService::restart();
                 log::info!("socks updated");
             }
         },
@@ -1025,7 +1024,7 @@ async fn handle(data: Data, stream: &mut Connection) {
             }
             Some(value) => {
                 let _chk = CheckIfRestart::new();
-                let _nat = CheckTestNatType::new();
+
                 if let Some(v) = value.get("privacy-mode-impl-key") {
                     crate::privacy_mode::switch(v);
                 }
@@ -1094,12 +1093,9 @@ async fn handle(data: Data, stream: &mut Connection) {
                     .await
             );
         }
-        Data::TestRendezvousServer => {
-            crate::test_rendezvous_server();
-        }
         Data::Deployed => {
-            crate::rendezvous_mediator::NEEDS_DEPLOY.store(false, Ordering::SeqCst);
-            crate::rendezvous_mediator::RendezvousMediator::restart();
+
+            crate::network_service::NetworkService::restart();
         }
         #[cfg(feature = "flutter")]
         #[cfg(not(any(target_os = "android", target_os = "ios")))]
@@ -1937,7 +1933,7 @@ pub async fn set_options(value: HashMap<String, String>) -> ResultType<()> {
 }
 
 async fn set_options_async(value: HashMap<String, String>) -> ResultType<()> {
-    let _nat = CheckTestNatType::new();
+
     if let Ok(mut c) = connect(1000, "").await {
         c.send(&Data::Options(Some(value.clone()))).await?;
         // do not put below before connect, because we need to check should_exit
@@ -2013,7 +2009,7 @@ pub async fn get_socks() -> Option<config::Socks5Server> {
 
 #[tokio::main(flavor = "current_thread")]
 pub async fn set_socks(value: config::Socks5Server) -> ResultType<()> {
-    let _nat = CheckTestNatType::new();
+
     Config::set_socks(if value.proxy.is_empty() {
         None
     } else {
@@ -2052,13 +2048,6 @@ pub async fn get_socks_ws() -> (Option<config::Socks5Server>, String) {
 pub fn get_proxy_status() -> bool {
     Config::get_socks().is_some()
 }
-#[tokio::main(flavor = "current_thread")]
-pub async fn test_rendezvous_server() -> ResultType<()> {
-    let mut c = connect(1000, "").await?;
-    c.send(&Data::TestRendezvousServer).await?;
-    Ok(())
-}
-
 #[tokio::main(flavor = "current_thread")]
 pub async fn notify_deployed() -> ResultType<()> {
     let mut c = connect(1000, "").await?;

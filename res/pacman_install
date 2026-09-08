@@ -1,47 +1,71 @@
+legacy_arch_package() {
+    unit=/usr/share/rustdesk/files/rustdesk.service
+    [ -f "$unit" ] && [ ! -L "$unit" ] || return 0
+    [ "$(LC_ALL=C pacman --query --owns --quiet "$unit" 2>/dev/null || true)" = rustdesk ] || return 0
+    LC_ALL=C pacman --query --info rustdesk 2>/dev/null |
+        grep -Eq '^Description[[:space:]]*:[[:space:]]*LabDesk remote administration client$' || return 0
+    grep -qx 'Description=LabDesk' "$unit" || return 0
+    printf '%s\n' rustdesk
+}
+pre_install() {
+    if [ -n "$(legacy_arch_package)" ]; then
+        echo "LabDesk: use the LabDesk Linux installer to migrate the previous package safely." >&2
+        return 1
+    fi
+}
+
 # arg 1:  the new package version
 #pre_install() {
 #}
 
 # arg 1:  the new package version
 post_install() {
+	if [ -n "$(legacy_arch_package)" ]; then
+		echo "LabDesk is installed but its service remains inactive until the Linux installer migrates the previous package." >&2
+		return 1
+	fi
 	# do something here
-	cp /usr/share/rustdesk/files/rustdesk.service /etc/systemd/system/rustdesk.service
-	cp /usr/share/rustdesk/files/rustdesk.desktop /usr/share/applications/
-	cp /usr/share/rustdesk/files/rustdesk-link.desktop /usr/share/applications/
+	cp /usr/share/labdesk/files/labdesk.service /etc/systemd/system/labdesk.service
+	cp /usr/share/labdesk/files/labdesk.desktop /usr/share/applications/
+	cp /usr/share/labdesk/files/labdesk-link.desktop /usr/share/applications/
 	systemctl daemon-reload
-	systemctl enable rustdesk
-	systemctl start rustdesk
+	systemctl enable labdesk
+	systemctl start labdesk
 	update-desktop-database
 }
 
 # arg 1:  the new package version
 # arg 2:  the old package version
 pre_upgrade() {
-    systemctl stop rustdesk || true
+    systemctl stop labdesk || true
 }
 
 # arg 1:  the new package version
 # arg 2:  the old package version
 post_upgrade() {
-	cp /usr/share/rustdesk/files/rustdesk.service /etc/systemd/system/rustdesk.service
-	cp /usr/share/rustdesk/files/rustdesk.desktop /usr/share/applications/
-	cp /usr/share/rustdesk/files/rustdesk-link.desktop /usr/share/applications/
+	if [ -n "$(legacy_arch_package)" ]; then
+		echo "LabDesk is installed but its service remains inactive until the Linux installer migrates the previous package." >&2
+		return 1
+	fi
+	cp /usr/share/labdesk/files/labdesk.service /etc/systemd/system/labdesk.service
+	cp /usr/share/labdesk/files/labdesk.desktop /usr/share/applications/
+	cp /usr/share/labdesk/files/labdesk-link.desktop /usr/share/applications/
 	systemctl daemon-reload
-	systemctl enable rustdesk
-	systemctl start rustdesk
+	systemctl enable labdesk
+	systemctl start labdesk
 	update-desktop-database
 }
 
 # arg 1:  the old package version
 pre_remove() {
-	systemctl stop rustdesk || true
-	systemctl disable rustdesk || true
-	rm /etc/systemd/system/rustdesk.service || true
+	systemctl stop labdesk || true
+	systemctl disable labdesk || true
+	rm /etc/systemd/system/labdesk.service || true
 }
 
 # arg 1:  the old package version
 post_remove() {
-	rm /usr/share/applications/rustdesk.desktop || true
-	rm /usr/share/applications/rustdesk-link.desktop || true
+	rm /usr/share/applications/labdesk.desktop || true
+	rm /usr/share/applications/labdesk-link.desktop || true
 	update-desktop-database
 }

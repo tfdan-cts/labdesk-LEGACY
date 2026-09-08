@@ -38,7 +38,7 @@ enum ConsoleSection {
 /// The two views of the fleet. Health used to be a section of its own that
 /// showed one machine, chosen on Fleet first; it is a tab here so the whole
 /// fleet's figures sit beside the reachability table they belong with.
-enum FleetTab { machines, health, jobs, automation }
+enum FleetTab { machines, health, alerts, jobs, automation }
 
 const primaryConsoleSections = [
   ConsoleSection.home,
@@ -143,9 +143,6 @@ class ConsoleShell extends StatefulWidget {
     required this.machines,
     this.healthMachines,
     this.samples = const [],
-    this.profiles = const [],
-    this.profileName = 'Default',
-    this.onProfileSelected,
     this.isRefreshing = false,
     this.isLoading = false,
     this.lastRefreshed,
@@ -174,6 +171,7 @@ class ConsoleShell extends StatefulWidget {
     this.onMachineSelected,
     this.onTermsPressed,
     this.machineHealthFooter,
+    this.alertsBuilder,
     this.hosted = const {},
     this.sectionRequest,
     this.subItems = const {},
@@ -198,6 +196,7 @@ class ConsoleShell extends StatefulWidget {
   final ValueChanged<String>? onMachineSelected;
   final VoidCallback? onTermsPressed;
   final Widget Function(String machineId)? machineHealthFooter;
+  final WidgetBuilder? alertsBuilder;
 
   /// What the Health tab accounts for, when that is not the same list.
   ///
@@ -209,12 +208,7 @@ class ConsoleShell extends StatefulWidget {
   /// falls back to [machines], so the design harness is unaffected.
   final List<MachineRow>? healthMachines;
   final List<ReachSample> samples;
-  final List<ProfileRow> profiles;
-  final String profileName;
 
-  /// The operator picked another server profile in the sidebar. Null leaves
-  /// the control as a label: a chevron that opens nothing is worse than none.
-  final ValueChanged<String>? onProfileSelected;
 
   final bool isRefreshing;
   final bool isLoading;
@@ -384,9 +378,6 @@ class _ConsoleShellState extends State<ConsoleShell> {
             children: [
               _Sidebar(
                 section: _section,
-                profileName: widget.profileName,
-                profiles: widget.profiles,
-                onProfileSelected: widget.onProfileSelected,
                 selected: _selected,
                 onSelect: _setSection,
                 subItems: widget.subItems,
@@ -588,6 +579,9 @@ class _ConsoleShellState extends State<ConsoleShell> {
                               widget.healthFor?.call(id) ?? MachineHealth.empty,
                           now: widget.now,
                         ),
+                      FleetTab.alerts => widget.alertsBuilder?.call(context) ??
+                          const Center(
+                              child: Text('Alerts require the connected client.')),
                       FleetTab.jobs => widget.hosted[ConsoleSection.tools]
                               ?.call(context) ??
                           const _HostedElsewhere(section: ConsoleSection.tools),
@@ -641,11 +635,7 @@ class _ConsoleShellState extends State<ConsoleShell> {
                 },
         );
       case ConsoleSection.settings:
-        return SettingsScreen(
-            profiles: widget.profiles,
-            onActivate: widget.onProfileSelected == null
-                ? null
-                : (profile) => widget.onProfileSelected!(profile.name));
+        return const SettingsScreen();
       case ConsoleSection.sessions:
       case ConsoleSection.tools:
       case ConsoleSection.automation:
@@ -723,6 +713,7 @@ class _FleetTabsState extends State<_FleetTabs> with TickerProviderStateMixin {
         tabs: const [
           Tab(text: 'Machines', height: 52),
           Tab(text: 'Health', height: 52),
+          Tab(text: 'Alerts', height: 52),
           Tab(text: 'Jobs', height: 52),
           Tab(text: 'Automation', height: 52)
         ],
@@ -764,11 +755,8 @@ class _HostedElsewhere extends StatelessWidget {
 class _Sidebar extends StatelessWidget {
   const _Sidebar({
     required this.section,
-    required this.profileName,
     required this.selected,
     required this.onSelect,
-    this.profiles = const [],
-    this.onProfileSelected,
     this.subItems = const {},
     this.selectedSubItem,
     this.onSubItemSelected,
@@ -782,9 +770,6 @@ class _Sidebar extends StatelessWidget {
   });
 
   final ConsoleSection section;
-  final String profileName;
-  final List<ProfileRow> profiles;
-  final ValueChanged<String>? onProfileSelected;
   final MachineRow? selected;
   final ValueChanged<ConsoleSection> onSelect;
   final Map<ConsoleSection, List<ConsoleSubItem>> subItems;

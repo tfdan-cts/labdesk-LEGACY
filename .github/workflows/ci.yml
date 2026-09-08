@@ -206,15 +206,15 @@ jobs:
       if: matrix.job.target == 'x86_64-unknown-linux-gnu'
       shell: bash
       run: |
-        strip target/${{ matrix.job.target }}/debug/rustdesk
-        ls -l target/${{ matrix.job.target }}/debug/rustdesk
+        strip target/${{ matrix.job.target }}/debug/labdesk
+        ls -l target/${{ matrix.job.target }}/debug/labdesk
 
     - name: Upload the Linux binary for field checks
       if: matrix.job.target == 'x86_64-unknown-linux-gnu'
       uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
       with:
         name: labdesk-${{ matrix.job.target }}
-        path: target/${{ matrix.job.target }}/debug/rustdesk
+        path: target/${{ matrix.job.target }}/debug/labdesk
         retention-days: 5
 
     - name: clean
@@ -390,11 +390,11 @@ jobs:
     # Plain `run` rather than actions-rs/cargo: that action was archived in 2021
     # and the runner already reports it as being forced onto a Node it was not
     # written for. The features are written package-qualified because more than
-    # one package is selected here. Enabling rustdesk/drm pulls scrap/drm in
+    # one package is selected here. Enabling labdesk/drm pulls scrap/drm in
     # through the dependency, so the runtime loader tests in scrap run too.
     - name: Run tests with the drm features
       shell: bash
       run: |
         cargo test --locked --target=x86_64-unknown-linux-gnu --workspace --no-fail-fast \
-          --features rustdesk/drm,rustdesk/drm-wake \
+          --features labdesk/drm,labdesk/drm-wake \
           -- --skip test_get_cursor_pos --skip test_get_key_state

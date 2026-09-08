@@ -54,13 +54,13 @@ fn prepare_install_commands(commands: &str) -> ResultType<String> {
     let chcp_path = get_system_executable(CHCP_RELATIVE_PATH)?;
     let chcp = path_for_cmd_environment(&chcp_path)?;
     Ok(format!(
-        "@echo off\r\nsetlocal EnableExtensions DisableDelayedExpansion\r\n\
+        "@echo off\r\nsetlocal EnableExtensions DisableDelayedExpansion\r\nset \"ERRORLEVEL=\"\r\n\
          \"{chcp}\" {UTF8_CODE_PAGE} > nul || exit /b \
          {BATCH_CODE_PAGE_FAILURE_EXIT_CODE}\r\n\
          {}\r\n\
          if exist \"%~f0.dir\" exit /b {BATCH_OUTPUT_DIRECTORY_EXISTS_EXIT_CODE}\r\n\
          md \"%~f0.dir\" || exit /b {BATCH_OUTPUT_DIRECTORY_CREATE_FAILURE_EXIT_CODE}\r\n\
-         set \"RUSTDESK_OUTPUT_DIR=%~f0.dir\"\r\n{commands}\r\nexit /b 0\r\n",
+         set \"LABDESK_OUTPUT_DIR=%~f0.dir\"\r\n{commands}\r\nexit /b %errorlevel%\r\n",
         trusted_install_environment()?
     ))
 }
@@ -71,7 +71,7 @@ fn write_install_script(cmds: String) -> ResultType<InstallCommandScript> {
     let commands = prepare_install_commands(&cmds)?;
     let expected_hash = Sha256::digest(commands.as_bytes()).into();
     let path = directory.join(format!(
-        "rustdesk_install_{}.bat",
+        "labdesk_install_{}.bat",
         uuid::Uuid::new_v4().simple()
     ));
     let mut file = fs::OpenOptions::new()
@@ -100,7 +100,7 @@ fn verified_install_bootstrap(
 ) -> ResultType<String> {
     let source = path_for_cmd_assignment(&script.path)?;
     let runner = runner_directory.join(format!(
-        "rustdesk_install_{}.bat",
+        "labdesk_install_{}.bat",
         uuid::Uuid::new_v4().simple()
     ));
     let runner = path_for_cmd_assignment(&runner)?;
@@ -115,7 +115,7 @@ fn verified_install_bootstrap(
     // disabled, then expanded indirectly so literal `!` survives: S=source,
     // R=runner, Q=cmd.exe, H=certutil.exe, F=findstr.exe, C=created flag, E=exit code.
     Ok(format!(
-        "setlocal DisableDelayedExpansion & set \"S={source}\" & set \"R={runner}\" & \
+        "setlocal DisableDelayedExpansion & set \"ERRORLEVEL=\" & set \"S={source}\" & set \"R={runner}\" & \
          set \"Q={cmd}\" & set \"H={certutil}\" & set \"F={findstr}\" & \
          set \"C=0\" & set \"E=0\" & setlocal EnableDelayedExpansion & \
          if exist \"!R!\" (set \"E={INSTALL_HANDOFF_RUNNER_EXISTS_EXIT_CODE}\") else (\
@@ -142,11 +142,7 @@ fn verified_install_parameters(script: &InstallCommandScript) -> ResultType<Stri
 }
 
 pub(super) fn run_cmds(cmds: String, show: bool, tip: &str) -> ResultType<()> {
-    validate_install_app_name(&crate::get_app_name())?;
-    let script = write_install_script(cmds)?;
-    let cmd_path = get_system_executable(CMD_RELATIVE_PATH)?;
-    let parameters = verified_install_parameters(&script)?;
-    let exit_code = run_elevated_and_wait(&cmd_path, &parameters, show)?;
+    let exit_code = run_cmds_exit_code(cmds, show)?;
     if exit_code != 0 {
         bail!(
             "{tip} failed with elevated exit code {exit_code}: {}",
@@ -154,6 +150,14 @@ pub(super) fn run_cmds(cmds: String, show: bool, tip: &str) -> ResultType<()> {
         );
     }
     Ok(())
+}
+
+pub(super) fn run_cmds_exit_code(cmds: String, show: bool) -> ResultType<u32> {
+    validate_install_app_name(&crate::get_app_name())?;
+    let script = write_install_script(cmds)?;
+    let cmd_path = get_system_executable(CMD_RELATIVE_PATH)?;
+    let parameters = verified_install_parameters(&script)?;
+    run_elevated_and_wait(&cmd_path, &parameters, show)
 }
 
 fn elevated_install_failure_reason(exit_code: u32) -> &'static str {
@@ -172,6 +176,48 @@ fn elevated_install_failure_reason(exit_code: u32) -> &'static str {
     }
 }
 
+/// Execute the actual protected handoff without UAC or installation. The runner
+/// root is a newly created test directory, so this proves byte/exit behavior;
+/// administrator ACL and UAC acceptance require a separate platform test.
+#[cfg(test)]
+pub(super) fn run_commands_in_fixture(
+    commands: String,
+    replacement_script: Option<&str>,
+) -> ResultType<std::process::Output> {
+    let directory = std::env::temp_dir().join(format!(
+        "labdesk_handoff_fixture_!&^()_{}", uuid::Uuid::new_v4().simple()
+    ));
+    fs::create_dir(&directory)?;
+    let result = (|| {
+        let script = write_install_script(commands)?;
+        let bootstrap = verified_install_bootstrap(&script, &directory)?;
+        if let Some(replacement) = replacement_script {
+            fs::write(&script.path, replacement)?;
+        }
+        Ok(tests::run_install_bootstrap_for_test(&bootstrap))
+    })();
+    fs::remove_dir_all(directory)?;
+    result
+}
+
+#[cfg(test)]
+pub(super) fn spawn_fixture_and_exit(commands: String, directory: &Path) -> ResultType<()> {
+    use std::{os::windows::process::CommandExt, process::Stdio};
+    let script = write_install_script(commands)?;
+    let runner = directory.join("runner");
+    let bootstrap = verified_install_bootstrap(&script, &runner)?;
+    let output = fs::File::create(directory.join("detached-output.txt"))?;
+    let child = std::process::Command::new(get_system_executable(CMD_RELATIVE_PATH)?)
+        .raw_arg(format!("/D /E:ON /V:ON /C {bootstrap}"))
+        .stdin(Stdio::null()).stdout(output.try_clone()?).stderr(output)
+        .creation_flags(::windows::Win32::System::Threading::CREATE_NO_WINDOW.0)
+        .spawn()?;
+    fs::write(directory.join("child.pid"), child.id().to_string())?;
+    // Model abrupt disappearance of the initiating medium process. No Rust
+    // guards survive this exit; the independent command receiver owns its copy.
+    std::process::exit(0);
+}
+
 #[cfg(test)]
 mod tests {
     use super::super::installer_shell::{
@@ -184,23 +230,23 @@ mod tests {
     #[test]
     fn native_install_handoff_verifies_before_execution() {
         let marker = std::env::temp_dir().join(format!(
-            "rustdesk_install_marker_{}",
+            "labdesk_install_marker_{}",
             uuid::Uuid::new_v4().simple()
         ));
         let runner_dir = std::env::temp_dir().join(format!(
-            "rustdesk_install_!RUSTDESK_HANDOFF_EXPAND!&^@()runner_{}",
+            "labdesk_install_!LABDESK_HANDOFF_EXPAND!&^@()runner_{}",
             uuid::Uuid::new_v4().simple()
         ));
         std::fs::create_dir(&runner_dir).expect("runner directory should be created");
         let shortcut_commands = embedded_shortcut_commands(
-            shortcut_bytes(r"C:\RustDesk.exe", None, None)
+            shortcut_bytes(r"C:\LabDesk.exe", None, None)
                 .expect("native shortcut should be generated"),
             "test.lnk",
             "test",
         );
         let script = write_install_script(format!(
-            "if \"%PROGRAMDATA%\"==\"rustdesk_untrusted\" exit /b 77\r\n\
-             if \"%PUBLIC%\"==\"rustdesk_untrusted\" exit /b 77\r\n\
+            "if \"%PROGRAMDATA%\"==\"labdesk_untrusted\" exit /b 77\r\n\
+             if \"%PUBLIC%\"==\"labdesk_untrusted\" exit /b 77\r\n\
              {shortcut_commands}\r\n\
              > \"{}\" echo verified",
             marker.display()
@@ -219,6 +265,28 @@ mod tests {
         assert!(marker.exists(), "verified install script must execute");
         std::fs::remove_file(&marker).expect("test marker should be removed");
         assert_replaced_install_script_is_rejected(&script, &runner_dir, &marker);
+        std::fs::remove_dir(runner_dir).expect("runner directory should be empty");
+    }
+
+    #[test]
+    fn native_install_handoff_preserves_child_exit_codes() {
+        let runner_dir = std::env::temp_dir().join(format!(
+            "labdesk_exit_code_{}",
+            uuid::Uuid::new_v4().simple()
+        ));
+        std::fs::create_dir(&runner_dir).expect("runner directory should be created");
+        let cmd = get_system_executable(CMD_RELATIVE_PATH).expect("system cmd.exe should resolve");
+        for exit_code in [7, 3010] {
+            let script = write_install_script(format!(
+                "\"{}\" /D /C \"exit {exit_code}\"",
+                cmd.display()
+            ))
+            .expect("install script should be created");
+            let bootstrap = verified_install_bootstrap(&script, &runner_dir)
+                .expect("native verifier bootstrap should be generated");
+            let output = run_install_bootstrap_for_test(&bootstrap);
+            assert_eq!(output.status.code(), Some(exit_code));
+        }
         std::fs::remove_dir(runner_dir).expect("runner directory should be empty");
     }
 
@@ -272,13 +340,14 @@ mod tests {
         assert!(!marker.exists(), "replaced script must not execute");
     }
 
-    fn run_install_bootstrap_for_test(bootstrap: &str) -> std::process::Output {
+    pub(super) fn run_install_bootstrap_for_test(bootstrap: &str) -> std::process::Output {
         let cmd = get_system_executable(CMD_RELATIVE_PATH).expect("system cmd.exe should resolve");
         let mut command = std::process::Command::new(cmd);
         command
-            .env("PROGRAMDATA", "rustdesk_untrusted")
-            .env("PUBLIC", "rustdesk_untrusted")
-            .env("RUSTDESK_HANDOFF_EXPAND", "expanded");
+            .env("PROGRAMDATA", "labdesk_untrusted")
+            .env("PUBLIC", "labdesk_untrusted")
+            .env("ERRORLEVEL", "0")
+            .env("LABDESK_HANDOFF_EXPAND", "expanded");
         command.raw_arg(format!("/D /E:ON /V:ON /C {bootstrap}"));
         command
             .creation_flags(Threading::CREATE_NO_WINDOW.0)

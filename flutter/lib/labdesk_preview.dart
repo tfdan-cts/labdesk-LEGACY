@@ -86,8 +86,6 @@ class _LabDeskPreviewAppState extends State<LabDeskPreviewApp> {
         body: ConsoleShell(
           machines: _fixtures,
           samples: _samples,
-          profiles: _profiles,
-          profileName: 'Workshop',
           isRefreshing: _refreshing,
           lastRefreshed: _now.subtract(const Duration(seconds: 24)),
           now: _now,
@@ -410,16 +408,6 @@ MetricHistory _history(MachineState state) {
   if (latest != null) history.add(latest);
   return history;
 }
-
-const _profiles = <ProfileRow>[
-  ProfileRow(
-      name: 'Workshop',
-      host: 'id.workshop.example',
-      hasKey: true,
-      active: true),
-  ProfileRow(name: 'Office', host: 'id.office.example', hasKey: true),
-  ProfileRow(name: 'Public servers', host: ''),
-];
 
 final _samples = <ReachSample>[
   for (var i = 0; i < 40; i++)

@@ -27,7 +27,7 @@ struct MacUpdateLock {
 
 #[cfg(target_os = "macos")]
 fn acquire_mac_update_lock() -> ResultType<MacUpdateLock> {
-    let path = std::path::PathBuf::from("/var/run/rustdesk-update.lock");
+    let path = std::path::PathBuf::from("/var/run/labdesk-update.lock");
     let handle = std::fs::OpenOptions::new()
         .read(true)
         .write(true)
@@ -269,12 +269,16 @@ fn check_update(manually: bool) -> ResultType<()> {
         // No need to care about the downloaded file here, because it's rare case that the `conns` are empty
         // before the download, but not empty after the download.
         if has_no_active_conns() {
-            // The installer runs elevated, so it runs on verified bytes or it
-            // does not run. `update_new_version` hashes the file as its last
-            // act before the handover, after the staging work, so nothing this
-            // process does can come between the check and the launch.
+            // The trusted elevated receiver hashes its own protected copy
+            // against the digest authenticated above before executing it.
             #[cfg(target_os = "windows")]
-            update_new_version(update_msi, &version, &file_path, &expected_sha256);
+            crate::platform::install_verified_update(
+                file_path
+                    .to_str()
+                    .ok_or_else(|| hbb_common::anyhow::anyhow!("Invalid update file path"))?,
+                &expected_sha256,
+                true,
+            )?;
             // Nothing installs on the other desktop platforms from here, but a
             // download that does not match still has to fail the check loudly
             // and be deleted rather than left in the temp directory.
@@ -283,123 +287,6 @@ fn check_update(manually: bool) -> ResultType<()> {
         }
     }
     Ok(())
-}
-
-/// Hands the downloaded installer to the elevated installer, and hashes it
-/// immediately before doing so. The file lives in the temp directory, which
-/// every local user can write, so the gap between the check and the launch is
-/// the window an attacker gets; everything that can be done first is done
-/// first, and the hash is the last thing before the handover.
-#[cfg(target_os = "windows")]
-fn update_new_version(
-    update_msi: bool,
-    version: &str,
-    file_path: &PathBuf,
-    expected_sha256: &str,
-) {
-    log::info!(
-        "[update] {} downloaded to {:?}, msi: {update_msi}; hashing before the elevated launch",
-        version,
-        file_path.to_str()
-    );
-    if let Some(p) = file_path.to_str() {
-        if let Some(session_id) = crate::platform::get_current_process_session_id() {
-            if update_msi {
-                if let Err(e) = verify_downloaded_file(file_path, expected_sha256) {
-                    log::error!("Refusing to install the new msi version \"{}\": {}", version, e);
-                    return;
-                }
-                match crate::platform::update_me_msi(p, true) {
-                    Ok(_) => {
-                        log::info!("[update] {} installed from the msi", version);
-                    }
-                    Err(e) => {
-                        log::error!(
-                            "Failed to install the new msi version  \"{}\": {}",
-                            version,
-                            e
-                        );
-                        std::fs::remove_file(&file_path).ok();
-                    }
-                }
-            } else {
-                let custom_client_staging_dir = if crate::is_custom_client() {
-                    let custom_client_staging_dir =
-                        crate::platform::get_custom_client_staging_dir();
-                    if let Err(e) = crate::platform::handle_custom_client_staging_dir_before_update(
-                        &custom_client_staging_dir,
-                    ) {
-                        log::error!(
-                            "Failed to handle custom client staging dir before update: {}",
-                            e
-                        );
-                        std::fs::remove_file(&file_path).ok();
-                        return;
-                    }
-                    Some(custom_client_staging_dir)
-                } else {
-                    // Clean up any residual staging directory from previous custom client
-                    let staging_dir = crate::platform::get_custom_client_staging_dir();
-                    hbb_common::allow_err!(crate::platform::remove_custom_client_staging_dir(
-                        &staging_dir
-                    ));
-                    None
-                };
-                // Last act before the elevated launch, after the staging work,
-                // so the file is not touched again between here and there.
-                if let Err(e) = verify_downloaded_file(file_path, expected_sha256) {
-                    log::error!("Refusing to install the new version \"{}\": {}", version, e);
-                    if let Some(dir) = custom_client_staging_dir.as_deref() {
-                        hbb_common::allow_err!(crate::platform::remove_custom_client_staging_dir(
-                            dir
-                        ));
-                    }
-                    return;
-                }
-                let update_launched = match crate::platform::launch_privileged_process(
-                    session_id,
-                    &format!("{} --update", p),
-                ) {
-                    Ok(h) => {
-                        if h.is_null() {
-                            log::error!("Failed to update to the new version: {}", version);
-                            false
-                        } else {
-                            log::info!(
-                                "[update] {} hashed to its published sha256 and its installer was launched elevated",
-                                version
-                            );
-                            true
-                        }
-                    }
-                    Err(e) => {
-                        log::error!("Failed to run the new version: {}", e);
-                        false
-                    }
-                };
-                if !update_launched {
-                    if let Some(dir) = custom_client_staging_dir {
-                        hbb_common::allow_err!(crate::platform::remove_custom_client_staging_dir(
-                            &dir
-                        ));
-                    }
-                    std::fs::remove_file(&file_path).ok();
-                }
-            }
-        } else {
-            log::error!(
-                "Failed to get the current process session id, Error {}",
-                std::io::Error::last_os_error()
-            );
-            std::fs::remove_file(&file_path).ok();
-        }
-    } else {
-        // unreachable!()
-        log::error!(
-            "Failed to convert the file path to string: {}",
-            file_path.display()
-        );
-    }
 }
 
 /// Where an unattended download lands: a directory under the temp directory
@@ -411,24 +298,15 @@ pub const UPDATE_DIR_PREFIX: &str = "labdesk-update";
 /// cut off and fails the hash rather than filling the disk.
 const UPDATE_MAX_BYTES: u64 = 512 * 1024 * 1024;
 
-/// The hosts an update may be fetched from, and the path shape under each.
-/// Upstream: `https://github.com/rustdesk/rustdesk/releases/download/<tag>/<file>`.
-/// LabDesk: `https://lab-desk.net/releases/download/<version>/<file>`, which the
+/// Updates come from `https://lab-desk.net/releases/download/<version>/<file>`, which the
 /// site streams from the release its administrator made public.
 pub fn get_update_download_file_from_url(url: &str) -> Option<PathBuf> {
     let parsed = url::Url::parse(url).ok()?;
     let labdesk_host = crate::common::LABDESK_SITE.trim_start_matches("https://");
-    let (prefix, host, repo_segments) = if url.starts_with("https://github.com/") {
-        ("https://github.com/", "github.com", 2)
-    } else if url.starts_with(&format!("https://{}/", labdesk_host)) {
-        ("", labdesk_host, 0)
-    } else {
-        return None;
-    };
     // Check the raw prefix before Url normalizes default ports.
-    if (!prefix.is_empty() && !url.starts_with(prefix))
+    if !url.starts_with(&format!("https://{}/", labdesk_host))
         || parsed.scheme() != "https"
-        || parsed.host_str() != Some(host)
+        || parsed.host_str() != Some(labdesk_host)
         || !parsed.username().is_empty()
         || parsed.password().is_some()
         || parsed.port().is_some()
@@ -439,13 +317,6 @@ pub fn get_update_download_file_from_url(url: &str) -> Option<PathBuf> {
     }
 
     let mut segments = parsed.path_segments()?;
-    if repo_segments == 2 {
-        let owner = segments.next()?;
-        let repo = segments.next()?;
-        if owner != "rustdesk" || repo != "rustdesk" {
-            return None;
-        }
-    }
     let releases = segments.next()?;
     let download = segments.next()?;
     let tag = segments.next()?;
@@ -532,30 +403,19 @@ const RELEASE_MANIFEST_MAX_BYTES: u64 = 64 * 1024;
 /// The Ed25519 public key that release manifests are signed with, base64 of the
 /// raw 32 bytes.
 ///
-/// PLACEHOLDER, deliberately empty: the signing key has not been generated yet,
-/// and generating one is a ceremony only the repository owner can perform. An
-/// empty constant pins no key, which leaves this client on the published-digest
-/// path it already ships rather than making it refuse every update it is
-/// offered. Filling this constant in is the ONLY change that switches signature
-/// enforcement on, and once it is on an update whose manifest signature is
-/// missing, malformed or made by another key is refused.
-///
-/// `docs/SIGNING.md` has the ceremony, the release-secret half of it and the
-/// order the two halves have to land in.
-const RELEASE_SIGNING_PUBLIC_KEY_B64: &str = "";
+/// The privileged Linux helper uses the key compiled into the installed native
+/// verifier. Missing or malformed trust configuration disables updates; it never disables
+/// signature verification. The owner-controlled ceremony is in docs/SIGNING.md.
+const RELEASE_SIGNING_PUBLIC_KEY_B64: &str = include_str!("../res/release-signing-public-key");
 
-/// The pinned release key, or None while the constant above is the placeholder.
+/// The pinned release key, or None when secure updates are not configured.
 fn release_signing_public_key() -> Option<sign::PublicKey> {
     parse_release_signing_key(RELEASE_SIGNING_PUBLIC_KEY_B64)
 }
 
-/// A pinned key is a 32-byte Ed25519 public key or it is nothing. Returning
-/// None rather than panicking keeps a mistyped constant from taking the process
-/// down, and the test below turns that same mistyped constant into a build
-/// failure, which is where it has to be caught: a key that silently parses to
-/// None would switch enforcement off on every installed client at once.
+/// Reject malformed configuration without crashing the application.
 fn parse_release_signing_key(base64: &str) -> Option<sign::PublicKey> {
-    sign::PublicKey::from_slice(&crate::decode64(base64).ok()?)
+    sign::PublicKey::from_slice(&crate::decode64(base64.trim()).ok()?)
 }
 
 /// The version and asset filename a release download URL names, for URLs the
@@ -564,7 +424,18 @@ fn parse_release_signing_key(base64: &str) -> Option<sign::PublicKey> {
 fn release_asset_parts(download_url: &str) -> Option<(&str, &str)> {
     get_update_download_file_from_url(download_url)?;
     let prefix = format!("{}{}", crate::common::LABDESK_SITE, RELEASE_DOWNLOAD_PATH);
-    download_url.strip_prefix(&prefix)?.split_once('/')
+    let (version, asset) = download_url.strip_prefix(&prefix)?.split_once('/')?;
+    if !version
+        .bytes()
+        .all(|byte| byte.is_ascii_alphanumeric() || b".+-".contains(&byte))
+        || !asset.starts_with(&format!(
+            "labdesk-{}-",
+            version.strip_prefix('v').unwrap_or(version)
+        ))
+    {
+        return None;
+    }
+    Some((version, asset))
 }
 
 /// Where the site serves `asset` of release `version` from.
@@ -590,8 +461,8 @@ fn release_asset_url(version: &str, asset: &str) -> String {
 ///
 /// What it does NOT stop is whoever can make the release pipeline sign for
 /// them: the private key is a secret in this same repository, so repository
-/// write plus a workflow dispatch signs whatever is on the release. Nor does it
-/// bind a version, so a signed older release is still a signed release.
+/// write plus a workflow dispatch signs whatever is on the release. An older
+/// signed release remains authentic; callers must also enforce newer versions.
 /// `docs/SIGNING.md`, "What this does not close", is the honest list.
 fn verify_manifest_signature(
     manifest: &[u8],
@@ -614,44 +485,103 @@ fn verify_manifest_signature(
 /// `sha256sum` output: one `<64 hex>  <name>` line per asset, the name prefixed
 /// with `*` when the release pipeline hashed in binary mode.
 ///
-/// Releases up to 1.2.1 name their assets with the inherited `rustdesk-` prefix
-/// while the client asks for them under `labdesk-`, and the site maps one onto
-/// the other when it serves the file (labdesk-site `src/worker/releases.ts`,
-/// `upstreamNames`). The lookup here accepts the same pair, or an older release
-/// reads as one that publishes no digest at all.
-///
 /// Two lines for one name is refused rather than resolved: a manifest that says
 /// two things about one asset is not a manifest to install from.
 fn digest_from_manifest(manifest: &str, asset: &str) -> ResultType<String> {
-    let own = match asset.strip_prefix("rustdesk-") {
-        Some(rest) => format!("labdesk-{}", rest),
-        None => asset.to_owned(),
-    };
-    let inherited = own
-        .strip_prefix("labdesk-")
-        .map(|rest| format!("rustdesk-{}", rest));
+    if !is_plain_update_filename(asset) {
+        bail!("Invalid release asset name");
+    }
     let mut found = None;
     for line in manifest.lines() {
         let Some((digest, rest)) = line.split_once(' ') else {
             continue;
         };
-        let digest = digest.to_lowercase();
-        // A banner, a blank line or a truncated digest is not a digest line.
-        if !is_sha256_hex(&digest) {
+        let Some(name) = rest.strip_prefix(' ').or_else(|| rest.strip_prefix('*')) else {
+            continue;
+        };
+        if name != asset {
             continue;
         }
-        let name = rest.trim().trim_start_matches('*');
-        if name != own && Some(name) != inherited.as_deref() {
-            continue;
+        if !is_sha256_hex(digest) {
+            bail!(
+                "The release manifest records an invalid digest for {}",
+                asset
+            );
         }
         if found.is_some() {
             bail!("The release manifest records {} more than once", asset);
         }
-        found = Some(digest);
+        found = Some(digest.to_lowercase());
     }
     match found {
         Some(digest) => Ok(digest),
         None => bail!("The release manifest publishes no digest for {}", asset),
+    }
+}
+
+/// Authenticate exact manifest bytes before reading the requested asset's digest.
+pub fn verify_release_manifest(
+    manifest: &[u8],
+    signature: &[u8],
+    public_key: &sign::PublicKey,
+    asset: &str,
+) -> ResultType<String> {
+    if manifest.is_empty() || manifest.len() as u64 > RELEASE_MANIFEST_MAX_BYTES {
+        bail!("The release manifest is empty or too large");
+    }
+    if hbb_common::sodiumoxide::init().is_err() {
+        bail!("Unable to initialize release signature verification");
+    }
+    verify_manifest_signature(manifest, signature, public_key)?;
+    digest_from_manifest(std::str::from_utf8(manifest)?, asset)
+}
+
+/// Verify downloaded metadata with this installed build's immutable trust key.
+/// Used by the privileged Linux helper without initializing the desktop app.
+pub fn verify_release_manifest_files(
+    manifest_path: &Path,
+    signature_path: &Path,
+    asset: &str,
+) -> ResultType<String> {
+    let public_key = release_signing_public_key().ok_or_else(|| {
+        hbb_common::anyhow::anyhow!("Secure updates are unavailable: this build has no valid release signing key. Obtain a signed release from the LabDesk administrator.")
+    })?;
+    let mut manifest = Vec::new();
+    std::fs::File::open(manifest_path)?
+        .take(RELEASE_MANIFEST_MAX_BYTES + 1)
+        .read_to_end(&mut manifest)?;
+    let mut signature = Vec::new();
+    std::fs::File::open(signature_path)?
+        .take(sign::SIGNATUREBYTES as u64 + 1)
+        .read_to_end(&mut signature)?;
+    verify_release_manifest(&manifest, &signature, &public_key, asset)
+}
+
+/// Recognize the privileged helper's verification-only command before startup.
+/// No caller-supplied key, network request, configuration, or installation.
+pub fn release_verifier_command(args: &[std::ffi::OsString]) -> Option<i32> {
+    if args.first().map(|arg| arg.as_os_str())
+        != Some(std::ffi::OsStr::new("--verify-release-manifest"))
+    {
+        return None;
+    }
+    if args.len() != 4 {
+        eprintln!("Usage: labdesk --verify-release-manifest <manifest> <signature> <asset>");
+        return Some(64);
+    }
+    let Some(asset) = args[3].to_str() else {
+        eprintln!("Invalid release asset name");
+        return Some(65);
+    };
+    match verify_release_manifest_files(Path::new(&args[1]), Path::new(&args[2]), asset) {
+        Ok(digest) => {
+            println!("{}", digest);
+            Some(0)
+        }
+        Err(error) => {
+            eprintln!("Release verification failed: {}", error);
+            Some(65)
+        }
     }
 }
 
@@ -675,11 +605,7 @@ fn fetch_release_bytes(url: &str, max: u64) -> ResultType<Vec<u8>> {
 /// The SHA-256 for the asset at `download_url`, reading whatever it needs
 /// through `fetch`. Every failure is fatal to the update by design.
 ///
-/// The choice between the two paths lives here, and the fetching is passed in,
-/// because this is the line that decides whether an update is checked against a
-/// signature at all and a test can only watch it if the network is a parameter.
-///
-/// With a key pinned there is deliberately NO path back to the unsigned digest:
+/// There is deliberately no unsigned fallback, including on unconfigured builds:
 /// a manifest the site will not serve, or one whose signature does not verify,
 /// stops the update. A fallback there would hand any site that can answer 404
 /// the power to switch enforcement off for the whole fleet, which is the one
@@ -690,16 +616,7 @@ fn published_sha256(
     fetch: &dyn Fn(&str, u64) -> ResultType<Vec<u8>>,
 ) -> ResultType<String> {
     let Some(public_key) = pinned_key else {
-        // No key is pinned yet, so the manifest is read without a signature.
-        // It still comes from the release the asset itself came from, which is
-        // what makes the update path work at all: the per-asset route below
-        // lives on the site and the site does not serve it yet. A release that
-        // carries no manifest falls through to that route rather than failing,
-        // so an older release keeps whatever protection it already had.
-        return match unsigned_manifest_sha256(download_url, fetch) {
-            Ok(digest) => Ok(digest),
-            Err(_) => published_digest_sha256(download_url, fetch),
-        };
+        bail!("Secure updates are unavailable: this build has no valid release signing key. Obtain a signed release from the LabDesk administrator.");
     };
     let Some((version, asset)) = release_asset_parts(download_url) else {
         bail!(
@@ -717,70 +634,7 @@ fn published_sha256(
     )?;
     // Over the raw bytes, before a single field is parsed out of them, so
     // nothing downstream ever reads a manifest nobody vouched for.
-    verify_manifest_signature(&manifest, &signature, &public_key)?;
-    digest_from_manifest(std::str::from_utf8(&manifest)?, asset)
-}
-
-/// The asset's digest read out of the release's own `SHA256SUMS`, with no
-/// signature over it. This is the path that works today, because the manifest
-/// is an asset of the same release the download came from, so one release
-/// describes its own bytes.
-///
-/// It is fetched from lab-desk.net like every other asset, because that is the
-/// only host this updater will talk to, so the site has to resolve the name
-/// `SHA256SUMS` under the published version. It did not until labdesk-site
-/// `758d7ba`: the download route answered 404 for any name outside the channel
-/// row's asset map, which made every update stop at its first request while the
-/// manifest sat on the release. Measured against production, not assumed.
-///
-/// What it closes: a corrupted or truncated download, a poisoned cache, and a
-/// file of the right size left in the temporary directory by another local
-/// user. What it does not close: a release or a site that serves a matching
-/// manifest of its own making. Pinning a key closes that, and the branch above
-/// takes over the moment one is pinned.
-fn unsigned_manifest_sha256(
-    download_url: &str,
-    fetch: &dyn Fn(&str, u64) -> ResultType<Vec<u8>>,
-) -> ResultType<String> {
-    let Some((version, asset)) = release_asset_parts(download_url) else {
-        bail!(
-            "No release manifest for the update URL, refusing to install: {}",
-            download_url
-        );
-    };
-    let manifest = fetch(
-        &release_asset_url(version, RELEASE_MANIFEST_ASSET),
-        RELEASE_MANIFEST_MAX_BYTES,
-    )?;
-    digest_from_manifest(std::str::from_utf8(&manifest)?, asset)
-}
-
-/// The per-asset digest the site publishes. Kept as the fallback for a release
-/// that carries no manifest, so pointing the channel at an older release does
-/// not turn into a refusal to update at all.
-fn published_digest_sha256(
-    download_url: &str,
-    fetch: &dyn Fn(&str, u64) -> ResultType<Vec<u8>>,
-) -> ResultType<String> {
-    let Some(checksum_url) = get_update_checksum_url(download_url) else {
-        bail!(
-            "No published SHA-256 for the update URL, refusing to install: {}",
-            download_url
-        );
-    };
-    // A digest is 64 bytes, and the bound keeps a hostile or broken endpoint
-    // from being read into memory without limit.
-    let body = match fetch(&checksum_url, 128) {
-        Ok(body) => body,
-        // Worth spelling out: this freezes the update channel until the
-        // release publishes SHA256SUMS, which is the whole reason a release
-        // has to be checksummed before the channel is pointed at it.
-        Err(e) => bail!(
-            "The release publishes no SHA-256 for this asset ({}), so no update can be installed",
-            e
-        ),
-    };
-    digest_from_response_body(std::str::from_utf8(&body)?)
+    verify_release_manifest(&manifest, &signature, &public_key, asset)
 }
 
 /// The SHA-256 the release publishes for the asset at `download_url`, over the
@@ -791,17 +645,6 @@ pub fn get_published_sha256(download_url: &str) -> ResultType<String> {
         release_signing_public_key(),
         &fetch_release_bytes,
     )
-}
-
-/// The digest a response body carries, or an error. An error page, an empty
-/// body or a truncated digest all land here and all stop the update, so the
-/// hash comparison is never reached with something that is not a digest.
-fn digest_from_response_body(body: &str) -> ResultType<String> {
-    let digest = body.trim().to_lowercase();
-    if !is_sha256_hex(&digest) {
-        bail!("The published SHA-256 is not a hex digest");
-    }
-    Ok(digest)
 }
 
 /// The SHA-256 of a file on disk, as lowercase hex. Read in blocks so an
@@ -854,10 +697,10 @@ pub fn verify_downloaded_file(file_path: &Path, expected_sha256: &str) -> Result
 ///
 /// A caller that IS about to install must not use this. It fetches the digest
 /// with [get_published_sha256] and hands that digest to
-/// `crate::platform::update_to`, which checks it against the file as the last
-/// act before the elevated launch, the same ordering `update_new_version`
-/// follows. Hashing here and installing later leaves a window in a directory
-/// every local user can write.
+/// `crate::platform::update_to`. On Windows the trusted elevated receiver checks
+/// its own protected copy against that authenticated digest before executing it;
+/// the Linux helper independently authenticates the manifest and its private copy.
+/// Checking a caller-writable file here alone cannot authorize a later install.
 #[allow(dead_code)]
 pub fn verify_update_file(download_url: &str, file_path: &Path) -> ResultType<()> {
     let expected_sha256 = get_published_sha256(download_url)?;
@@ -910,7 +753,7 @@ pub fn has_no_active_conns_ipc() -> bool {
 
 #[cfg(target_os = "macos")]
 fn wait_for_failed_update_retry() {
-    const FAILURE_MARKER: &str = "/var/root/.rustdeskupdate_failed";
+    const FAILURE_MARKER: &str = "/var/root/.labdeskupdate_failed";
     let marker = std::path::Path::new(FAILURE_MARKER);
     if !marker.exists() {
         return;
@@ -948,7 +791,7 @@ fn wait_for_failed_update_retry() {
 #[cfg(target_os = "macos")]
 pub fn start_auto_update_macos() {
     let spawn_result = std::thread::Builder::new()
-        .name("rustdesk-auto-update".to_owned())
+        .name("labdesk-auto-update".to_owned())
         .spawn(|| {
             log::info!("[root-update] Auto-update scheduler thread started.");
             std::thread::sleep(INITIAL_CHECK_DELAY);
@@ -1007,8 +850,8 @@ pub fn check_update_as_root() -> ResultType<bool> {
         for entry in entries.flatten() {
             let name = entry.file_name();
             let name_str = name.to_string_lossy();
-            if name_str.starts_with(".rustdeskupdate-root-")
-                || name_str.starts_with(".rustdeskdownload-")
+            if name_str.starts_with(".labdeskupdate-root-")
+                || name_str.starts_with(".labdeskdownload-")
             {
                 let path = entry.path();
                 let Ok(metadata) = std::fs::symlink_metadata(&path) else {
@@ -1058,7 +901,7 @@ pub fn check_update_as_root() -> ResultType<bool> {
     // Use mktemp so a local user cannot pre-create a predictable path and
     // permanently deny updates for a reused service PID.
     let private_tmp_output = std::process::Command::new("/usr/bin/mktemp")
-        .args(["-d", "/tmp/.rustdeskdownload-XXXXXX"])
+        .args(["-d", "/tmp/.labdeskdownload-XXXXXX"])
         .output()?;
     if !private_tmp_output.status.success() {
         bail!(
@@ -1077,7 +920,7 @@ pub fn check_update_as_root() -> ResultType<bool> {
         use std::os::unix::fs::PermissionsExt;
         std::fs::set_permissions(&private_tmp, std::fs::Permissions::from_mode(0o700))?;
     }
-    let filename = dmg_url.split('/').last().unwrap_or("rustdesk.dmg");
+    let filename = dmg_url.split('/').last().unwrap_or("labdesk.dmg");
     let file_path = std::path::PathBuf::from(format!("{}/{}", private_tmp, filename));
     let tmp_path = file_path.to_string_lossy().to_string();
     // Download
@@ -1127,7 +970,7 @@ pub fn check_update_as_root() -> ResultType<bool> {
 
 /// Whether every LabDesk session on this machine is idle, asked over IPC.
 ///
-/// The root service holds no connection state on Linux: `res/rustdesk.service`
+/// The root service holds no connection state on Linux: `res/labdesk.service`
 /// runs this process as root while `--server`, where connections live, is
 /// launched as the desktop user. So the desktop user's `--server` is asked, and
 /// a question that is not answered is read as a session in progress. Installing
@@ -1413,44 +1256,135 @@ mod linux_tests {
 #[cfg(test)]
 mod tests {
     use super::{
-        digest_from_manifest, digest_from_response_body, file_sha256, get_download_file_from_url,
-        get_update_checksum_url, is_sha256_hex, parse_release_signing_key, published_sha256,
-        release_asset_parts, release_asset_url, release_signing_public_key, sign,
-        verify_downloaded_file, verify_manifest_signature, ResultType, RELEASE_MANIFEST_ASSET,
+        digest_from_manifest, file_sha256, get_download_file_from_url, get_update_checksum_url,
+        is_sha256_hex, parse_release_signing_key, published_sha256, release_asset_parts,
+        release_asset_url, release_signing_public_key, sign, verify_downloaded_file,
+        verify_manifest_signature, verify_release_manifest, ResultType, RELEASE_MANIFEST_ASSET,
         RELEASE_SIGNATURE_ASSET, RELEASE_SIGNING_PUBLIC_KEY_B64,
     };
 
     #[test]
-    fn update_download_file_accepts_expected_github_asset_urls() {
-        let file = get_download_file_from_url(
-            "https://github.com/rustdesk/rustdesk/releases/download/1.4.0/rustdesk-1.4.0-x86_64.dmg",
-        )
-        .expect("valid GitHub release asset URL");
-
-        assert_eq!(
-            file.file_name().and_then(|name| name.to_str()),
-            Some("rustdesk-1.4.0-x86_64.dmg")
+    fn an_unconfigured_release_key_refuses_updates_without_fetching_unsigned_data() {
+        let fetched = std::cell::Cell::new(false);
+        let result = published_sha256(
+            "https://lab-desk.net/releases/download/1.2.2/labdesk-1.2.2-x86_64.exe",
+            None,
+            &|_, _| {
+                fetched.set(true);
+                Ok(b"460de39d0bfc73247f2f143b4a83d255a00a53620a116fca20af1f7963b7a2c5  labdesk-1.2.2-x86_64.exe\n".to_vec())
+            },
         );
+        assert!(
+            result.is_err(),
+            "an unsigned manifest must not authorize installation"
+        );
+        assert!(
+            !fetched.get(),
+            "an absent trust anchor must fail before network access"
+        );
+    }
+
+    #[test]
+    fn release_verification_authenticates_metadata_before_authorizing_an_artifact() {
+        let (key, secret) = sign::gen_keypair();
+        let asset = "labdesk-1.2.2-x86_64.exe";
+        let manifest = format!("{}  {}\n", "a".repeat(64), asset);
+        let signature = sign::sign_detached(manifest.as_bytes(), &secret).to_bytes();
+        assert_eq!(
+            verify_release_manifest(manifest.as_bytes(), &signature, &key, asset).unwrap(),
+            "a".repeat(64),
+        );
+        let (untrusted_key, _) = sign::gen_keypair();
+        assert!(
+            verify_release_manifest(manifest.as_bytes(), &signature, &untrusted_key, asset)
+                .is_err()
+        );
+        assert!(verify_release_manifest(
+            manifest.replace('a', "b").as_bytes(),
+            &signature,
+            &key,
+            asset
+        )
+        .is_err());
+        for invalid in [Vec::new(), signature[..63].to_vec(), vec![0; 65]] {
+            assert!(verify_release_manifest(manifest.as_bytes(), &invalid, &key, asset).is_err());
+        }
+        for invalid in [String::new(), manifest.repeat(2), "x".repeat(65537)] {
+            let signed = sign::sign_detached(invalid.as_bytes(), &secret).to_bytes();
+            assert!(verify_release_manifest(invalid.as_bytes(), &signed, &key, asset).is_err());
+        }
+        assert!(
+            verify_release_manifest(manifest.as_bytes(), &signature, &key, "other.exe").is_err()
+        );
+    }
+
+    #[test]
+    fn a_release_cannot_borrow_a_signed_asset_from_a_different_version() {
+        assert!(release_asset_parts(
+            "https://lab-desk.net/releases/download/9.9.9/labdesk-1.2.2-x86_64.exe"
+        )
+        .is_none());
+        assert!(release_asset_parts(
+            "https://lab-desk.net/releases/download/1.2.2/labdesk-1.2.20-x86_64.exe"
+        )
+        .is_none());
+        assert!(release_asset_parts(
+            "https://lab-desk.net/releases/download/v1.2.2/labdesk-1.2.2-x86_64.exe"
+        )
+        .is_some());
+    }
+
+    #[test]
+    fn verification_command_rejects_bad_arguments_and_an_unconfigured_build() {
+        use std::ffi::OsString;
+        assert_eq!(super::release_verifier_command(&[]), None);
+        assert_eq!(
+            super::release_verifier_command(&[OsString::from("--version")]),
+            None
+        );
+        assert_eq!(
+            super::release_verifier_command(&[OsString::from("--verify-release-manifest")]),
+            Some(64)
+        );
+        if release_signing_public_key().is_none() {
+            assert_eq!(
+                super::release_verifier_command(&[
+                    OsString::from("--verify-release-manifest"),
+                    OsString::from("missing-manifest"),
+                    OsString::from("missing-signature"),
+                    OsString::from("labdesk-1.2.2-x86_64.exe"),
+                ]),
+                Some(65)
+            );
+        }
+    }
+
+    #[test]
+    fn update_download_file_rejects_third_party_release_urls() {
+        assert!(get_download_file_from_url(
+            "https://github.com/example/upstream/releases/download/1.4.0/labdesk-1.4.0-x86_64.dmg",
+        )
+        .is_none());
     }
 
     #[test]
     fn update_download_file_accepts_labdesk_site_asset_urls() {
         let file = get_download_file_from_url(
-            "https://lab-desk.net/releases/download/1.2.0/rustdesk-1.2.0-x86_64.exe",
+            "https://lab-desk.net/releases/download/1.2.0/labdesk-1.2.0-x86_64.exe",
         )
         .expect("valid lab-desk.net release asset URL");
         assert_eq!(
             file.file_name().and_then(|name| name.to_str()),
-            Some("rustdesk-1.2.0-x86_64.exe")
+            Some("labdesk-1.2.0-x86_64.exe")
         );
         for url in [
-            "http://lab-desk.net/releases/download/1.2.0/rustdesk-1.2.0-x86_64.exe",
-            "https://lab-desk.net/rustdesk-1.2.0-x86_64.exe",
+            "http://lab-desk.net/releases/download/1.2.0/labdesk-1.2.0-x86_64.exe",
+            "https://lab-desk.net/labdesk-1.2.0-x86_64.exe",
             "https://lab-desk.net/releases/download/1.2.0/",
-            "https://lab-desk.net/releases/download/1.2.0/nested/rustdesk.exe",
-            "https://lab-desk.net/releases/download/1.2.0/rustdesk.exe?x=1",
-            "https://lab-desk.net.evil.com/releases/download/1.2.0/rustdesk.exe",
-            "https://evil.com/lab-desk.net/releases/download/1.2.0/rustdesk.exe",
+            "https://lab-desk.net/releases/download/1.2.0/nested/labdesk.exe",
+            "https://lab-desk.net/releases/download/1.2.0/labdesk.exe?x=1",
+            "https://lab-desk.net.evil.com/releases/download/1.2.0/labdesk.exe",
+            "https://evil.com/lab-desk.net/releases/download/1.2.0/labdesk.exe",
         ] {
             assert!(get_download_file_from_url(url).is_none(), "{url}");
         }
@@ -1459,16 +1393,16 @@ mod tests {
     #[test]
     fn update_download_file_rejects_untrusted_or_malformed_urls() {
         for url in [
-            "http://github.com/rustdesk/rustdesk/releases/download/1/rustdesk.exe",
-            "https://example.com/rustdesk.exe",
-            "https://github.com/other/project/releases/download/1/rustdesk.exe",
-            "https://github.com/rustdesk/rustdesk/releases/download/1/",
-            "https://github.com/rustdesk/rustdesk/releases/download/1/nested/rustdesk.exe",
-            "https://github.com/rustdesk/rustdesk/releases/download/1/C:rustdesk.exe",
-            "https://user@github.com/rustdesk/rustdesk/releases/download/1/rustdesk.exe",
-            "https://github.com:443/rustdesk/rustdesk/releases/download/1/rustdesk.exe",
-            "https://github.com/rustdesk/rustdesk/releases/download/1/rustdesk.exe?download=1",
-            "https://github.com/rustdesk/rustdesk/releases/download/1/rustdesk.exe#download",
+            "http://github.com/example/upstream/releases/download/1/labdesk.exe",
+            "https://example.com/labdesk.exe",
+            "https://github.com/other/project/releases/download/1/labdesk.exe",
+            "https://github.com/example/upstream/releases/download/1/",
+            "https://github.com/example/upstream/releases/download/1/nested/labdesk.exe",
+            "https://github.com/example/upstream/releases/download/1/C:labdesk.exe",
+            "https://user@github.com/example/upstream/releases/download/1/labdesk.exe",
+            "https://github.com:443/labdesk/labdesk/releases/download/1/labdesk.exe",
+            "https://github.com/example/upstream/releases/download/1/labdesk.exe?download=1",
+            "https://github.com/example/upstream/releases/download/1/labdesk.exe#download",
             "not a url",
         ] {
             assert!(get_download_file_from_url(url).is_none(), "{url}");
@@ -1487,7 +1421,7 @@ mod tests {
         for url in [
             // Upstream GitHub publishes no digest, so nothing fetched from it
             // can be verified, so nothing fetched from it may be installed.
-            "https://github.com/rustdesk/rustdesk/releases/download/1.4.0/rustdesk-1.4.0-x86_64.dmg",
+            "https://github.com/example/upstream/releases/download/1.4.0/labdesk-1.4.0-x86_64.dmg",
             "http://lab-desk.net/releases/download/1.2.0/labdesk-1.2.0-x86_64.exe",
             "https://lab-desk.net/releases/download/1.2.0/nested/labdesk.exe",
             "https://lab-desk.net/releases/download/1.2.0/labdesk.exe?x=1",
@@ -1532,39 +1466,10 @@ mod tests {
     }
 
     #[test]
-    fn a_response_body_that_is_not_a_digest_is_refused() {
-        // The site serves the bare digest with a trailing newline, and an
-        // uppercase digest is the same digest.
-        assert_eq!(
-            digest_from_response_body(
-                "  460DE39D0BFC73247F2F143B4A83D255A00A53620A116FCA20AF1F7963B7A2C5\n"
-            )
-            .ok()
-            .as_deref(),
-            Some("460de39d0bfc73247f2f143b4a83d255a00a53620a116fca20af1f7963b7a2c5")
-        );
-        // An error page, an empty body or a truncated digest must stop the
-        // update rather than reach the hash comparison.
-        for bad in [
-            "",
-            "<html>404 Not Found</html>",
-            "460de39d0bfc73247f2f143b4a83d255a00a53620a116fca20af1f7963b7a2c",
-            "460de39d0bfc73247f2f143b4a83d255a00a53620a116fca20af1f7963b7a2c5 labdesk.exe",
-        ] {
-            assert!(digest_from_response_body(bad).is_err(), "{bad}");
-        }
-    }
-
-    #[test]
-    fn the_pinned_release_key_is_the_placeholder_or_a_real_ed25519_key() {
-        // The constant is the whole switch. Empty means no key is pinned and
-        // the client stays on the digest path it shipped with; a real key means
-        // every update needs a signature. A mistyped key would parse to None
-        // and so switch enforcement off on every installed client at once, so
-        // it fails the build here instead.
+    fn a_configured_release_key_is_well_formed_and_an_absent_key_disables_updates() {
         assert_eq!(
             release_signing_public_key().is_some(),
-            !RELEASE_SIGNING_PUBLIC_KEY_B64.is_empty(),
+            !RELEASE_SIGNING_PUBLIC_KEY_B64.trim().is_empty(),
             "RELEASE_SIGNING_PUBLIC_KEY_B64 is set but is not a 32-byte Ed25519 public key"
         );
         assert!(parse_release_signing_key("").is_none());
@@ -1625,16 +1530,6 @@ mod tests {
             digest_from_manifest(manifest, "labdesk-1.2.2-x86_64.msi").unwrap(),
             "0000000000000000000000000000000000000000000000000000000000000003"
         );
-        // A release from before the rename lists the asset under the inherited
-        // prefix while the client still asks for it under the product's own.
-        assert_eq!(
-            digest_from_manifest(
-                "0000000000000000000000000000000000000000000000000000000000000004  rustdesk-1.2.1-x86_64.exe\n",
-                "labdesk-1.2.1-x86_64.exe"
-            )
-            .unwrap(),
-            "0000000000000000000000000000000000000000000000000000000000000004"
-        );
         // No line for the asset, a name that is only a prefix of one that is
         // there, two lines for one name, and a line that is not a digest line
         // at all: every one of them stops the update.
@@ -1669,7 +1564,7 @@ mod tests {
         // Anything the release allowlist does not accept has no manifest, so no
         // signature can be demanded of it and no update can come from it.
         for url in [
-            "https://github.com/rustdesk/rustdesk/releases/download/1.4.0/rustdesk-1.4.0-x86_64.dmg",
+            "https://github.com/example/upstream/releases/download/1.4.0/labdesk-1.4.0-x86_64.dmg",
             "http://lab-desk.net/releases/download/1.2.2/labdesk-1.2.2-x86_64.exe",
             "https://lab-desk.net/releases/download/1.2.2/nested/labdesk.exe",
             "https://lab-desk.net.evil.com/releases/download/1.2.2/labdesk.exe",
@@ -1756,7 +1651,6 @@ mod tests {
         let signature = sign::sign_detached(manifest.as_bytes(), &secret_key).to_bytes();
         let manifest_url = "https://lab-desk.net/releases/download/1.2.2/SHA256SUMS";
         let signature_url = "https://lab-desk.net/releases/download/1.2.2/SHA256SUMS.sig";
-        let checksum_url = "https://lab-desk.net/releases/checksums/1.2.2/labdesk-1.2.2-x86_64.exe";
 
         let asked = std::cell::RefCell::new(Vec::new());
         let record = |asked_url: &str| asked.borrow_mut().push(asked_url.to_owned());
@@ -1812,7 +1706,7 @@ mod tests {
         // A URL the release allowlist does not accept has no manifest, and with
         // a key pinned that is the end of it, not a reason to try the digest.
         assert!(published_sha256(
-            "https://github.com/rustdesk/rustdesk/releases/download/1.4.0/rustdesk-1.4.0-x86_64.dmg",
+            "https://github.com/example/upstream/releases/download/1.4.0/labdesk-1.4.0-x86_64.dmg",
             Some(public_key),
             &|asked_url: &str, _max: u64| {
                 record(asked_url);
@@ -1821,32 +1715,6 @@ mod tests {
         )
         .is_err());
         assert!(asked.take().is_empty());
-
-        // No key pinned, which is what ships today: the manifest is read
-        // unsigned, and nothing else is asked for when it answers.
-        let found = published_sha256(url, None, &|asked_url: &str, _max: u64| {
-            record(asked_url);
-            match asked_url {
-                u if u == manifest_url => Ok(manifest.as_bytes().to_vec()),
-                other => not_found(other),
-            }
-        })
-        .expect("the digest the release's own manifest carries");
-        assert_eq!(found, digest);
-        assert_eq!(asked.take(), [manifest_url]);
-
-        // A release with no manifest falls back to the per-asset route, and
-        // only after the manifest was asked for first.
-        let found = published_sha256(url, None, &|asked_url: &str, _max: u64| {
-            record(asked_url);
-            match asked_url {
-                u if u == checksum_url => Ok(format!("{digest}\n").into_bytes()),
-                other => not_found(other),
-            }
-        })
-        .expect("the digest the site publishes");
-        assert_eq!(found, digest);
-        assert_eq!(asked.take(), [manifest_url, checksum_url]);
     }
 
     #[test]

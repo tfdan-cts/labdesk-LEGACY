@@ -1,4 +1,4 @@
-# RustDesk msi project
+# LabDesk msi project
 
 Use Visual Studio 2022 to compile this project.
 
@@ -6,10 +6,15 @@ This project is mainly derived from <https://github.com/MediaPortal/MediaPortal-
 
 ## Steps
 
-1. `python preprocess.py`, see `python preprocess.py -h` for help.
-2. Build the .sln solution.
+1. Run `powershell -NoProfile -File ../../scripts/check-windows-vpn.ps1 -Executable <bundle-directory>/netbird/netbird.exe`. The bundled daemon must have matching command-line and nonzero numeric Windows file versions. Windows Installer can skip a versionless replacement while uninstalling the previous versioned file.
+2. Run `python preprocess.py --version <application-version> --revision-version <build-number> --dist-dir <bundle-directory>`. Use the version and build number from `flutter/pubspec.yaml`; see `python preprocess.py -h` for other options.
+3. Build the .sln solution. Generated file components use WiX's stable GUID generation from their installed paths. Do not replace this with random GUIDs per build.
 
 Run `msiexec /i package.msi /l*v install.log` to record the log.
+
+The application retains its full version, such as `1.4.0-alpha.1+73`. MSI `ProductVersion` is `major.minor.build-number`, such as `1.4.73`. Increment the application build number for every distributed artifact, including alpha, release candidate, stable and patch builds. Never reuse a build number or reset it within a major/minor series. The limits are 255 for major/minor and 65535 for build; exceeding the build limit requires a new major/minor series.
+
+Windows Installer compares only three fields and ignores a fourth field. This mapping lets later private candidates and the stable build upgrade in order without placing prerelease text in a numeric field. See [Microsoft's ProductVersion rules](https://learn.microsoft.com/en-us/windows/win32/msi/productversion). Installer installation, upgrade, downgrade refusal and repair must still be tested against actual packages; generation alone does not establish these behaviors.
 
 ## Usage
 

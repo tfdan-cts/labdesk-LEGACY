@@ -29,6 +29,11 @@ macro_rules! my_println{
 /// If it returns [`Some`], then the process will continue, and flutter gui will be started.
 #[cfg(not(any(target_os = "android", target_os = "ios")))]
 pub fn core_main() -> Option<Vec<String>> {
+    if let Some(exit_code) = crate::updater::release_verifier_command(
+        &std::env::args_os().skip(1).collect::<Vec<_>>(),
+    ) {
+        std::process::exit(exit_code);
+    }
     // Set before global_init so config paths, IPC names and translations
     // pick up the app name.
     *hbb_common::config::APP_NAME.write().unwrap() = "LabDesk".to_owned();
@@ -211,7 +216,7 @@ pub fn core_main() -> Option<Vec<String>> {
     } else {
         #[cfg(any(target_os = "linux", target_os = "macos"))]
         // Root CLI management commands must talk to the user `--server` main IPC.
-        // Example: `sudo rustdesk --option custom-rendezvous-server` should query the
+        // Example: `sudo labdesk --option custom-rendezvous-server` should query the
         // user's IPC instead of root's `/tmp/<app>-0/ipc`; `connect()` still limits this
         // routing to empty-postfix main IPC only.
         let _user_main_ipc_scope = if crate::platform::is_installed()
@@ -233,30 +238,35 @@ pub fn core_main() -> Option<Vec<String>> {
                 return None;
             } else if args[0] == "--update" {
                 if config::is_disable_installation() {
-                    return None;
+                    log::error!("Update refused because installation is disabled");
+                    std::process::exit(1);
                 }
 
-                let text = match crate::platform::prepare_custom_client_update() {
+                let succeeded = match crate::platform::prepare_custom_client_update() {
                     Err(e) => {
                         log::error!("Error preparing custom client update: {}", e);
-                        "Update failed!".to_string()
+                        false
                     }
-                    Ok(false) => "Update failed!".to_string(),
+                    Ok(false) => false,
                     Ok(true) => match platform::update_me(false) {
-                        Ok(_) => "Updated successfully!".to_string(),
+                        Ok(_) => true,
                         Err(err) => {
                             log::error!("Failed with error: {err}");
-                            "Update failed!".to_string()
+                            false
                         }
                     },
                 };
+                let text = if succeeded { "Updated successfully!" } else { "Update failed!" };
                 Toast::new(Toast::POWERSHELL_APP_ID)
                     .title(&config::APP_NAME.read().unwrap())
-                    .text1(&translate(text))
+                    .text1(&translate(text.to_string()))
                     .sound(Some(Sound::Default))
                     .duration(Duration::Short)
                     .show()
                     .ok();
+                if !succeeded {
+                    std::process::exit(1);
+                }
                 return None;
             } else if args[0] == "--after-install" {
                 if let Err(err) = platform::run_after_install() {
@@ -308,7 +318,7 @@ pub fn core_main() -> Option<Vec<String>> {
                 #[cfg(windows)]
                 if crate::virtual_display_manager::is_virtual_display_supported() {
                     hbb_common::allow_err!(
-                        crate::virtual_display_manager::rustdesk_idd::install_update_driver()
+                        crate::virtual_display_manager::labdesk_idd::install_update_driver()
                     );
                 }
                 return None;
@@ -786,7 +796,7 @@ pub fn core_main() -> Option<Vec<String>> {
             }
             return None;
         } else if args[0] == "-gtk-sudo" {
-            // rustdesk service kill `rustdesk --` processes
+            // labdesk service kill `labdesk --` processes
             #[cfg(target_os = "linux")]
             if args.len() > 2 {
                 crate::platform::gtk_sudo::exec();

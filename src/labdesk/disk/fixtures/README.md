@@ -10,7 +10,7 @@ the test `fixtures_match_builders` in each of those files fails if a committed
 file and its builder ever drift apart. Regenerate with:
 
 ```
-LABDESK_WRITE_FIXTURES=1 cargo test -p rustdesk labdesk::disk::write_fixtures
+LABDESK_WRITE_FIXTURES=1 cargo test -p labdesk labdesk::disk::write_fixtures
 ```
 
 The values are realistic rather than captured: none of them came off a specific

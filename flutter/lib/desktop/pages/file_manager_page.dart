@@ -377,11 +377,14 @@ class _FileManagerViewState extends State<FileManagerView> {
   final _sizeColWidth = 0.0.obs;
   final _fileListScrollController = ScrollController();
   final _globalHeaderKey = GlobalKey();
+  final _menuButtonKey = GlobalKey();
 
   /// [_lastClickTime], [_lastClickEntry] help to handle double click
   var _lastClickTime =
       DateTime.now().millisecondsSinceEpoch - bind.getDoubleClickTime() - 1000;
   Entry? _lastClickEntry;
+
+  String _localHostname = '';
 
   double? _windowWidthPrev;
   double _fileTransferMinimumWidth = 0.0;
@@ -394,6 +397,13 @@ class _FileManagerViewState extends State<FileManagerView> {
   @override
   void initState() {
     super.initState();
+    if (isLocal && !isWeb) {
+      try {
+        _localHostname = Platform.localHostname.trim();
+      } on OSError {
+        // A missing OS name keeps the honest local-machine label.
+      }
+    }
     // register location listener
     _locationNode.addListener(onLocationFocusChanged);
     controller.directory.listen((e) => breadCrumbScrollToEnd());
@@ -441,8 +451,8 @@ class _FileManagerViewState extends State<FileManagerView> {
       // holds: the name is what the eye scans and was the column that ran out
       // of room first, while the size never needs more than eight characters.
       _nameColWidth.value = defaultColumnWidth * 1.5;
-      _modifiedColWidth.value = defaultColumnWidth * 1.05;
-      _sizeColWidth.value = defaultColumnWidth * 0.45;
+      _modifiedColWidth.value = defaultColumnWidth * 0.9;
+      _sizeColWidth.value = defaultColumnWidth * 0.6;
     }
 
     if (_windowWidthPrev != windowWidthNow) {
@@ -478,22 +488,25 @@ class _FileManagerViewState extends State<FileManagerView> {
         // console's own glyph rather than the borrowed logo, and it sits on the
         // surface ramp instead of inside a filled accent square — the accent in
         // this window means "this is the action".
-        FmPaneHeader(
-          title: isLocal
-              ? translate("Local Computer")
-              : translate("Remote Computer"),
-          badge: FutureBuilder<String>(
-              future: bind.sessionGetPlatform(
-                  sessionId: _ffi.sessionId, isRemote: !isLocal),
-              builder: (context, snapshot) {
-                if (snapshot.hasData && snapshot.data!.isNotEmpty) {
-                  return LdIcon(_platformGlyph(snapshot.data!),
-                      size: 18, color: C.textMuted);
-                } else {
-                  return CircularProgressIndicator(
-                      strokeWidth: 1.6, color: C.textFaint);
-                }
-              }),
+        AnimatedBuilder(
+          animation: _ffi.ffiModel,
+          builder: (context, _) {
+            final role = translate(isLocal ? 'Local Computer' : 'Remote Computer');
+            // The peer-info event supplies the connected machine's own hostname.
+            // An address/ID remains a connection key, never a fabricated name.
+            final hostname = isLocal
+                ? _localHostname
+                : _ffi.ffiModel.pi.hostname.trim();
+            final platform = isLocal
+                ? (isWindows ? 'Windows' : (isMacOS ? 'Mac OS' : 'Linux'))
+                : _ffi.ffiModel.pi.platform;
+            return FmPaneHeader(
+              title: hostname.isEmpty ? role : hostname,
+              subtitle: hostname.isEmpty ? null : role,
+              badge: LdIcon(_platformGlyph(platform),
+                  size: 18, color: C.textMuted),
+            );
+          },
         ),
         Padding(
           padding: const EdgeInsets.fromLTRB(8, 8, 8, 8),
@@ -781,18 +794,17 @@ class _FileManagerViewState extends State<FileManagerView> {
   }
 
   /// The console draws its own platform marks, so the pane header uses those
-  /// rather than the borrowed logos. The branching matches `getPlatformImage`'s
-  /// exactly: anything that is not macOS, Linux or Android is Windows.
+  /// rather than the borrowed logos. Unknown peers keep a generic machine
+  /// mark until peer-info supplies their platform.
   String _platformGlyph(String platform) {
     if (platform == kPeerPlatformMacOS) return LdIcons.macos;
     if (platform == kPeerPlatformLinux) return LdIcons.linux;
     if (platform == kPeerPlatformAndroid) return LdIcons.android;
-    return LdIcons.windows;
+    if (platform == kPeerPlatformWindows) return LdIcons.windows;
+    return LdIcons.machine;
   }
 
   Widget menu({bool isLocal = false}) {
-    var menuPos = RelativeRect.fill;
-
     final List<MenuEntryBase<String>> items = [
       MenuEntrySwitch<String>(
         switchType: SwitchType.scheckbox,
@@ -820,18 +832,23 @@ class _FileManagerViewState extends State<FileManagerView> {
           dismissOnClicked: true)
     ];
 
-    return Listener(
-      onPointerDown: (e) {
-        final x = e.position.dx;
-        final y = e.position.dy;
-        menuPos = RelativeRect.fromLTRB(x, y, x, y);
-      },
-      child: FmToolButton(
-        glyph: LdIcons.more,
-        tooltip: translate('More'),
-        onPressed: () => mod_menu.showMenu(
+    return FmToolButton(
+      key: _menuButtonKey,
+      glyph: LdIcons.more,
+      tooltip: translate('More'),
+      onPressed: () {
+        final button =
+            _menuButtonKey.currentContext!.findRenderObject() as RenderBox;
+        final overlay =
+            Overlay.of(context).context.findRenderObject() as RenderBox;
+        final position = RelativeRect.fromRect(
+          button.localToGlobal(Offset(0, button.size.height), ancestor: overlay) &
+              Size.zero,
+          Offset.zero & overlay.size,
+        );
+        mod_menu.showMenu(
           context: context,
-          position: menuPos,
+          position: position,
           items: items
               .map(
                 (e) => e.build(
@@ -845,8 +862,8 @@ class _FileManagerViewState extends State<FileManagerView> {
               .expand((i) => i)
               .toList(),
           elevation: 8,
-        ),
-      ),
+        );
+      },
     );
   }
 
@@ -1212,7 +1229,7 @@ class _FileManagerViewState extends State<FileManagerView> {
                 ),
                 FmToolButton(
                   glyph: LdIcons.chevronDown,
-                  tooltip: "",
+                  tooltip: translate('Path'),
                   glyphSize: 15,
                   onPressed: () async {
                     final renderBox = _locationBarKey.currentContext

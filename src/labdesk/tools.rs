@@ -19,6 +19,10 @@ use hbb_common::{bail, log, sodiumoxide::crypto::hash::sha256, ResultType};
 use serde_derive::Deserialize;
 use std::collections::{BTreeMap, VecDeque};
 use std::io::Read;
+#[cfg(unix)]
+use std::os::unix::io::AsRawFd as PipeHandle;
+#[cfg(windows)]
+use std::os::windows::io::AsRawHandle as PipeHandle;
 use std::path::PathBuf;
 use std::time::{Duration, Instant};
 
@@ -415,7 +419,8 @@ pub struct JobResult {
     pub id: String,
     pub started_at: i64,
     pub finished_at: i64,
-    /// `None` with `refused` set when the job did not run.
+    /// `None` when no exit was observed; `refused` explains why, including
+    /// `outcome_unobserved` for a launch without a completion handle.
     pub exit_code: Option<i32>,
     pub output: String,
     pub refused: Option<&'static str>,
@@ -614,6 +619,9 @@ pub fn run_steps(
     let mut stderr = Vec::new();
     let mut code = 0;
     for argv in steps {
+        if Instant::now() >= deadline {
+            return (None, bounded_output(&stdout, &stderr), Some("timeout"));
+        }
         let mut command = std::process::Command::new(&argv[0]);
         command
             .args(&argv[1..])
@@ -629,36 +637,53 @@ pub fn run_steps(
             Ok(child) => child,
             Err(err) => {
                 let line = format!("{}: {}\n", argv[0], err);
-                stderr.extend_from_slice(line.as_bytes());
+                stderr.extend(line.bytes().take(OUTPUT_LIMIT - stderr.len()));
                 return (Some(127), bounded_output(&stdout, &stderr), None);
             }
         };
-        // Both pipes drained on their own threads: a child that fills one
-        // while this thread waits on the other would block forever.
-        let out_reader = drain(child.stdout.take());
-        let err_reader = drain(child.stderr.take());
-        let status = loop {
-            match child.try_wait() {
-                Ok(Some(status)) => break Some(status),
-                Ok(None) if Instant::now() < deadline => {
-                    std::thread::sleep(Duration::from_millis(50));
-                }
-                Ok(None) => {
-                    let _ = child.kill();
-                    let _ = child.wait();
-                    break None;
-                }
-                Err(_) => break None,
+        let mut out_pipe = child.stdout.take();
+        let mut err_pipe = child.stderr.take();
+        let mut status = None;
+        loop {
+            if Instant::now() >= deadline {
+                stop_child(child);
+                return (None, bounded_output(&stdout, &stderr), Some("timeout"));
             }
-        };
-        stdout.extend(out_reader.join().unwrap_or_default());
-        stderr.extend(err_reader.join().unwrap_or_default());
-        let Some(status) = status else {
-            return (None, bounded_output(&stdout, &stderr), Some("timeout"));
-        };
+            let read = drain(&mut out_pipe, &mut stdout).and_then(|out| {
+                drain(&mut err_pipe, &mut stderr).map(|err| out || err)
+            });
+            let read = match read {
+                Ok(read) => read,
+                Err(err) => {
+                    stop_child(child);
+                    let line = format!("output read failed: {}\n", err);
+                    stderr.extend(line.bytes().take(OUTPUT_LIMIT - stderr.len()));
+                    return (None, bounded_output(&stdout, &stderr), Some("io_error"));
+                }
+            };
+            if status.is_none() {
+                match child.try_wait() {
+                    Ok(observed) => status = observed,
+                    Err(err) => {
+                        stop_child(child);
+                        let line = format!("process wait failed: {}\n", err);
+                        stderr.extend(line.bytes().take(OUTPUT_LIMIT - stderr.len()));
+                        return (None, bounded_output(&stdout, &stderr), Some("io_error"));
+                    }
+                }
+            }
+            if status.is_some() && out_pipe.is_none() && err_pipe.is_none() {
+                break;
+            }
+            if !read {
+                std::thread::sleep(
+                    Duration::from_millis(10).min(deadline.saturating_duration_since(Instant::now())),
+                );
+            }
+        }
         // A process ended by a signal has no code; -1 says so without
         // passing for a clean exit.
-        code = status.code().unwrap_or(-1);
+        code = status.unwrap().code().unwrap_or(-1);
         if code != 0 {
             break;
         }
@@ -666,14 +691,72 @@ pub fn run_steps(
     (Some(code), bounded_output(&stdout, &stderr), None)
 }
 
-fn drain<R: Read + Send + 'static>(pipe: Option<R>) -> std::thread::JoinHandle<Vec<u8>> {
-    std::thread::spawn(move || {
-        let mut bytes = Vec::new();
-        if let Some(mut pipe) = pipe {
-            let _ = pipe.read_to_end(&mut bytes);
+// Read only what is ready. A descendant may retain a pipe after its parent
+// exits, so neither an EOF wait nor a reader-thread join may own the deadline.
+fn drain<R: Read + PipeHandle>(pipe: &mut Option<R>, bytes: &mut Vec<u8>) -> std::io::Result<bool> {
+    let Some(reader) = pipe.as_mut() else {
+        return Ok(false);
+    };
+    let mut buffer = [0; 4096];
+    let available = buffer.len();
+    #[cfg(unix)]
+    {
+        use hbb_common::libc;
+        let mut fd = libc::pollfd {
+            fd: reader.as_raw_fd(),
+            events: libc::POLLIN,
+            revents: 0,
+        };
+        let ready = unsafe { libc::poll(&mut fd, 1, 0) };
+        if ready < 0 {
+            let err = std::io::Error::last_os_error();
+            if err.kind() == std::io::ErrorKind::Interrupted {
+                return Ok(false);
+            }
+            return Err(err);
         }
-        bytes
-    })
+        if ready == 0 {
+            return Ok(false);
+        }
+    }
+    #[cfg(windows)]
+    let available = {
+        use windows::Win32::{
+            Foundation::{HANDLE, ERROR_BROKEN_PIPE},
+            System::Pipes::PeekNamedPipe,
+        };
+        let mut count = 0;
+        match unsafe { PeekNamedPipe(HANDLE(reader.as_raw_handle()), None, 0, None, Some(&mut count), None) } {
+            Ok(()) if count == 0 => return Ok(false),
+            Ok(()) => available.min(count as usize),
+            Err(err) if err.code() == ERROR_BROKEN_PIPE.to_hresult() => {
+                *pipe = None;
+                return Ok(false);
+            }
+            Err(err) => return Err(std::io::Error::new(std::io::ErrorKind::Other, err)),
+        }
+    };
+    match reader.read(&mut buffer[..available]) {
+        Ok(0) => {
+            *pipe = None;
+            Ok(false)
+        }
+        Ok(count) => {
+            bytes.extend_from_slice(&buffer[..count.min(OUTPUT_LIMIT - bytes.len())]);
+            Ok(true)
+        }
+        Err(err) if matches!(err.kind(), std::io::ErrorKind::Interrupted | std::io::ErrorKind::WouldBlock) => Ok(false),
+        Err(err) => Err(err),
+    }
+}
+
+fn stop_child(mut child: std::process::Child) {
+    let _ = child.kill();
+    // Reap only the child we spawned. OS process teardown must not extend the
+    // command budget; the reaper owns no output pipes or descendant processes.
+    std::thread::spawn(move || {
+        let _ = child.wait();
+    });
 }
 
 /// Decide and run one job. The order is the contract's: `already_ran`, then
@@ -756,12 +839,12 @@ fn run_as_active_user(
     if active_user.is_empty() {
         return (None, String::new(), Some("no_active_user"));
     }
+    let deadline = Instant::now() + timeout;
     match crate::platform::run_as_user(vec!["--labdesk-tool", &tool.id]) {
         Err(err) => (Some(127), format!("{}\n", err), None),
         // macOS hands back the `launchctl asuser` child, whose exit status is
         // the tool's.
         Ok(Some(mut child)) => {
-            let deadline = Instant::now() + timeout;
             loop {
                 match child.try_wait() {
                     Ok(Some(status)) => {
@@ -771,10 +854,13 @@ fn run_as_active_user(
                         std::thread::sleep(Duration::from_millis(50))
                     }
                     Ok(None) => {
-                        let _ = child.kill();
+                        stop_child(child);
                         return (None, String::new(), Some("timeout"));
                     }
-                    Err(err) => return (Some(-1), format!("{}\n", err), None),
+                    Err(err) => {
+                        stop_child(child);
+                        return (None, format!("{}\n", err), Some("io_error"));
+                    }
                 }
             }
         }
@@ -782,12 +868,12 @@ fn run_as_active_user(
         // handle, so the exit status is not observed. The output says so
         // rather than leaving a 0 to read as a clean exit it never saw.
         Ok(None) => (
-            Some(0),
+            None,
             format!(
                 "launched {} in the console session of {}; the exit status is not observed on Windows\n",
                 tool.id, active_user
             ),
-            None,
+            Some("outcome_unobserved"),
         ),
     }
 }
@@ -1175,5 +1261,104 @@ mod tests {
         let (code, out, _) = run_steps(&steps(&[&["printf", "%s|", "a b", "$(id)", ";ls"]]), Duration::from_secs(5));
         assert_eq!(code, Some(0));
         assert_eq!(out, "a b|$(id)|;ls|");
+    }
+
+    fn fixture_argv(name: &str) -> Vec<String> {
+        let module = module_path!().split_once("::").unwrap().1;
+        vec![
+            std::env::current_exe().unwrap().to_str().unwrap().to_owned(),
+            "--ignored".into(),
+            "--exact".into(),
+            format!("{}::{}", module, name),
+            "--nocapture".into(),
+        ]
+    }
+
+    #[test]
+    #[ignore = "child process fixture"]
+    fn inherited_pipe_descendant() {
+        std::thread::sleep(Duration::from_secs(3));
+    }
+
+    #[test]
+    #[ignore = "child process fixture"]
+    fn inherited_pipe_child() {
+        let argv = fixture_argv("inherited_pipe_descendant");
+        let _descendant = std::process::Command::new(&argv[0])
+            .args(&argv[1..])
+            .spawn()
+            .unwrap();
+        println!("child is running");
+        println!("\nchild-pid={}", std::process::id());
+        std::thread::sleep(Duration::from_secs(10));
+    }
+
+    #[test]
+    fn timeout_includes_output_held_by_a_descendant() {
+        let started = Instant::now();
+        let (code, output, refused) = run_steps(
+            &[fixture_argv("inherited_pipe_child")],
+            Duration::from_secs(1),
+        );
+        assert_eq!((code, refused), (None, Some("timeout")));
+        assert!(output.contains("child is running"));
+        assert!(started.elapsed() < Duration::from_secs(2));
+        let pid: u32 = output
+            .lines()
+            .find_map(|line| line.strip_prefix("child-pid="))
+            .unwrap()
+            .parse()
+            .unwrap();
+        assert!(pid > 0 && pid <= i32::MAX as u32);
+        #[cfg(windows)]
+        {
+            use windows::Win32::{
+                Foundation::{CloseHandle, ERROR_INVALID_PARAMETER, WAIT_OBJECT_0},
+                System::Threading::{OpenProcess, WaitForSingleObject, PROCESS_SYNCHRONIZE},
+            };
+            match unsafe { OpenProcess(PROCESS_SYNCHRONIZE, false, pid) } {
+                Ok(handle) => {
+                    let wait = unsafe { WaitForSingleObject(handle, 1000) };
+                    let closed = unsafe { CloseHandle(handle) };
+                    assert_eq!(wait, WAIT_OBJECT_0, "owned child survived timeout");
+                    closed.unwrap();
+                }
+                Err(err) => assert_eq!(err.code(), ERROR_INVALID_PARAMETER.to_hresult()),
+            }
+        }
+        #[cfg(unix)]
+        {
+            use hbb_common::libc;
+            let deadline = Instant::now() + Duration::from_secs(1);
+            loop {
+                if unsafe { libc::kill(pid as libc::pid_t, 0) } == -1 {
+                    assert_eq!(std::io::Error::last_os_error().raw_os_error(), Some(libc::ESRCH));
+                    break;
+                }
+                assert!(Instant::now() < deadline, "owned child survived timeout");
+                std::thread::sleep(Duration::from_millis(10));
+            }
+        }
+    }
+
+    #[test]
+    #[ignore = "child process fixture"]
+    fn large_output_child() {
+        use std::io::Write;
+        for _ in 0..1024 {
+            std::io::stdout().write_all(&[b'x'; 4096]).unwrap();
+            std::io::stderr().write_all(&[b'y'; 4096]).unwrap();
+        }
+    }
+
+    #[test]
+    fn excess_output_is_drained_without_blocking_the_child() {
+        let (code, output, refused) = run_steps(
+            &[fixture_argv("large_output_child")],
+            Duration::from_secs(10),
+        );
+        assert_eq!((code, refused), (Some(0), None));
+        assert_eq!(output.len(), OUTPUT_LIMIT);
+        assert!(!output.contains('y'), "stdout precedes stderr in the result");
     }
 }

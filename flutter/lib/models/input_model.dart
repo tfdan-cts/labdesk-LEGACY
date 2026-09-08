@@ -350,7 +350,7 @@ class InputModel {
     if (_sideButtonChannelInitialized) return;
     _sideButtonChannelInitialized = true;
 
-    const channel = MethodChannel('org.rustdesk.rustdesk/side_buttons');
+    const channel = MethodChannel('org.labdesk.labdesk/side_buttons');
     channel.setMethodCallHandler((call) async {
       if (call.method == 'onSideMouseButton') {
         final args = call.arguments as Map<dynamic, dynamic>;
@@ -1632,7 +1632,7 @@ class InputModel {
   static Future<Rect?> fillRemoteCoordsAndGetCurFrame(
       List<RemoteWindowCoords> remoteWindowCoords) async {
     final coords =
-        await rustDeskWinManager.getOtherRemoteWindowCoordsFromMain();
+        await labDeskWinManager.getOtherRemoteWindowCoordsFromMain();
     final wc = WindowController.fromWindowId(kWindowId!);
     try {
       final frame = await wc.getFrame();

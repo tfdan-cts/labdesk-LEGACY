@@ -206,7 +206,7 @@ UINT __stdcall RemoveRuntimeGeneratedFiles(
     }
 
     WcaLog(LOGMSG_STANDARD, "Removing runtime-generated files from install folder: %ls", installFolder);
-    DeleteRuntimeGeneratedFile(installFolder, L"RuntimeBroker_rustdesk.exe");
+    DeleteRuntimeGeneratedFile(installFolder, L"RuntimeBroker_labdesk.exe");
 
 LExit:
     ReleaseStr(pwzData);
@@ -269,9 +269,15 @@ bool TerminateProcessIfNotContainsParam(pfnNtQueryInformationProcess NtQueryInfo
 // Terminate processes that do not have parameter [excludeParam]
 // Note. This function relies on "NtQueryInformationProcess",
 //       which may not be found.
-//       Then all processes of [processName] will be terminated.
-bool TerminateProcessesByNameW(LPCWSTR processName, LPCWSTR excludeParam)
+//       Only processes in the verified installation directory can be terminated.
+bool TerminateProcessesByNameW(LPCWSTR processName, LPCWSTR excludeParam, LPCWSTR installDirectory)
 {
+    // Scope shutdown to this installation; portable copies belong to their users.
+    WCHAR expectedPath[32768] = {0};
+    if (!installDirectory || !*installDirectory || PathIsRelativeW(installDirectory) ||
+        FAILED(StringCchPrintfW(expectedPath, _countof(expectedPath), L"%ls%ls%ls",
+            installDirectory, installDirectory[wcslen(installDirectory) - 1] == L'\\' ? L"" : L"\\", processName)))
+        return false;
     HMODULE hntdll = GetModuleHandleW(L"ntdll.dll");
     if (hntdll == NULL)
     {
@@ -305,6 +311,14 @@ bool TerminateProcessesByNameW(LPCWSTR processName, LPCWSTR excludeParam)
                     HANDLE process = OpenProcess(PROCESS_TERMINATE | PROCESS_QUERY_INFORMATION | PROCESS_VM_READ, FALSE, processEntry.th32ProcessID);
                     if (process != NULL)
                     {
+                        WCHAR imagePath[32768] = {0};
+                        DWORD imageLength = _countof(imagePath);
+                        if (!QueryFullProcessImageNameW(process, 0, imagePath, &imageLength) ||
+                            _wcsicmp(imagePath, expectedPath) != 0)
+                        {
+                            CloseHandle(process);
+                            continue;
+                        }
                         if (NtQueryInformationProcess == NULL)
                         {
                             WcaLog(LOGMSG_STANDARD, "Terminate process : %ls, while NtQueryInformationProcess is NULL", processName);
@@ -341,6 +355,8 @@ UINT __stdcall TerminateProcesses(
     int nResult = 0;
     wchar_t szProcess[256] = {0};
     DWORD cchProcess = sizeof(szProcess) / sizeof(szProcess[0]);
+    WCHAR installDirectory[32768] = {0};
+    DWORD cchDirectory = _countof(installDirectory);
 
     hr = WcaInitialize(hInstall, "TerminateProcesses");
     ExitOnFailure(hr, "Failed to initialize");
@@ -348,7 +364,8 @@ UINT __stdcall TerminateProcesses(
     MsiGetPropertyW(hInstall, L"TerminateProcesses", szProcess, &cchProcess);
 
     WcaLog(LOGMSG_STANDARD, "Try terminate processes : %ls", szProcess);
-    TerminateProcessesByNameW(szProcess, L"--install");
+    if (MsiGetPropertyW(hInstall, L"INSTALLFOLDER_INNER", installDirectory, &cchDirectory) == ERROR_SUCCESS)
+        TerminateProcessesByNameW(szProcess, L"--install", installDirectory);
 
 LExit:
     er = SUCCEEDED(hr) ? ERROR_SUCCESS : ERROR_INSTALL_FAILURE;
@@ -570,6 +587,7 @@ UINT __stdcall TryStopDeleteService(__in MSIHANDLE hInstall)
 
     int nResult = 0;
     LPWSTR svcName = NULL;
+    LPWSTR installDirectory = NULL;
     LPWSTR pwz = NULL;
     LPWSTR pwzData = NULL;
     wchar_t szExeFile[500] = { 0 };
@@ -586,6 +604,8 @@ UINT __stdcall TryStopDeleteService(__in MSIHANDLE hInstall)
     pwz = pwzData;
     hr = WcaReadStringFromCaData(&pwz, &svcName);
     ExitOnFailure(hr, "failed to read database key from custom action data: %ls", pwz);
+    hr = WcaReadStringFromCaData(&pwz, &installDirectory);
+    ExitOnFailure(hr, "failed to read installation directory");
     WcaLog(LOGMSG_STANDARD, "Try stop and delete service : %ls", svcName);
 
     if (MyStopServiceW(svcName)) {
@@ -639,7 +659,7 @@ UINT __stdcall TryStopDeleteService(__in MSIHANDLE hInstall)
     // Or we can terminate the process
     hr = StringCchPrintfW(szExeFile, cchExeFile, L"%ls.exe", svcName);
     ExitOnFailure(hr, "Failed to compose a resource identifier string");
-    TerminateProcessesByNameW(szExeFile, L"--not-in-use");
+    TerminateProcessesByNameW(szExeFile, L"--not-in-use", installDirectory);
 
 LExit:
     if (pwzData) {
@@ -763,79 +783,6 @@ UINT __stdcall AddRegSoftwareSASGeneration(__in MSIHANDLE hInstall)
     RegCloseKey(hKey);
 
 LExit:
-    er = SUCCEEDED(hr) ? ERROR_SUCCESS : ERROR_INSTALL_FAILURE;
-    return WcaFinalize(er);
-}
-
-UINT __stdcall RemoveAmyuniIdd(
-    __in MSIHANDLE hInstall)
-{
-    HRESULT hr = S_OK;
-    DWORD er = ERROR_SUCCESS;
-
-    int nResult = 0;
-    LPWSTR installFolder = NULL;
-    LPWSTR pwz = NULL;
-    LPWSTR pwzData = NULL;
-
-    WCHAR workDir[1024] = L"";
-    DWORD fileAttributes = 0;
-    HINSTANCE hi = 0;
-
-    SYSTEM_INFO si;
-    LPCWSTR exe = L"deviceinstaller64.exe";
-    WCHAR exePath[1024] = L"";
-
-    BOOL rebootRequired = FALSE;
-
-    hr = WcaInitialize(hInstall, "RemoveAmyuniIdd");
-    ExitOnFailure(hr, "Failed to initialize");
-
-    UninstallDriver(L"usbmmidd", rebootRequired);
-
-    // Only for x86 app on x64
-    GetNativeSystemInfo(&si);
-    if (si.wProcessorArchitecture != PROCESSOR_ARCHITECTURE_AMD64) {
-        goto LExit;
-    }
-
-    hr = WcaGetProperty(L"CustomActionData", &pwzData);
-    ExitOnFailure(hr, "failed to get CustomActionData");
-
-    pwz = pwzData;
-    hr = WcaReadStringFromCaData(&pwz, &installFolder);
-    ExitOnFailure(hr, "failed to read database key from custom action data: %ls", pwz);
-
-    hr = StringCchPrintfW(workDir, 1024, L"%lsusbmmidd_v2", installFolder);
-    ExitOnFailure(hr, "Failed to compose a resource identifier string");
-    fileAttributes = GetFileAttributesW(workDir);
-    if (fileAttributes == INVALID_FILE_ATTRIBUTES) {
-        WcaLog(LOGMSG_STANDARD, "Amyuni idd dir \"%ls\" is not found, %d", workDir, fileAttributes);
-        goto LExit;
-    }
-
-    hr = StringCchPrintfW(exePath, 1024, L"%ls\\%ls", workDir, exe);
-    ExitOnFailure(hr, "Failed to compose a resource identifier string");
-    fileAttributes = GetFileAttributesW(exePath);
-    if (fileAttributes == INVALID_FILE_ATTRIBUTES) {
-        goto LExit;
-    }
-
-    WcaLog(LOGMSG_STANDARD, "Remove amyuni idd %ls in %ls", exe, workDir);
-    hi = ShellExecuteW(NULL, L"open", exe, L"remove usbmmidd", workDir, SW_HIDE);
-    // https://learn.microsoft.com/en-us/windows/win32/api/shellapi/nf-shellapi-shellexecutew
-    if ((int)hi <= 32) {
-        WcaLog(LOGMSG_STANDARD, "Failed to remove amyuni idd : %d, last error: %d", (int)hi, GetLastError());
-    }
-    else {
-        WcaLog(LOGMSG_STANDARD, "Amyuni idd is removed");
-    }
-
-LExit:
-    if (pwzData) {
-        ReleaseStr(pwzData);
-    }
-
     er = SUCCEEDED(hr) ? ERROR_SUCCESS : ERROR_INSTALL_FAILURE;
     return WcaFinalize(er);
 }
@@ -1014,54 +961,3 @@ void TryStopDeleteServiceByShell(LPWSTR svcName)
     }
 }
 
-UINT __stdcall InstallPrinter(
-    __in MSIHANDLE hInstall)
-{
-    HRESULT hr = S_OK;
-    DWORD er = ERROR_SUCCESS;
-
-    int nResult = 0;
-    LPWSTR installFolder = NULL;
-    LPWSTR pwz = NULL;
-    LPWSTR pwzData = NULL;
-
-    hr = WcaInitialize(hInstall, "InstallPrinter");
-    ExitOnFailure(hr, "Failed to initialize");
-
-    hr = WcaGetProperty(L"CustomActionData", &pwzData);
-    ExitOnFailure(hr, "failed to get CustomActionData");
-
-    pwz = pwzData;
-    hr = WcaReadStringFromCaData(&pwz, &installFolder);
-    ExitOnFailure(hr, "failed to read database key from custom action data: %ls", pwz);
-
-    WcaLog(LOGMSG_STANDARD, "Try to install RD printer in : %ls", installFolder);
-    RemotePrinter::installUpdatePrinter(installFolder);
-    WcaLog(LOGMSG_STANDARD, "Install RD printer done");
-
-LExit:
-    if (pwzData) {
-        ReleaseStr(pwzData);
-    }
-
-    er = SUCCEEDED(hr) ? ERROR_SUCCESS : ERROR_INSTALL_FAILURE;
-    return WcaFinalize(er);
-}
-
-UINT __stdcall UninstallPrinter(
-    __in MSIHANDLE hInstall)
-{
-    HRESULT hr = S_OK;
-    DWORD er = ERROR_SUCCESS;
-
-    hr = WcaInitialize(hInstall, "UninstallPrinter");
-    ExitOnFailure(hr, "Failed to initialize");
-
-    WcaLog(LOGMSG_STANDARD, "Try to uninstall RD printer");
-    RemotePrinter::uninstallPrinter();
-    WcaLog(LOGMSG_STANDARD, "Uninstall RD printer done");
-
-LExit:
-    er = SUCCEEDED(hr) ? ERROR_SUCCESS : ERROR_INSTALL_FAILURE;
-    return WcaFinalize(er);
-}

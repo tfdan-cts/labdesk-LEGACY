@@ -20,7 +20,12 @@
 
 use hbb_common::{bail, log, sodiumoxide::crypto::hash::sha256, ResultType};
 use serde_derive::Deserialize;
-use std::{collections::BTreeMap, io::Write, path::PathBuf};
+use std::{collections::BTreeMap, io::{Read, Write}, path::PathBuf};
+use hbb_common::tokio::{self, sync::oneshot, time::{Duration, Instant}};
+
+const AUTHORITY_TIMEOUT: Duration = Duration::from_secs(3);
+const LEASE_POLL: Duration = Duration::from_secs(15);
+const LEASE_GRACE: Duration = Duration::from_secs(60);
 
 /// The privileged process loads this once, then writes only on a matching claim.
 /// No ticket secret is persisted. Unreadable/corrupt storage is an error, never
@@ -50,8 +55,96 @@ pub fn spend_here(id: &str, expires_at: i64) -> ResultType<bool> {
     }
     let mut ledger = MACHINE_SPENT_TICKETS.lock().map_err(|_| hbb_common::anyhow::anyhow!("spent-ticket lock unavailable"))?;
     match ledger.as_mut() {
-        Ok(ledger) => ledger.spend(id, expires_at, now),
+        Ok(ledger) => ledger.spend_authorized(id, expires_at, now, || authority_here(id, true)),
         Err(err) => bail!("spent-ticket storage unavailable: {}", err),
+    }
+}
+
+/// Machine-signed authority checks never expose a general signing primitive to the UI.
+/// A fixed HTTPS origin, no redirects, bounded response and timeout keep login bounded.
+#[cfg(not(any(target_os = "android", target_os = "ios")))]
+pub fn authority_here(id: &str, claim: bool) -> ResultType<bool> {
+    use super::identity::{AgentIdentity, uplink_signed_msg};
+    if !crate::platform::is_root() || !is_ticket_id(id) {
+        bail!("Invalid machine ticket authority request");
+    }
+    let identity = AgentIdentity::load_existing()?.ok_or_else(|| hbb_common::anyhow::anyhow!("This machine is not enrolled"))?;
+    let method = if claim { "POST" } else { "GET" };
+    let path = format!("/agent/ticket/{}/{}", id, if claim { "claimed" } else { "lease" });
+    let ts = (hbb_common::get_time() / 1000).to_string();
+    let signature = identity.sign(&uplink_signed_msg(method, &path, &ts, b""))?;
+    let client = reqwest::blocking::Client::builder()
+        .use_rustls_tls().https_only(true).redirect(reqwest::redirect::Policy::none())
+        .timeout(AUTHORITY_TIMEOUT).connect_timeout(AUTHORITY_TIMEOUT).build()?;
+    let response = client.request(method.parse()?, format!("{}{}", crate::LABDESK_SITE, path))
+        .header("X-LD-Machine", identity.machine_id()).header("X-LD-Ts", ts)
+        .header("X-LD-Sig", signature).send()?;
+    let status = response.status().as_u16();
+    let mut body = Vec::new();
+    response.take(8193).read_to_end(&mut body)?;
+    authority_answer(status, &body)
+}
+
+fn authority_answer(status: u16, body: &[u8]) -> ResultType<bool> {
+    if matches!(status, 401 | 403 | 404 | 409 | 410) { return Ok(false); }
+    if status != 200 || body.len() > 8192 { bail!("Ticket authority temporarily unavailable"); }
+    let answer: serde_json::Value = serde_json::from_slice(body)
+        .map_err(|_| hbb_common::anyhow::anyhow!("Invalid ticket authority answer"))?;
+    if answer.get("ok").and_then(|ok| ok.as_bool()) != Some(true) {
+        bail!("Invalid ticket authority answer");
+    }
+    Ok(true)
+}
+
+/// Dropping a connection's receiver cancels its monitor. Explicit revocation or an
+/// unverified 60-second interval ends a managed session, including file/port traffic.
+pub fn monitor_lease(id: String) -> oneshot::Receiver<()> {
+    let (stop, receiver) = oneshot::channel();
+    tokio::spawn(watch_lease(stop, move || {
+        let id = id.clone();
+        async move {
+            #[cfg(not(any(target_os = "android", target_os = "ios")))]
+            let answer = tokio::task::spawn_blocking(move || crate::ipc::labnet(
+                super::labnet::LabnetRequest::AuthorizeTicket { id }
+            )).await??;
+            #[cfg(any(target_os = "android", target_os = "ios"))]
+            let answer = { let _ = id; "false".to_owned() };
+            match answer.as_str() {
+                "true" => Ok(true), "false" => Ok(false),
+                _ => bail!("Invalid ticket lease answer"),
+            }
+        }
+    }, LEASE_POLL, LEASE_GRACE));
+    receiver
+}
+
+async fn watch_lease<F, V>(mut stop: oneshot::Sender<()>, mut verify: V, poll: Duration, grace: Duration)
+where F: std::future::Future<Output = ResultType<bool>>, V: FnMut() -> F {
+    let mut deadline = Instant::now() + grace;
+    loop {
+        let result = tokio::select! {
+            _ = stop.closed() => return,
+            _ = tokio::time::sleep_until(deadline) => break,
+            result = verify() => result,
+        };
+        match result {
+            Ok(true) => deadline = Instant::now() + grace,
+            Ok(false) => break,
+            Err(_) => (), // Preserve only the bounded lease from the last positive check.
+        }
+        tokio::select! {
+            _ = stop.closed() => return,
+            _ = tokio::time::sleep_until(deadline) => break,
+            _ = tokio::time::sleep(poll) => (),
+        }
+    }
+    let _ = stop.send(());
+}
+
+pub async fn lease_ended(receiver: &mut Option<oneshot::Receiver<()>>) {
+    match receiver {
+        Some(receiver) => { let _ = receiver.await; }, // A failed monitor also closes access.
+        None => std::future::pending().await,
     }
 }
 
@@ -78,6 +171,16 @@ pub fn spend_on_machine(_: &str, _: i64) -> ResultType<bool> {
 }
 
 impl SpentTickets {
+    fn spend_authorized(&mut self, id: &str, expires_at: i64, now: i64,
+        authorize: impl FnOnce() -> ResultType<bool>) -> ResultType<bool> {
+        if !is_ticket_id(id) || expires_at <= now || self.spent.get(id).is_some_and(|expires| *expires > now) {
+            return Ok(false);
+        }
+        if !authorize()? { return Ok(false); }
+        // A lost response or disk failure consumes the server credential without granting login.
+        self.spend(id, expires_at, now)
+    }
+
     pub fn load(path: PathBuf) -> ResultType<Self> {
         let spent: BTreeMap<String, i64> = match std::fs::read(&path) {
             Ok(bytes) => serde_json::from_slice(&bytes)?,
@@ -246,6 +349,67 @@ pub fn is_ticket_id(id: &str) -> bool {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn login_requires_current_broker_authority_and_durable_spend() {
+        let path = ledger_path();
+        let mut ledger = SpentTickets::load(path.clone()).unwrap();
+        assert!(!ledger.spend_authorized("revoked", 200, 100, || Ok(false)).unwrap());
+        assert!(!path.exists());
+        assert!(ledger.spend_authorized("offline", 200, 100, || bail!("offline")).is_err());
+        assert!(!path.exists());
+        assert!(ledger.spend_authorized("approved", 200, 100, || Ok(true)).unwrap());
+        assert!(!ledger.spend_authorized("approved", 200, 100, || panic!("a replay never calls the broker")).unwrap());
+        let mut restarted = SpentTickets::load(path.clone()).unwrap();
+        assert!(!restarted.spend_authorized("approved", 200, 100, || Ok(true)).unwrap());
+        std::fs::remove_file(&path).unwrap();
+        std::fs::remove_dir(path.parent().unwrap()).unwrap();
+    }
+
+    #[test]
+    fn authority_requires_a_positive_bounded_response() {
+        assert!(authority_answer(200, br#"{"ok":true}"#).unwrap());
+        for status in [401, 403, 404, 409, 410] {
+            assert!(!authority_answer(status, b"denied").unwrap());
+        }
+        for (status, body) in [(200, b"<html>challenge</html>".as_slice()), (200, br#"{"ok":false}"#),
+            (200, br#"{"ok":"true"}"#), (302, b"redirect"), (429, b"busy"), (503, b"offline")] {
+            assert!(authority_answer(status, body).is_err());
+        }
+        assert!(authority_answer(200, &vec![b' '; 8193]).is_err());
+    }
+
+    #[tokio::test]
+    async fn explicit_revocation_closes_without_waiting_for_outage_grace() {
+        let (stop, mut receiver) = oneshot::channel();
+        let task = tokio::spawn(watch_lease(stop, || async { Ok(false) }, LEASE_POLL, LEASE_GRACE));
+        tokio::time::timeout(Duration::from_secs(2), &mut receiver).await.unwrap().unwrap();
+        task.await.unwrap();
+    }
+
+    #[tokio::test]
+    async fn a_hung_or_unavailable_broker_cannot_extend_a_session_forever() {
+        for hung in [true, false] {
+            let (stop, mut receiver) = oneshot::channel();
+            let task = tokio::spawn(watch_lease(stop, move || async move {
+                if hung { std::future::pending::<()>().await; }
+                bail!("broker unavailable")
+            }, LEASE_POLL, Duration::from_millis(20)));
+            tokio::time::timeout(Duration::from_secs(2), &mut receiver).await.unwrap().unwrap();
+            task.await.unwrap();
+        }
+    }
+
+    #[tokio::test]
+    async fn closing_the_connection_cancels_its_monitor_and_failed_monitors_close_access() {
+        let (stop, receiver) = oneshot::channel();
+        let task = tokio::spawn(watch_lease(stop, || async { Ok(true) }, LEASE_POLL, LEASE_GRACE));
+        drop(receiver);
+        tokio::time::timeout(Duration::from_secs(2), task).await.unwrap().unwrap();
+        let (stop, receiver) = oneshot::channel();
+        drop(stop);
+        tokio::time::timeout(Duration::from_secs(2), lease_ended(&mut Some(receiver))).await.unwrap();
+    }
 
     fn ledger_path() -> PathBuf {
         static NEXT: std::sync::atomic::AtomicUsize = std::sync::atomic::AtomicUsize::new(0);

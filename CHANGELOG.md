@@ -3,6 +3,23 @@
 LabDesk's own versions. The RustDesk core underneath is stated in the README, not versioned here.
 Rules: `docs/VERSIONING.md`.
 
+## 1.4.0-alpha.6+78 — private candidate
+
+- Patch dependencies selected for the Windows runtime and pin Rust 1.98.1.
+- Require current broker authorization for managed sessions and enforce revocation
+  through bounded authorization leases.
+- Bundle the repaired, versioned Windows Labnet service and keep installer component
+  identities stable across upgrades.
+- Reject NTFS alternate-stream filenames supplied through remote file transfers.
+- Enforce server-certificate validation in HTTP clients and remove the obsolete
+  inventory/configuration polling loop; keep signed machine reporting and session grants.
+- Redesign transfer panes and remote controls, displaying machine hostnames.
+- Verify offline-signed release inventories with a pinned Ed25519 public key; remove
+  automated jobs that could replace the manifest or delete its signature.
+
+This is a test candidate. Matching endpoint installation, separate-network desktop and
+file transfer, and live authorization-revocation checks remain release gates.
+
 ## Unreleased (`feat/labnet`, built as `labnet-ready` from `d9d9b23dc` on 2026-09-05)
 
 The version number has not moved; the `labnet-ready` build reports 1.2.4. What is on the branch

@@ -99,11 +99,11 @@ fn load_plugin_in_app_path(dll_name: &str) -> Result<Library, LibError> {
     }
 }
 
-/// FFI for rustdesk core's main entry.
+/// FFI for labdesk core's main entry.
 /// Return true if the app should continue running with UI(possibly Flutter), false if the app should exit.
 #[cfg(not(windows))]
 #[no_mangle]
-pub extern "C" fn rustdesk_core_main() -> bool {
+pub extern "C" fn labdesk_core_main() -> bool {
     #[cfg(not(any(target_os = "android", target_os = "ios")))]
     if crate::core_main::core_main().is_some() {
         return true;
@@ -123,7 +123,7 @@ pub extern "C" fn handle_applicationShouldOpenUntitledFile() {
 
 #[cfg(windows)]
 #[no_mangle]
-pub extern "C" fn rustdesk_core_main_args(args_len: *mut c_int) -> *mut *mut c_char {
+pub extern "C" fn labdesk_core_main_args(args_len: *mut c_int) -> *mut *mut c_char {
     unsafe { std::ptr::write(args_len, 0) };
     #[cfg(not(any(target_os = "android", target_os = "ios")))]
     {
@@ -138,7 +138,7 @@ pub extern "C" fn rustdesk_core_main_args(args_len: *mut c_int) -> *mut *mut c_c
 
 #[cfg(windows)]
 #[no_mangle]
-pub extern "C" fn rustdesk_is_disable_installation() -> c_int {
+pub extern "C" fn labdesk_is_disable_installation() -> c_int {
     hbb_common::config::is_disable_installation() as c_int
 }
 
@@ -194,7 +194,7 @@ pub unsafe extern "C" fn free_c_args(ptr: *mut *mut c_char, len: c_int) {
 
 #[cfg(windows)]
 #[no_mangle]
-pub unsafe extern "C" fn get_rustdesk_app_name(buffer: *mut u16, length: i32) -> i32 {
+pub unsafe extern "C" fn get_labdesk_app_name(buffer: *mut u16, length: i32) -> i32 {
     let name = crate::platform::wide_string(&crate::get_app_name());
     if length > name.len() as i32 {
         std::ptr::copy_nonoverlapping(name.as_ptr(), buffer, name.len());
@@ -2357,69 +2357,3 @@ pub mod sessions {
     }
 }
 
-pub(super) mod async_tasks {
-    use hbb_common::{bail, tokio, ResultType};
-    use std::{
-        collections::HashMap,
-        sync::{
-            mpsc::{sync_channel, SyncSender},
-            Arc, Mutex,
-        },
-    };
-
-    type TxQueryOnlines = SyncSender<Vec<String>>;
-    lazy_static::lazy_static! {
-        static ref TX_QUERY_ONLINES: Arc<Mutex<Option<TxQueryOnlines>>> = Default::default();
-    }
-
-    #[inline]
-    pub fn start_flutter_async_runner() {
-        std::thread::spawn(start_flutter_async_runner_);
-    }
-
-    #[allow(dead_code)]
-    pub fn stop_flutter_async_runner() {
-        let _ = TX_QUERY_ONLINES.lock().unwrap().take();
-    }
-
-    #[tokio::main(flavor = "current_thread")]
-    async fn start_flutter_async_runner_() {
-        // Only one task is allowed to run at the same time.
-        let (tx_onlines, rx_onlines) = sync_channel::<Vec<String>>(1);
-        TX_QUERY_ONLINES.lock().unwrap().replace(tx_onlines);
-
-        loop {
-            match rx_onlines.recv() {
-                Ok(ids) => {
-                    crate::client::peer_online::query_online_states(ids, handle_query_onlines).await
-                }
-                _ => {
-                    // unreachable!
-                    break;
-                }
-            }
-        }
-    }
-
-    pub fn query_onlines(ids: Vec<String>) -> ResultType<()> {
-        if let Some(tx) = TX_QUERY_ONLINES.lock().unwrap().as_ref() {
-            // Ignore if the channel is full.
-            let _ = tx.try_send(ids)?;
-        } else {
-            bail!("No tx_query_onlines");
-        }
-        Ok(())
-    }
-
-    fn handle_query_onlines(onlines: Vec<String>, offlines: Vec<String>) {
-        let data = HashMap::from([
-            ("name", "callback_query_onlines".to_owned()),
-            ("onlines", onlines.join(",")),
-            ("offlines", offlines.join(",")),
-        ]);
-        let _res = super::push_global_event(
-            super::APP_TYPE_MAIN,
-            serde_json::ser::to_string(&data).unwrap_or("".to_owned()),
-        );
-    }
-}

@@ -2,10 +2,6 @@
 
 set -e
 
-case $1 in
-    purge)
-		rm -rf /root/.config/LabDesk || true
-        ;;
-esac
+# Package removal preserves machine enrollment, keys and user configuration.
 
 exit 0

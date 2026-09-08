@@ -76,7 +76,7 @@ pub(super) fn embedded_shortcut_commands(bytes: Vec<u8>, filename: &str, name: &
     let encoded_path = format!("%~f0.{name}.b64");
     format!(
         "> \"{encoded_path}\" echo {encoded}\r\n\
-         certutil -f -decode \"{encoded_path}\" \"%RUSTDESK_OUTPUT_DIR%\\{filename}\" > nul || exit /b {BATCH_SHORTCUT_DECODE_FAILURE_EXIT_CODE}"
+         certutil -f -decode \"{encoded_path}\" \"%LABDESK_OUTPUT_DIR%\\{filename}\" > nul || exit /b {BATCH_SHORTCUT_DECODE_FAILURE_EXIT_CODE}"
     )
 }
 
@@ -226,6 +226,11 @@ pub(super) fn run_elevated_and_wait(
     if parameter_chars >= WIN7_SHELL_EXECUTE_MAX_PARAMETER_CHARS {
         bail!("Elevated command is too long: {parameter_chars} UTF-16 characters");
     }
+    // SYSTEM service updates already have authority and no interactive desktop.
+    // Starting the trusted receiver directly avoids ShellExecute/UAC in session 0.
+    if super::is_elevated(None)? {
+        return run_current_token_and_wait(executable, parameters, show);
+    }
     let _com = initialize_shell_com()?;
     let verb = wide_string("runas");
     let working_directory = wide_string(path_for_cmd_environment(elevated_working_directory(
@@ -262,6 +267,18 @@ pub(super) fn run_elevated_and_wait(
     Ok(exit_code)
 }
 
+fn run_current_token_and_wait(executable: &Path, parameters: &str, show: bool) -> ResultType<u32> {
+    use std::{os::windows::process::CommandExt, process::{Command, Stdio}};
+    path_for_cmd_environment(executable)?;
+    let mut command = Command::new(executable);
+    command.current_dir(elevated_working_directory(executable)?)
+        .raw_arg(parameters).stdin(Stdio::null()).stdout(Stdio::null()).stderr(Stdio::null());
+    if !show { command.creation_flags(Threading::CREATE_NO_WINDOW.0); }
+    let status = command.status()?;
+    status.code().map(|code| code as u32)
+        .ok_or_else(|| anyhow!("Installer receiver ended without an exit code"))
+}
+
 // Escape `^` before using it to escape `&` so both survive nested cmd.exe parsing.
 // https://learn.microsoft.com/en-us/previous-versions/windows/it-pro/windows-server-2012-r2-and-2012/cc754250(v=ws.11)
 pub(super) fn escape_nested_cmd_ampersands(value: &str) -> String {
@@ -273,11 +290,19 @@ mod tests {
     use super::*;
 
     #[test]
+    fn current_token_receiver_waits_and_preserves_exit_status_without_uac() {
+        let executable = get_system_executable(CMD_RELATIVE_PATH).unwrap();
+        for code in [0, 7, 3010] {
+            assert_eq!(run_current_token_and_wait(&executable, &format!("/D /C exit {code}"), false).unwrap(), code);
+        }
+    }
+
+    #[test]
     fn install_values_enforce_command_safety() {
         assert!(validate_install_value(r"C:\safe ! path").is_ok());
-        assert!(validate_install_value(r"C:\Program Files (x86)\RustDesk").is_ok());
-        assert!(validate_install_value(r"C:\Users\R&D\RustDesk.exe").is_ok());
-        assert!(validate_install_value(r"C:\A&^ B\RustDesk.exe").is_ok());
+        assert!(validate_install_value(r"C:\Program Files (x86)\LabDesk").is_ok());
+        assert!(validate_install_value(r"C:\Users\R&D\LabDesk.exe").is_ok());
+        assert!(validate_install_value(r"C:\A&^ B\LabDesk.exe").is_ok());
         for character in ['\0', '"', '%', '\r', '\n', '|', '<', '>'] {
             let value = format!(r"C:\unsafe{character}path");
             assert!(
@@ -290,8 +315,8 @@ mod tests {
     #[test]
     fn nested_commands_escape_while_protected_environment_preserves_carets() {
         assert_eq!(
-            escape_nested_cmd_ampersands(r"C:\A&^ B\RustDesk.exe"),
-            r"C:\A^&^^ B\RustDesk.exe"
+            escape_nested_cmd_ampersands(r"C:\A&^ B\LabDesk.exe"),
+            r"C:\A^&^^ B\LabDesk.exe"
         );
         let path = Path::new(r"C:\Win^Root\System32");
         let environment = trusted_install_environment_from_paths(path, path, path).unwrap();

@@ -1,0 +1,11 @@
+[Desktop Entry]
+Name=LabDesk
+NoDisplay=true
+MimeType=x-scheme-handler/labdesk;
+TryExec=labdesk
+Exec=labdesk %u
+Icon=labdesk
+Terminal=false
+Type=Application
+StartupNotify=false
+StartupWMClass=labdesk

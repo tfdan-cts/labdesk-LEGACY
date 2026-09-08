@@ -48,7 +48,7 @@ use hbb_common::{
     bail,
     config::{
         self, keys, use_ws, Config, LocalConfig, PeerConfig, PeerInfoSerde, Resolution,
-        CONNECT_TIMEOUT, READ_TIMEOUT, RELAY_PORT, RENDEZVOUS_PORT, RENDEZVOUS_SERVERS,
+        CONNECT_TIMEOUT, READ_TIMEOUT, RELAY_PORT, RENDEZVOUS_PORT,
     },
     fs::JobType,
     futures::future::{select_ok, FutureExt},
@@ -129,7 +129,7 @@ pub const SCRAP_OTHER_VERSION_OR_X11_REQUIRED: &str =
 pub const SCRAP_XDP_PORTAL_UNAVAILABLE: &str =
     "xdp-portal-unavailable";
 pub const SCRAP_X11_REQUIRED: &str = "x11 expected";
-pub const SCRAP_X11_REF_URL: &str = "https://rustdesk.com/docs/en/manual/linux/#x11-required";
+pub const SCRAP_X11_REF_URL: &str = "https://lab-desk.net/help?topic=device&entry=manual-linux-display&view=manual";
 
 #[cfg(not(target_os = "linux"))]
 pub const AUDIO_BUFFER_MS: usize = 3000;
@@ -174,7 +174,6 @@ lazy_static::lazy_static! {
     static ref CLIPBOARD_STATE: Arc<Mutex<ClipboardState>> = Arc::new(Mutex::new(ClipboardState::new()));
 }
 
-const PUBLIC_SERVER: &str = "public";
 
 // labnet: the whole overlay attempt, the connect and the key exchange
 // together, is bounded by this, so a hint that leads nowhere costs the
@@ -367,8 +366,8 @@ impl Client {
     /// Start a new connection.
     async fn _start(
         peer: &str,
-        key: &str,
-        token: &str,
+        _key: &str,
+        _token: &str,
         conn_type: ConnType,
         interface: impl Interface,
     ) -> ResultType<(
@@ -416,653 +415,31 @@ impl Client {
             ));
         }
 
-        let other_server = interface.get_lch().read().unwrap().other_server.clone();
-        let (peer, other_server, key, token) = if let Some((a, b, c)) = other_server.as_ref() {
-            (a.as_ref(), b.as_ref(), c.as_ref(), "")
-        } else {
-            (peer, "", key, token)
-        };
-        // labnet: the console may have written an overlay address for this
-        // peer, with the peer's own id public key beside it. Try that address
-        // before any server. Managed sessions require this path; choosing the
-        // legacy RustDesk route is an explicit console action, never an
-        // automatic result of a failed labnet connection.
-        if other_server.is_empty() {
-            let addr_key = format!("labdesk-overlay-addr-{}", peer);
-            let pk_key = format!("labdesk-overlay-pk-{}", peer);
-            let hint = Config::get_option(&addr_key);
-            if !hint.is_empty() {
-                match parse_overlay_hint(&hint) {
-                    None => {
-                        log::error!("labnet: discarding overlay address {} for {}", hint, peer);
-                        clear_overlay_hint(&addr_key, &pk_key).await;
-                    }
-                    Some(addr) => {
-                        let started = Instant::now();
-                        let source =
-                            parse_overlay_source(&Config::get_option("labdesk-direct-bind"));
-                        if overlay_required && source.is_none() {
-                            bail!("This machine has no verified labnet address. Check its labnet status before connecting.");
-                        }
-                        // A labnet dial uses the owned overlay source and bypasses
-                        // the legacy RustDesk SOCKS proxy. The address range alone
-                        // is not evidence of which VPN owns an OS route.
-                        match hbb_common::tcp::FramedStream::new(addr, source, OVERLAY_TIMEOUT)
-                            .await
-                            .map(Stream::Tcp)
-                        {
-                            Ok(mut conn) => {
-                                let pk =
-                                    crate::decode64(Config::get_option(&pk_key)).unwrap_or_default();
-                                // A connect that used the whole budget must not
-                                // hand the handshake a zero timeout, which would
-                                // fail it before a byte is read.
-                                let left = OVERLAY_TIMEOUT
-                                    .saturating_sub(started.elapsed().as_millis() as u64)
-                                    .max(OVERLAY_HANDSHAKE_MIN);
-                                // Bound here so the borrow of the stream ends
-                                // before the stream is handed on.
-                                let res = timeout(
-                                    left,
-                                    Self::secure_connection_with_pk(peer, pk, &mut conn),
-                                )
-                                .await;
-                                let mut signed_other_id = false;
-                                let err = match res {
-                                    Ok(Ok((option_pk, signed_other))) => {
-                                        // secure_with_sign_pk also returns Ok on
-                                        // every identity failure: a wrong id, a
-                                        // key that does not verify, an
-                                        // unexpected message, no usable key at
-                                        // all. It calls set_key only once the
-                                        // peer has proved it holds the id key,
-                                        // so a stream that is not secured here
-                                        // did not prove it is the peer.
-                                        if conn.is_secured() {
-                                            log::info!(
-                                                "labnet: authenticated overlay path to {} at {} from {}",
-                                                peer,
-                                                addr,
-                                                conn.local_addr()
-                                            );
-                                            return Ok((
-                                                (conn, true, option_pk, None, "TCP"),
-                                                (0, "".to_owned()),
-                                                false,
-                                            ));
-                                        }
-                                        signed_other_id = signed_other;
-                                        if signed_other {
-                                            "signed another machine's id with the peer's key"
-                                                .to_owned()
-                                        } else {
-                                            // A signature the peer's key does
-                                            // not verify, a reinstalled peer
-                                            // above all, or no signed id at
-                                            // all, which is what an unsigned
-                                            // direct listener answers with.
-                                            "did not prove it holds the peer's key".to_owned()
-                                        }
-                                    }
-                                    Ok(Err(err)) => err.to_string(),
-                                    Err(err) => err.to_string(),
-                                };
-                                // Whatever happened, it happened at a named
-                                // address to a named peer, and the line that
-                                // says which is the only one an operator gets,
-                                // so it is written before anything ends here.
-                                log::info!(
-                                    "labnet: handshake with {} at {} failed: {}",
-                                    peer,
-                                    addr,
-                                    err
-                                );
-                                // A socket that answers but cannot prove it is
-                                // the peer gets no session. Drop the address and
-                                // the key together, so no later connect pays the
-                                // same cost again and the two cannot drift. Through
-                                // IPC, not `Config` alone: this is the client process,
-                                // and a hint cleared only here comes back from the
-                                // server copy on the next option sync.
-                                clear_overlay_hint(&addr_key, &pk_key).await;
-                                if overlay_required {
-                                    bail!("labnet: could not authenticate {} at {}: {}", peer, addr, err);
-                                }
-                                if overlay_is_impersonation(conn.is_secured(), signed_other_id) {
-                                    // Another machine answered on the peer's
-                                    // address under an identity of its own. Say
-                                    // so and stop: carrying the same id on to
-                                    // another route would hide that it happened
-                                    // at all.
-                                    bail!(
-                                        "labnet: the machine at {} did not sign as {}",
-                                        addr,
-                                        peer
-                                    );
-                                }
-                                // Nothing was proved about who holds the
-                                // address, only that it led nowhere, so fall
-                                // through to the path below.
-                            }
-                            Err(err) => {
-                                log::info!("labnet: {} not reachable at {}: {}", peer, addr, err)
-                            }
-                        }
-                    }
-                }
+        let addr_key = format!("labdesk-overlay-addr-{}", peer);
+        let pk_key = format!("labdesk-overlay-pk-{}", peer);
+        let hint = Config::get_option(&addr_key);
+        let addr = parse_overlay_hint(&hint).ok_or_else(|| anyhow!(
+            "No Labnet address is available for this machine. Turn on Labnet on both machines and refresh the fleet."
+        ))?;
+        let source = parse_overlay_source(&Config::get_option("labdesk-direct-bind"))
+            .ok_or_else(|| anyhow!("This machine has no verified Labnet address. Turn on Labnet before connecting."))?;
+        let mut conn = hbb_common::tcp::FramedStream::new(addr, Some(source), OVERLAY_TIMEOUT)
+            .await.map(Stream::Tcp)?;
+        let pk = crate::decode64(Config::get_option(&pk_key)).unwrap_or_default();
+        let result = timeout(OVERLAY_TIMEOUT,
+            Self::secure_connection_with_pk(peer, pk, &mut conn)).await;
+        match result {
+            Ok(Ok((pk, _))) if conn.is_secured() => {
+                log::info!("labnet: authenticated connection to {} at {} from {}", peer, addr, conn.local_addr());
+                Ok(((conn, true, pk, None, "TCP"), (0, String::new()), false))
             }
-        }
-
-        if overlay_required {
-            bail!("The labnet connection could not be established. Check the labnet status on both machines, or explicitly choose RustDesk in the console.");
-        }
-
-        let (rendezvous_server, servers, contained) = if other_server.is_empty() {
-            crate::get_rendezvous_server(1_000).await
-        } else {
-            if other_server == PUBLIC_SERVER {
-                (
-                    check_port(RENDEZVOUS_SERVERS[0], RENDEZVOUS_PORT),
-                    RENDEZVOUS_SERVERS[1..]
-                        .iter()
-                        .map(|x| x.to_string())
-                        .collect(),
-                    true,
-                )
-            } else {
-                (check_port(other_server, RENDEZVOUS_PORT), Vec::new(), true)
+            _ => {
+                clear_overlay_hint(&addr_key, &pk_key).await;
+                bail!("Labnet could not authenticate this machine. Refresh the fleet and check Labnet on both machines.");
             }
-        };
-
-        if crate::get_ipv6_punch_enabled() {
-            crate::test_ipv6().await;
-        }
-
-        let (stop_udp_tx, stop_udp_rx) = oneshot::channel::<()>();
-        let udp =
-        // no need to care about multiple rendezvous servers case, since it is acutally not used any more.
-        // Shared state for UDP NAT test result
-        if crate::get_udp_punch_enabled() && !interface.is_force_relay() {
-            if let Ok((socket, addr)) = new_direct_udp_for(&rendezvous_server).await {
-                let udp_port = Arc::new(Mutex::new(0));
-                let up_cloned = udp_port.clone();
-                let socket_cloned = socket.clone();
-                let func = async move {
-                    allow_err!(test_udp_uat(socket_cloned, addr, up_cloned, stop_udp_rx).await);
-                };
-                tokio::spawn(func);
-                (Some(socket), Some(udp_port))
-            } else {
-                (None, None)
-            }
-        } else {
-            (None, None)
-        };
-        let fut = Self::_start_inner(
-            peer.to_owned(),
-            key.to_owned(),
-            token.to_owned(),
-            conn_type,
-            interface.clone(),
-            udp.clone(),
-            Some(stop_udp_tx),
-            rendezvous_server.clone(),
-            servers.clone(),
-            contained,
-        );
-        if udp.0.is_none() {
-            return fut.await;
-        }
-        let mut connect_futures = Vec::new();
-        connect_futures.push(fut.boxed());
-        let fut = Self::_start_inner(
-            peer.to_owned(),
-            key.to_owned(),
-            token.to_owned(),
-            conn_type,
-            interface,
-            (None, None),
-            None,
-            rendezvous_server,
-            servers,
-            contained,
-        );
-        connect_futures.push(fut.boxed());
-        match select_ok(connect_futures).await {
-            Ok(conn) => Ok((conn.0 .0, conn.0 .1, conn.0 .2)),
-            Err(e) => Err(e),
         }
     }
 
-    async fn _start_inner(
-        peer: String,
-        key: String,
-        token: String,
-        conn_type: ConnType,
-        interface: impl Interface,
-        mut udp: (Option<Arc<UdpSocket>>, Option<Arc<Mutex<u16>>>),
-        stop_udp_tx: Option<oneshot::Sender<()>>,
-        mut rendezvous_server: String,
-        servers: Vec<String>,
-        contained: bool,
-    ) -> ResultType<(
-        (
-            Stream,
-            bool,
-            Option<Vec<u8>>,
-            Option<KcpStream>,
-            &'static str,
-        ),
-        (i32, String),
-        bool,
-    )> {
-        let mut start = Instant::now();
-        let mut socket = connect_tcp(&*rendezvous_server, CONNECT_TIMEOUT).await;
-        debug_assert!(!servers.contains(&rendezvous_server));
-        let rtt = start.elapsed();
-        log::debug!("TCP connection establishment time used: {:?}", rtt);
-        if socket.is_err() && !servers.is_empty() {
-            log::info!("try the other servers: {:?}", servers);
-            for server in servers {
-                let server = check_port(server, RENDEZVOUS_PORT);
-                socket = connect_tcp(&*server, CONNECT_TIMEOUT).await;
-                if socket.is_ok() {
-                    rendezvous_server = server;
-                    break;
-                }
-            }
-            crate::refresh_rendezvous_server();
-        } else if !contained {
-            crate::refresh_rendezvous_server();
-        }
-        log::info!("rendezvous server: {}", rendezvous_server);
-        let mut socket = socket?;
-        let my_addr = socket.local_addr();
-        let mut signed_id_pk = Vec::new();
-        let mut relay_server = "".to_owned();
-        let mut peer_addr = Config::get_any_listen_addr(true);
-        let mut peer_nat_type = NatType::UNKNOWN_NAT;
-        let my_nat_type = crate::get_nat_type(100).await;
-        let mut is_local = false;
-        let mut feedback = 0;
-        use hbb_common::protobuf::Enum;
-        let nat_type = if interface.is_force_relay() {
-            NatType::SYMMETRIC
-        } else {
-            NatType::from_i32(my_nat_type).unwrap_or(NatType::UNKNOWN_NAT)
-        };
-
-        let switch_code = interface.get_switch_code();
-        if !key.is_empty() && (!token.is_empty() || !switch_code.is_empty()) {
-            secure_tcp(&mut socket, &key)
-                .await
-                .map_err(|e| anyhow!("Failed to secure tcp: {}", e))?;
-        } else if let Some(udp) = udp.1.as_ref() {
-            let tm = Instant::now();
-            loop {
-                let port = *udp.lock().unwrap();
-                if port > 0 {
-                    break;
-                }
-                // await for 0.5 RTT
-                if tm.elapsed() > rtt / 2 {
-                    break;
-                }
-                hbb_common::sleep(0.001).await;
-            }
-        }
-        // Stop UDP NAT test task if still running
-        stop_udp_tx.map(|tx| tx.send(()));
-        let mut msg_out = RendezvousMessage::new();
-        let mut ipv6 = if crate::get_ipv6_punch_enabled() {
-            if let Some((socket, addr)) = crate::get_ipv6_socket().await {
-                (Some(socket), Some(addr))
-            } else {
-                (None, None)
-            }
-        } else {
-            (None, None)
-        };
-        let udp_nat_port = udp.1.map(|x| *x.lock().unwrap()).unwrap_or(0);
-        let punch_type = if udp_nat_port > 0 { "UDP" } else { "TCP" };
-        msg_out.set_punch_hole_request(PunchHoleRequest {
-            id: peer.to_owned(),
-            token: token.to_owned(),
-            nat_type: nat_type.into(),
-            licence_key: key.to_owned(),
-            conn_type: conn_type.into(),
-            version: crate::VERSION.to_owned(),
-            udp_port: udp_nat_port as _,
-            force_relay: interface.is_force_relay(),
-            socket_addr_v6: ipv6.1.unwrap_or_default(),
-            switch_code,
-            ..Default::default()
-        });
-        for i in 1..=3 {
-            log::info!(
-                "#{} {} punch attempt with {}, id: {}",
-                i,
-                punch_type,
-                my_addr,
-                peer
-            );
-            socket.send(&msg_out).await?;
-            // below timeout should not bigger than hbbs's connection timeout.
-            if let Some(msg_in) =
-                crate::get_next_nonkeyexchange_msg(&mut socket, Some(i * 3000)).await
-            {
-                match msg_in.union {
-                    Some(rendezvous_message::Union::PunchHoleResponse(ph)) => {
-                        if ph.socket_addr.is_empty() {
-                            if !ph.other_failure.is_empty() {
-                                bail!(ph.other_failure);
-                            }
-                            match ph.failure.enum_value() {
-                                Ok(punch_hole_response::Failure::ID_NOT_EXIST) => {
-                                    bail!("ID does not exist");
-                                }
-                                Ok(punch_hole_response::Failure::OFFLINE) => {
-                                    bail!("Remote desktop is offline");
-                                }
-                                Ok(punch_hole_response::Failure::LICENSE_MISMATCH) => {
-                                    bail!("Key mismatch");
-                                }
-                                Ok(punch_hole_response::Failure::LICENSE_OVERUSE) => {
-                                    bail!("Key overuse");
-                                }
-                                _ => bail!("other punch hole failure"),
-                            }
-                        } else {
-                            peer_nat_type = ph.nat_type();
-                            is_local = ph.is_local();
-                            signed_id_pk = ph.pk.into();
-                            relay_server = ph.relay_server;
-                            peer_addr = AddrMangle::decode(&ph.socket_addr);
-                            feedback = ph.feedback;
-                            let s = udp.0.take();
-                            if ph.is_udp && s.is_some() {
-                                if let Some(s) = s {
-                                    allow_err!(s.connect(peer_addr).await);
-                                    udp.0 = Some(s);
-                                }
-                            }
-                            let s = ipv6.0.take();
-                            if !ph.socket_addr_v6.is_empty() && s.is_some() {
-                                let addr = AddrMangle::decode(&ph.socket_addr_v6);
-                                if addr.port() > 0 {
-                                    if let Some(s) = s {
-                                        allow_err!(s.connect(addr).await);
-                                        ipv6.0 = Some(s);
-                                    }
-                                }
-                            }
-                            log::info!("{} Hole Punched {} = {}", punch_type, peer, peer_addr);
-                            break;
-                        }
-                    }
-                    Some(rendezvous_message::Union::RelayResponse(rr)) => {
-                        log::info!(
-                            "relay requested from peer, time used: {:?}, relay_server: {}",
-                            start.elapsed(),
-                            rr.relay_server
-                        );
-                        start = Instant::now();
-                        let mut connect_futures = Vec::new();
-                        if let Some(s) = ipv6.0 {
-                            let addr = AddrMangle::decode(&rr.socket_addr_v6);
-                            if addr.port() > 0 {
-                                if s.connect(addr).await.is_ok() {
-                                    connect_futures
-                                        .push(udp_nat_connect(s, "IPv6", CONNECT_TIMEOUT).boxed());
-                                }
-                            }
-                        }
-                        signed_id_pk = rr.pk().into();
-                        let fut = Self::create_relay(
-                            &peer,
-                            rr.uuid,
-                            rr.relay_server,
-                            &key,
-                            conn_type,
-                            my_addr.is_ipv4(),
-                        );
-                        connect_futures.push(
-                            async move {
-                                let conn = fut.await?;
-                                Ok((conn, None, if use_ws() { "WebSocket" } else { "Relay" }))
-                            }
-                            .boxed(),
-                        );
-                        // Run all connection attempts concurrently, return the first successful one
-                        let (conn, kcp, typ) = match select_ok(connect_futures).await {
-                            Ok(conn) => (Ok(conn.0 .0), conn.0 .1, conn.0 .2),
-
-                            Err(e) => (Err(e), None, ""),
-                        };
-                        let mut conn = conn?;
-                        feedback = rr.feedback;
-                        log::info!("{:?} used to establish {typ} connection", start.elapsed());
-                        let pk =
-                            Self::secure_connection(&peer, signed_id_pk, &key, &mut conn).await?;
-                        return Ok((
-                            (conn, typ == "IPv6", pk, kcp, typ),
-                            (feedback, rendezvous_server),
-                            false,
-                        ));
-                    }
-                    _ => {
-                        log::error!("Unexpected protobuf msg received: {:?}", msg_in);
-                    }
-                }
-            }
-        }
-        drop(socket);
-        if peer_addr.port() == 0 {
-            bail!("Failed to connect via rendezvous server");
-        }
-        let time_used = start.elapsed().as_millis() as u64;
-        log::info!(
-            "{} ms used to {} punch hole, relay_server: {}, {}",
-            time_used,
-            punch_type,
-            relay_server,
-            if is_local {
-                "is_local: true".to_owned()
-            } else {
-                format!("nat_type: {:?}", peer_nat_type)
-            }
-        );
-        Ok((
-            Self::connect(
-                my_addr,
-                peer_addr,
-                &peer,
-                signed_id_pk,
-                &relay_server,
-                &rendezvous_server,
-                time_used,
-                peer_nat_type,
-                my_nat_type,
-                is_local,
-                &key,
-                &token,
-                conn_type,
-                interface,
-                udp.0,
-                ipv6.0,
-                punch_type,
-            )
-            .await?,
-            (feedback, rendezvous_server),
-            true,
-        ))
-    }
-
-    /// Connect to the peer.
-    async fn connect(
-        local_addr: SocketAddr,
-        peer: SocketAddr,
-        peer_id: &str,
-        signed_id_pk: Vec<u8>,
-        relay_server: &str,
-        rendezvous_server: &str,
-        punch_time_used: u64,
-        peer_nat_type: NatType,
-        my_nat_type: i32,
-        is_local: bool,
-        key: &str,
-        token: &str,
-        conn_type: ConnType,
-        interface: impl Interface,
-        udp_socket_nat: Option<Arc<UdpSocket>>,
-        udp_socket_v6: Option<Arc<UdpSocket>>,
-        punch_type: &str,
-    ) -> ResultType<(
-        Stream,
-        bool,
-        Option<Vec<u8>>,
-        Option<KcpStream>,
-        &'static str,
-    )> {
-        let direct_failures = interface.get_lch().read().unwrap().direct_failures;
-        let mut connect_timeout = 0;
-        const MIN: u64 = 1000;
-        if is_local || peer_nat_type == NatType::SYMMETRIC {
-            connect_timeout = MIN;
-        } else {
-            if relay_server.is_empty() {
-                connect_timeout = CONNECT_TIMEOUT;
-            } else {
-                if peer_nat_type == NatType::ASYMMETRIC {
-                    let mut my_nat_type = my_nat_type;
-                    if my_nat_type == NatType::UNKNOWN_NAT as i32 {
-                        my_nat_type = crate::get_nat_type(100).await;
-                    }
-                    if my_nat_type == NatType::ASYMMETRIC as i32 {
-                        connect_timeout = CONNECT_TIMEOUT;
-                        if direct_failures > 0 {
-                            connect_timeout = punch_time_used * 6;
-                        }
-                    } else if my_nat_type == NatType::SYMMETRIC as i32 {
-                        connect_timeout = MIN;
-                    }
-                }
-                if connect_timeout == 0 {
-                    let n = if direct_failures > 0 { 3 } else { 6 };
-                    connect_timeout = punch_time_used * (n as u64);
-                }
-            }
-            if connect_timeout < MIN {
-                connect_timeout = MIN;
-            }
-        }
-        log::info!("peer address: {}, timeout: {}", peer, connect_timeout);
-        let start = std::time::Instant::now();
-
-        let mut connect_futures = Vec::new();
-        let fut = connect_tcp_local(peer, Some(local_addr), connect_timeout);
-        connect_futures.push(
-            async move {
-                let conn = fut.await?;
-                Ok((conn, None, "TCP"))
-            }
-            .boxed(),
-        );
-        if let Some(udp_socket_nat) = udp_socket_nat {
-            connect_futures.push(udp_nat_connect(udp_socket_nat, "UDP", connect_timeout).boxed());
-        }
-        if let Some(udp_socket_v6) = udp_socket_v6 {
-            connect_futures.push(udp_nat_connect(udp_socket_v6, "IPv6", connect_timeout).boxed());
-        }
-        // Run all connection attempts concurrently, return the first successful one
-        let (mut conn, kcp, mut typ) = match select_ok(connect_futures).await {
-            Ok(conn) => (Ok(conn.0 .0), conn.0 .1, conn.0 .2),
-            Err(e) => (Err(e), None, ""),
-        };
-
-        let mut direct = !conn.is_err();
-        if interface.is_force_relay() || conn.is_err() {
-            if !relay_server.is_empty() {
-                let switch_code = interface.get_switch_code();
-                conn = Self::request_relay(
-                    peer_id,
-                    relay_server.to_owned(),
-                    rendezvous_server,
-                    !signed_id_pk.is_empty(),
-                    key,
-                    token,
-                    conn_type,
-                    &switch_code,
-                )
-                .await;
-                if let Err(e) = conn {
-                    // this direct is mainly used by on_establish_connection_error, so we update it here before bail
-                    interface.update_direct(Some(false));
-                    bail!("Failed to connect via relay server: {}", e);
-                }
-                typ = "Relay";
-                direct = false;
-            } else {
-                bail!("Failed to make direct connection to remote desktop");
-            }
-        }
-        let mut conn = conn?;
-        log::info!(
-            "{:?} used to establish {typ} connection with {} punch",
-            start.elapsed(),
-            punch_type
-        );
-        let res = Self::secure_connection(peer_id, signed_id_pk, key, &mut conn).await;
-        let pk: Option<Vec<u8>> = match res {
-            Ok(pk) => pk,
-            Err(e) => {
-                // this direct is mainly used by on_establish_connection_error, so we update it here before bail
-                interface.update_direct(Some(direct));
-                bail!(e);
-            }
-        };
-        log::debug!("{} punch secure_connection ok", punch_type);
-        Ok((conn, direct, pk, kcp, typ))
-    }
-
-    /// Establish secure connection with the server.
-    async fn secure_connection(
-        peer_id: &str,
-        signed_id_pk: Vec<u8>,
-        key: &str,
-        conn: &mut Stream,
-    ) -> ResultType<Option<Vec<u8>>> {
-        let rs_pk = get_rs_pk(if key.is_empty() {
-            config::RS_PUB_KEY
-        } else {
-            key
-        });
-        let mut sign_pk = None;
-        let mut option_pk = None;
-        if !signed_id_pk.is_empty() {
-            if let Some(rs_pk) = rs_pk {
-                if let Ok((id, pk)) = decode_id_pk(&signed_id_pk, &rs_pk) {
-                    if id == peer_id {
-                        sign_pk = Some(sign::PublicKey(pk));
-                        option_pk = Some(pk.to_vec());
-                    }
-                }
-            }
-            if sign_pk.is_none() {
-                log::error!("Handshake failed: invalid public key from rendezvous server");
-            }
-        }
-        Ok(Self::secure_with_sign_pk(peer_id, sign_pk, option_pk, conn)
-            .await?
-            .0)
-    }
-
-    /// labnet: the peer's id public key arrived over lab-desk.net's
-    /// device-authenticated channel rather than signed by a rendezvous server,
-    /// so the exchange runs with it directly. A key that is not 32 bytes means
-    /// no key, and the session proceeds as an unsecured direct one would. The
-    /// flag beside the key is the one the overlay path reads: see
-    /// secure_with_sign_pk.
     async fn secure_connection_with_pk(
         peer_id: &str,
         pk: Vec<u8>,
@@ -1150,101 +527,6 @@ impl Client {
         Ok((option_pk, signed_other_id))
     }
 
-    /// Request a relay connection to the server.
-    async fn request_relay(
-        peer: &str,
-        relay_server: String,
-        rendezvous_server: &str,
-        secure: bool,
-        key: &str,
-        token: &str,
-        conn_type: ConnType,
-        switch_code: &str,
-    ) -> ResultType<Stream> {
-        let mut succeed = false;
-        let mut uuid = "".to_owned();
-        let mut ipv4 = true;
-
-        for i in 1..=3 {
-            // use different socket due to current hbbs implementation requiring different nat address for each attempt
-            let mut socket = connect_tcp(rendezvous_server, CONNECT_TIMEOUT)
-                .await
-                .with_context(|| "Failed to connect to rendezvous server")?;
-
-            if !key.is_empty() && (!token.is_empty() || !switch_code.is_empty()) {
-                secure_tcp(&mut socket, key).await?;
-            }
-
-            ipv4 = socket.local_addr().is_ipv4();
-            let mut msg_out = RendezvousMessage::new();
-            uuid = Uuid::new_v4().to_string();
-            log::info!(
-                "#{} request relay attempt, id: {}, uuid: {}, relay_server: {}, secure: {}",
-                i,
-                peer,
-                uuid,
-                relay_server,
-                secure,
-            );
-            msg_out.set_request_relay(RequestRelay {
-                id: peer.to_owned(),
-                token: token.to_owned(),
-                uuid: uuid.clone(),
-                relay_server: relay_server.clone(),
-                secure,
-                switch_code: switch_code.to_owned(),
-                ..Default::default()
-            });
-            socket.send(&msg_out).await?;
-
-            if let Some(msg_in) =
-                crate::get_next_nonkeyexchange_msg(&mut socket, Some(CONNECT_TIMEOUT)).await
-            {
-                if let Some(rendezvous_message::Union::RelayResponse(rs)) = msg_in.union {
-                    if !rs.refuse_reason.is_empty() {
-                        bail!(rs.refuse_reason);
-                    }
-                    succeed = true;
-                    break;
-                }
-            }
-        }
-        if !succeed {
-            bail!("Timeout");
-        }
-        Self::create_relay(peer, uuid, relay_server, key, conn_type, ipv4).await
-    }
-
-    /// Create a relay connection to the server.
-    async fn create_relay(
-        peer: &str,
-        uuid: String,
-        relay_server: String,
-        key: &str,
-        conn_type: ConnType,
-        ipv4: bool,
-    ) -> ResultType<Stream> {
-        let mut conn = connect_tcp(
-            ipv4_to_ipv6(check_port(relay_server, RELAY_PORT), ipv4),
-            CONNECT_TIMEOUT,
-        )
-        .await
-        .with_context(|| "Failed to connect to relay server")?;
-        let mut msg_out = RendezvousMessage::new();
-        msg_out.set_request_relay(RequestRelay {
-            licence_key: key.to_owned(),
-            id: peer.to_owned(),
-            uuid,
-            conn_type: conn_type.into(),
-            ..Default::default()
-        });
-        conn.send(&msg_out).await?;
-        Ok(conn)
-    }
-
-    #[inline]
-    #[cfg(feature = "flutter")]
-    #[cfg(not(target_os = "ios"))]
     pub fn set_is_text_clipboard_required(b: bool) {
         CLIPBOARD_STATE.lock().unwrap().is_text_required = b;
     }
@@ -1431,7 +713,7 @@ impl ClientClipboardHandler {
             if let Some(urls) = check_clipboard_files(&mut self.ctx, ClipboardSide::Client, false) {
                 if !urls.is_empty() {
                     #[cfg(target_os = "macos")]
-                    if crate::clipboard::is_file_url_set_by_rustdesk(&urls) {
+                    if crate::clipboard::is_file_url_set_by_labdesk(&urls) {
                         return;
                     }
                     if self.is_file_required() {
@@ -2187,43 +1469,7 @@ impl LoginConfigHandler {
         shared_password: Option<String>,
         conn_token: Option<String>,
     ) {
-        let mut id = id;
-        if id.contains("@") {
-            let mut v = id.split("@");
-            let raw_id: &str = v.next().unwrap_or_default();
-            let mut server_key = v.next().unwrap_or_default().split('?');
-            let server = server_key.next().unwrap_or_default();
-            let args = server_key.next().unwrap_or_default();
-            let key = if server == PUBLIC_SERVER {
-                config::RS_PUB_KEY.to_owned()
-            } else {
-                let mut args_map: HashMap<String, &str> = HashMap::new();
-                for arg in args.split('&') {
-                    if let Some(kv) = arg.find('=') {
-                        let k = arg[0..kv].to_lowercase();
-                        let v = &arg[kv + 1..];
-                        args_map.insert(k, v);
-                    }
-                }
-                let key = args_map.remove("key").unwrap_or_default();
-                key.to_owned()
-            };
-
-            // here we can check <id>/r@server
-            let real_id = crate::ui_interface::handle_relay_id(raw_id).to_string();
-            if real_id != raw_id {
-                force_relay = true;
-            }
-            self.other_server = Some((real_id.clone(), server.to_owned(), key));
-            id = format!("{real_id}@{server}");
-        } else {
-            let real_id = crate::ui_interface::handle_relay_id(&id);
-            if real_id != id {
-                force_relay = true;
-                id = real_id.to_owned();
-            }
-        }
-
+        self.other_server = None;
         self.id = id;
         self.conn_type = conn_type;
         let config = self.load_config();
@@ -2254,13 +1500,6 @@ impl LoginConfigHandler {
                 || force_relay
                 || use_ws()
                 || Config::is_proxy();
-        if let Some((real_id, server, key)) = &self.other_server {
-            let other_server_key = self.get_option("other-server-key");
-            if !other_server_key.is_empty() && key.is_empty() {
-                self.other_server = Some((real_id.to_owned(), server.to_owned(), other_server_key));
-            }
-        }
-
         self.direct = None;
         self.received = false;
         #[cfg(feature = "flutter")]
@@ -2961,13 +2200,6 @@ impl LoginConfigHandler {
             } else if !password0.is_empty() {
                 config.password = Default::default();
                 log::debug!("remove password of {}", self.id);
-            }
-        }
-        if let Some((_, b, c)) = self.other_server.as_ref() {
-            if b != PUBLIC_SERVER {
-                config
-                    .options
-                    .insert("other-server-key".to_owned(), c.clone());
             }
         }
         if self.force_relay {
@@ -3720,7 +2952,7 @@ lazy_static::lazy_static! {
             msgtype: "error",
             title: "Login Error",
             text: "Login screen using Wayland is not supported",
-            link: "https://rustdesk.com/docs/en/manual/linux/#login-screen",
+            link: "https://lab-desk.net/help?topic=device&entry=manual-linux-display&view=manual",
             try_again: true,
         }), (LOGIN_MSG_DESKTOP_SESSION_NOT_READY, LoginErrorMsgBox{
             msgtype: "session-login",
@@ -4527,7 +3759,7 @@ async fn hc_connection_(
     mut rx: UnboundedReceiver<()>,
     token: String,
 ) -> ResultType<()> {
-    let mut timer = crate::rustdesk_interval(interval(crate::TIMER_OUT));
+    let mut timer = crate::labdesk_interval(interval(crate::TIMER_OUT));
     let mut last_recv_msg = Instant::now();
     let mut keep_alive = crate::DEFAULT_KEEP_ALIVE;
 
@@ -4578,260 +3810,3 @@ async fn hc_connection_(
     Ok(())
 }
 
-pub mod peer_online {
-    use hbb_common::{
-        anyhow::bail,
-        config::{Config, CONNECT_TIMEOUT, READ_TIMEOUT},
-        log,
-        rendezvous_proto::*,
-        sleep,
-        socket_client::connect_tcp,
-        ResultType, Stream,
-    };
-
-    pub async fn query_online_states<F: FnOnce(Vec<String>, Vec<String>)>(ids: Vec<String>, f: F) {
-        let test = false;
-        if test {
-            sleep(1.5).await;
-            let mut onlines = ids;
-            let offlines = onlines.drain((onlines.len() / 2)..).collect();
-            f(onlines, offlines)
-        } else {
-            let query_timeout = std::time::Duration::from_millis(3_000);
-            match query_online_states_(&ids, query_timeout).await {
-                Ok((onlines, offlines)) => {
-                    f(onlines, offlines);
-                }
-                Err(e) => {
-                    log::debug!("query onlines, {}", &e);
-                }
-            }
-        }
-    }
-
-    async fn create_online_stream() -> ResultType<Stream> {
-        let (rendezvous_server, _servers, _contained) =
-            crate::get_rendezvous_server(READ_TIMEOUT).await;
-        let tmp: Vec<&str> = rendezvous_server.split(":").collect();
-        if tmp.len() != 2 {
-            bail!("Invalid server address: {}", rendezvous_server);
-        }
-        let port: u16 = tmp[1].parse()?;
-        if port == 0 {
-            bail!("Invalid server address: {}", rendezvous_server);
-        }
-        let online_server = format!("{}:{}", tmp[0], port - 1);
-        connect_tcp(online_server, CONNECT_TIMEOUT).await
-    }
-
-    async fn query_online_states_(
-        ids: &Vec<String>,
-        timeout: std::time::Duration,
-    ) -> ResultType<(Vec<String>, Vec<String>)> {
-        let mut msg_out = RendezvousMessage::new();
-        msg_out.set_online_request(OnlineRequest {
-            id: Config::get_id(),
-            peers: ids.clone(),
-            ..Default::default()
-        });
-
-        let mut socket = match create_online_stream().await {
-            Ok(s) => s,
-            Err(e) => {
-                // Report the failure rather than an empty online list. Returning
-                // Ok here told the caller that every queried peer is offline,
-                // which is indistinguishable from a real answer, so one
-                // unreachable ID server turned the whole list red. The caller
-                // logs an Err and leaves the previous state alone, which is
-                // what the no-response path below already does.
-                bail!("Failed to create peers online stream, {e}");
-            }
-        };
-        // TODO: Use long connections to avoid socket creation
-        // If we use a Arc<Mutex<Option<FramedStream>>> to hold and reuse the previous socket,
-        // we may face the following error:
-        // An established connection was aborted by the software in your host machine. (os error 10053)
-        if let Err(e) = socket.send(&msg_out).await {
-            // Same reasoning as above: a send failure is not evidence that the
-            // peers are offline.
-            bail!("Failed to send peers online states query, {e}");
-        }
-        // Retry for 2 times to get the online response
-        for _ in 0..2 {
-            if let Some(msg_in) =
-                crate::get_next_nonkeyexchange_msg(&mut socket, Some(timeout.as_millis() as _))
-                    .await
-            {
-                match msg_in.union {
-                    Some(rendezvous_message::Union::OnlineResponse(online_response)) => {
-                        let states = online_response.states;
-                        let mut onlines = Vec::new();
-                        let mut offlines = Vec::new();
-                        for i in 0..ids.len() {
-                            // bytes index from left to right
-                            let bit_value = 0x01 << (7 - i % 8);
-                            if (states[i / 8] & bit_value) == bit_value {
-                                onlines.push(ids[i].clone());
-                            } else {
-                                offlines.push(ids[i].clone());
-                            }
-                        }
-                        return Ok((onlines, offlines));
-                    }
-                    _ => {
-                        // ignore
-                    }
-                }
-            } else {
-                // TODO: Make sure socket closed?
-                bail!("Online stream receives None");
-            }
-        }
-
-        bail!("Failed to query online states, no online response");
-    }
-
-    #[cfg(test)]
-    mod tests {
-        use hbb_common::tokio;
-
-        #[tokio::test]
-        async fn test_query_onlines() {
-            super::query_online_states(
-                vec![
-                    "152183996".to_owned(),
-                    "165782066".to_owned(),
-                    "155323351".to_owned(),
-                    "460952777".to_owned(),
-                ],
-                |onlines: Vec<String>, offlines: Vec<String>| {
-                    println!("onlines: {:?}, offlines: {:?}", &onlines, &offlines);
-                },
-            )
-            .await;
-        }
-    }
-}
-
-async fn test_udp_uat(
-    udp_socket: Arc<UdpSocket>,
-    server_addr: SocketAddr,
-    udp_port: Arc<Mutex<u16>>,
-    mut stop_udp_rx: oneshot::Receiver<()>,
-) -> ResultType<()> {
-    let (tx, mut rx) = oneshot::channel::<_>();
-    tokio::spawn(async {
-        if let Ok(v) = crate::test_nat_ipv4().await {
-            tx.send(v).ok();
-        }
-    });
-
-    let start = Instant::now();
-    let mut msg_out = RendezvousMessage::new();
-    msg_out.set_test_nat_request(TestNatRequest {
-        ..Default::default()
-    });
-    // Adaptive retry strategy that works within TCP RTT constraints
-    // Start with aggressive sending, then back off
-    let mut retry_interval = Duration::from_millis(20); // Start fast
-    const MAX_INTERVAL: Duration = Duration::from_millis(200);
-    let mut packets_sent = 0;
-
-    // Send initial burst to improve reliability
-    let data = msg_out.write_to_bytes()?;
-    for _ in 0..2 {
-        if let Err(e) = udp_socket.send_to(&data, server_addr).await {
-            log::warn!("Failed to send initial UDP NAT test packet: {}", e);
-        } else {
-            packets_sent += 1;
-        }
-    }
-    let mut last_send_time = Instant::now();
-    let mut buf = [0u8; 1500];
-
-    loop {
-        tokio::select! {
-            Ok((addr, server)) = &mut rx => {
-                *udp_port.lock().unwrap() = addr.port();
-                log::debug!("UDP NAT test received response from {}: {}", addr, server);
-                break;
-            }
-            _ = &mut stop_udp_rx => {
-                log::debug!("UDP NAT test received stop signal after {} packets", packets_sent);
-                break;
-            }
-            _ = hbb_common::sleep(retry_interval.as_secs_f32()) => {
-                // Adaptive retry: send fewer packets as time goes on
-                let elapsed = last_send_time.elapsed();
-
-                if elapsed >= retry_interval {
-                    // Send single packet (not double) to reduce network load
-                    if let Err(e) = udp_socket.send_to(&data, server_addr).await {
-                        log::warn!("Failed to send UDP NAT test retry packet: {}", e);
-                    } else {
-                        packets_sent += 1;
-                    }
-
-                    // Exponentially increase interval to reduce network pressure
-                    retry_interval = std::cmp::min(
-                        Duration::from_millis((retry_interval.as_millis() as f64 * 1.5) as u64),
-                        MAX_INTERVAL
-                    );
-                    last_send_time = Instant::now();
-                }
-            }
-            res = udp_socket.recv(&mut buf[..]) => {
-                match res {
-                    Ok(n) => {
-                        match RendezvousMessage::parse_from_bytes(&buf[0..n]) {
-                            Ok(msg_in) => {
-                                if let Some(rendezvous_message::Union::TestNatResponse(response)) = msg_in.union {
-                                    *udp_port.lock().unwrap() = response.port as u16;
-                                    break;
-                                }
-                            }
-                            Err(e) => {
-                                log::warn!("Failed to parse UDP NAT test response: {}", e);
-                            }
-                        }
-                    }
-                    Err(e) => {
-                        log::warn!("UDP NAT test socket error: {}", e);
-                    }
-                }
-            }
-        }
-    }
-
-    let final_port = *udp_port.lock().unwrap();
-    log::debug!(
-        "UDP NAT test to {:?} finished: time={:?}, port={}, packets_sent={}, success={}",
-        server_addr,
-        start.elapsed(),
-        final_port,
-        packets_sent,
-        final_port > 0
-    );
-    Ok(())
-}
-
-#[inline]
-async fn udp_nat_connect(
-    socket: Arc<UdpSocket>,
-    typ: &'static str,
-    ms_timeout: u64,
-) -> ResultType<(Stream, Option<KcpStream>, &'static str)> {
-    crate::punch_udp(socket.clone(), false)
-        .await
-        .map_err(|err| {
-            log::debug!("{err}");
-            anyhow!(err)
-        })?;
-    let res = KcpStream::connect(socket, Duration::from_millis(ms_timeout))
-        .await
-        .map_err(|err| {
-            log::debug!("Failed to connect KCP stream: {}", err);
-            anyhow!(err)
-        })?;
-    Ok((res.1, Some(res.0), typ))
-}

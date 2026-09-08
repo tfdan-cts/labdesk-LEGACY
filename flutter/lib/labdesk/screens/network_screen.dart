@@ -322,15 +322,25 @@ class _LabnetCard extends StatelessWidget {
     // neither Leave nor Remove is offered: Remove on the wrong row would
     // remove this machine from its own labnet.
     final iAmMember =
-        thisMachineId.isNotEmpty && me.isNotEmpty && me.first.approved;
+        thisMachineId.isNotEmpty && me.isNotEmpty &&
+        (me.first.approved || me.first.removalPending);
+    final syncPending = labnet.syncPending ||
+        labnet.members.any((m) => m.removalPending);
     final approved = labnet.members.where((m) => m.approved).length;
     return _Card(
       title: labnet.name,
-      subtitle: '$approved of ${labnet.members.length} machines joined. '
-          '${labnet.fullAccess ? 'Full network access between members.' : 'LabDesk\'s port and ping between members.'}',
+      subtitle: syncPending
+          ? '${labnet.members.length} machines listed. Network update pending.'
+          : '$approved of ${labnet.members.length} machines joined. '
+              '${labnet.fullAccess ? 'Full network access between members.' : 'LabDesk\'s port and ping between members.'}',
       child: Column(
         crossAxisAlignment: CrossAxisAlignment.start,
         children: [
+          if (syncPending)
+            Text(
+              'Network update pending. Access changes are not yet confirmed.',
+              style: C.of(context).small(),
+            ),
           for (final m in labnet.members)
             Container(
               decoration: BoxDecoration(
@@ -352,7 +362,9 @@ class _LabnetCard extends StatelessWidget {
                   const SizedBox(width: 8),
                   Expanded(child: Text(nameOf(m.deviceId), style: C.of(context).body())),
                   Text(
-                    m.approved
+                    m.removalPending
+                        ? 'Removal pending'
+                        : m.approved
                         ? (m.overlayIp ?? 'Not up')
                         : 'Waiting for approval on that machine',
                     style: C.of(context).small(),
@@ -363,7 +375,7 @@ class _LabnetCard extends StatelessWidget {
                       m.deviceId != thisMachineId) ...[
                     const SizedBox(width: 16),
                     _TextAction(
-                        label: 'Remove',
+                        label: m.removalPending ? 'Retry removal' : 'Remove',
                         onTap: busy
                             ? null
                             : () => onRemove!(labnet.id, m.deviceId)),
@@ -380,7 +392,8 @@ class _LabnetCard extends StatelessWidget {
               if (labnet.owner && onInvite != null && candidates.isNotEmpty)
                 _MachinePicker(
                   candidates: candidates,
-                  onPick: busy ? null : (id) => onInvite!(labnet.id, id),
+                  onPick: busy || syncPending
+                      ? null : (id) => onInvite!(labnet.id, id),
                 ),
               if (labnet.owner && onRename != null)
                 _TextAction(
@@ -391,12 +404,12 @@ class _LabnetCard extends StatelessWidget {
                     label: labnet.fullAccess
                         ? 'Full access: on'
                         : 'Full access: off',
-                    onTap: busy
+                    onTap: busy || (syncPending && !labnet.fullAccess)
                         ? null
                         : () => onFullAccess!(labnet.id, !labnet.fullAccess)),
               if (iAmMember && onLeave != null)
                 _TextAction(
-                    label: 'Leave',
+                    label: me.first.removalPending ? 'Retry leave' : 'Leave',
                     onTap: busy ? null : () => onLeave!(labnet.id)),
               if (labnet.owner && onDelete != null)
                 _TextAction(

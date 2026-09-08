@@ -249,7 +249,7 @@ class _MachineEnrolCardState extends State<MachineEnrolCard> {
     final request = _EnrolRequest(widget.broker?.captureScope(), _accountEpoch);
     final fleetName = _fleetName.text.trim();
     try {
-      // This probes privileged IPC, not RustDesk's rendezvous start/stop flag.
+      // This probes privileged IPC, not LabDesk's rendezvous start/stop flag.
       // Do it before creating a fleet or spending any enrollment token.
       if (widget.checkService != null) {
         _serviceProblem = true;

@@ -1,6 +1,6 @@
 // Fixture strings say LabDesk on purpose. The product does not carry the brand in
-// its string table: lang.rs swaps RustDesk for the app name at runtime whenever
-// APP_NAME is not RustDesk, and core_main.rs:34 sets it to LabDesk. A fixture that
+// its string table: lang.rs swaps LabDesk for the app name at runtime whenever
+// APP_NAME is not LabDesk, and core_main.rs:34 sets it to LabDesk. A fixture that
 // bypasses 	ranslate must not imply the shipping copy is wrong.
 // Renders the modals the product raises, so a change to them can be looked at
 // rather than guessed at. Not part of the CI gate: it lives outside test/ and

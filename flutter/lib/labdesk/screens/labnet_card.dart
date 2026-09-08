@@ -15,19 +15,13 @@ class LabnetConnectionFailure extends StatelessWidget {
         content: SizedBox(
           width: 480,
           child: Text(
-              '$detail\n\nYou can cancel and repair labnet, or explicitly '
-              'try the configured RustDesk ID and relay servers.',
+              '$detail\n\nCheck Labnet on both machines, then try again.',
               style: C.of(context).body()),
         ),
         actions: [
           TextButton(
-            onPressed: () => Navigator.pop(context, false),
-            child: Text('Cancel', style: C.of(context).small()),
-          ),
-          TextButton(
-            onPressed: () => Navigator.pop(context, true),
-            child:
-                Text('Use RustDesk instead', style: C.of(context).small(color: C.of(context).accent)),
+            onPressed: () => Navigator.pop(context),
+            child: Text('Close', style: C.of(context).small()),
           ),
         ],
       );

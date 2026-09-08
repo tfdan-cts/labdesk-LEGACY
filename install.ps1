@@ -111,13 +111,7 @@ if (-not $identity.IsInRole([Security.Principal.WindowsBuiltInRole]::Administrat
 $machineArch = $env:PROCESSOR_ARCHITEW6432
 if (-not $machineArch) { $machineArch = $env:PROCESSOR_ARCHITECTURE }
 
-# LabDesk-<version>-<arch>-install.exe is the only asset that installs the
-# LabDesk layout. There is deliberately no fallback to the upstream-named
-# rustdesk-<version>-<arch>.exe: that build copies its payload under its own
-# name while the service, the uninstaller and the shortcuts it writes all point
-# at LabDesk.exe, so it leaves a machine with a service that cannot start and an
-# uninstaller that cannot run. Refusing is the only safe answer, because by the
-# time that is detectable the machine has already been changed.
+# Select the setup entry point; its filename enables installer mode in the client.
 switch ($machineArch) {
     'AMD64' { $assetPattern = '^LabDesk-.*-x86_64-install\.exe$' }
     'ARM64' { $assetPattern = '^LabDesk-.*-aarch64-install\.exe$' }
@@ -170,8 +164,7 @@ if (-not $release) {
     Stop-WithError @"
 no release of $repo publishes a Windows installer for $machineArch.
 This script installs LabDesk-<version>-$(if ($machineArch -eq 'ARM64') { 'aarch64' } else { 'x86_64' })-install.exe and nothing else,
-because the upstream-named rustdesk-<version>.exe build installs a different
-layout and leaves the machine broken. Nothing has been changed here. See
+See available release assets:
   https://github.com/$repo/releases
 "@
 }
@@ -179,7 +172,7 @@ layout and leaves the machine broken. Nothing has been changed here. See
 $asset = $release.assets | Where-Object { $_.name -match $assetPattern } | Select-Object -First 1
 Write-Step "using release $($release.tag_name)"
 
-# The assets are named for the upstream RustDesk version rather than the release
+# The assets carry the application version rather than the release
 # tag, and that version is what the installer writes to the registry. Reading it
 # back afterwards is the only way to tell a finished install from one that
 # changed nothing.
@@ -275,25 +268,6 @@ This usually means files were in use. Close LabDesk and run this again.
 
     $exe = Join-Path $installPath 'LabDesk.exe'
     if (-not (Test-Path $exe)) {
-        # Releases built before the install_me rename fix copy the payload under
-        # its own name, rustdesk.exe, while the service, the uninstaller and the
-        # shortcuts all point at LabDesk.exe. Carrying on with the binary that is
-        # actually there would hide that, so say what is wrong instead.
-        $stray = Join-Path $installPath 'rustdesk.exe'
-        if (Test-Path $stray) {
-            Stop-WithError @"
-this release installs its binary as rustdesk.exe, but its own service,
-uninstaller and shortcuts all reference LabDesk.exe, so the installation is
-broken: the service cannot start and the uninstaller cannot run. The partial
-install is still on this machine and should be removed by hand.
-
-This is fixed in releases built after the install_me rename fix. Use a newer
-release: https://github.com/$repo/releases
-
-The .msi is not a workaround. It is built without --app-name, so it installs as
-RustDesk rather than LabDesk, into a different directory and registry entry.
-"@
-        }
         Stop-WithError "expected $exe to exist after installing."
     }
     Write-Step "installed $installedVersion to $installPath"

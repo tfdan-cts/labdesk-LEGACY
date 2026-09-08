@@ -5,9 +5,14 @@ on:
     # schedule build every night
   #  - cron: "0/6 * * * *"
   workflow_dispatch:
+    inputs:
+      upload-artifact:
+        type: boolean
+        default: false
+        description: Upload the experimental build artifacts
 
 env:
-  RUST_VERSION: "1.75" # https://github.com/rustdesk/rustdesk/discussions/7503
+  RUST_VERSION: "1.98.1" # Matches rust-toolchain.toml; patched dependency baseline.
   CARGO_NDK_VERSION: "3.1.2"
   LLVM_VERSION: "15.0.6"
   FLUTTER_VERSION: "3.22.2"
@@ -103,12 +108,12 @@ jobs:
         with:
           p12-file-base64: ${{ secrets.MACOS_P12_BASE64 }}
           p12-password: ${{ secrets.MACOS_P12_PASSWORD }}
-          keychain: rustdesk
+          keychain: labdesk
 
       - name: Check sign and import sign key
         if: env.MACOS_P12_BASE64 != null
         run: |
-          security default-keychain -s rustdesk.keychain
+          security default-keychain -s labdesk.keychain
           security find-identity -v
 
       - name: Import notarize key
@@ -116,7 +121,7 @@ jobs:
         uses: timheuer/base64-to-file@adaa40c0c581f276132199d4cf60afa07ce60eac # v1.2
         with:
           # https://gregoryszorc.com/docs/apple-codesign/stable/apple_codesign_rcodesign.html#notarizing-and-stapling
-          fileName: rustdesk.json
+          fileName: labdesk.json
           fileDir: ${{ github.workspace }}
           encodedString: ${{ secrets.MACOS_NOTARIZE_JSON }}
 
@@ -159,7 +164,7 @@ jobs:
           # below works for mac to make buildable on 3.13.9
           # pushd flutter/lib; find . -name "*.dart" | xargs -I{} sed -i '' 's/textScaler: TextScaler.linear(\(.*\)),/textScaleFactor: \1,/g' {}; popd;
           pushd flutter && flutter pub get && popd
-          ~/.cargo/bin/flutter_rust_bridge_codegen --rust-input ./src/flutter_ffi.rs --dart-output ./flutter/lib/generated_bridge.dart --c-output ./flutter/macos/Runner/bridge_generated.h
+          ~/.cargo/bin/flutter_rust_bridge_codegen --class-name LabDesk --rust-input ./src/flutter_ffi.rs --dart-output ./flutter/lib/generated_bridge.dart --c-output ./flutter/macos/Runner/bridge_generated.h
 
       - name: Cache vcpkg binary packages
         uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
@@ -201,7 +206,7 @@ jobs:
           cargo -V
           rustc -V
 
-      - name: Build rustdesk
+      - name: Build labdesk
         run: |
           ./build.py --flutter ${{ matrix.job.extra-build-args }}
 
@@ -210,7 +215,7 @@ jobs:
           CREATE_DMG="$(command -v create-dmg)"
           CREATE_DMG="$(readlink -f "$CREATE_DMG")"
           sed -i -e 's/MAXIMUM_UNMOUNTING_ATTEMPTS=3/MAXIMUM_UNMOUNTING_ATTEMPTS=7/' "$CREATE_DMG"
-          create-dmg --icon "RustDesk.app" 200 190 --hide-extension "RustDesk.app" --window-size 800 400 --app-drop-link 600 185 rustdesk-${{ env.VERSION }}-${{ matrix.job.arch }}.dmg ./flutter/build/macos/Build/Products/Release/RustDesk.app
+          create-dmg --icon "LabDesk.app" 200 190 --hide-extension "LabDesk.app" --window-size 800 400 --app-drop-link 600 185 labdesk-${{ env.VERSION }}-${{ matrix.job.arch }}.dmg ./flutter/build/macos/Build/Products/Release/LabDesk.app
 
       - name: Codesign app and create signed dmg
         if: env.MACOS_P12_BASE64 != null
@@ -220,19 +225,19 @@ jobs:
           CREATE_DMG="$(readlink -f "$CREATE_DMG")"
           sed -i -e 's/MAXIMUM_UNMOUNTING_ATTEMPTS=3/MAXIMUM_UNMOUNTING_ATTEMPTS=7/' "$CREATE_DMG"
           # Unlock keychain
-          security default-keychain -s rustdesk.keychain
-          security unlock-keychain -p ${{ secrets.MACOS_P12_PASSWORD }} rustdesk.keychain
-          # start sign the rustdesk.app and dmg
+          security default-keychain -s labdesk.keychain
+          security unlock-keychain -p ${{ secrets.MACOS_P12_PASSWORD }} labdesk.keychain
+          # start sign the labdesk.app and dmg
           rm -rf *.dmg || true
-          codesign --force --options runtime -s ${{ secrets.MACOS_CODESIGN_IDENTITY }} --deep --strict ./flutter/build/macos/Build/Products/Release/RustDesk.app -vvv
-          create-dmg --icon "RustDesk.app" 200 190 --hide-extension "RustDesk.app" --window-size 800 400 --app-drop-link 600 185 rustdesk-${{ env.VERSION }}.dmg ./flutter/build/macos/Build/Products/Release/RustDesk.app
-          codesign --force --options runtime -s ${{ secrets.MACOS_CODESIGN_IDENTITY }} --deep --strict rustdesk-${{ env.VERSION }}.dmg -vvv
-          # notarize the rustdesk-${{ env.VERSION }}.dmg
-          rcodesign notary-submit --api-key-path ${{ github.workspace }}/rustdesk.json  --staple rustdesk-${{ env.VERSION }}.dmg
+          codesign --force --options runtime -s ${{ secrets.MACOS_CODESIGN_IDENTITY }} --deep --strict ./flutter/build/macos/Build/Products/Release/LabDesk.app -vvv
+          create-dmg --icon "LabDesk.app" 200 190 --hide-extension "LabDesk.app" --window-size 800 400 --app-drop-link 600 185 labdesk-${{ env.VERSION }}.dmg ./flutter/build/macos/Build/Products/Release/LabDesk.app
+          codesign --force --options runtime -s ${{ secrets.MACOS_CODESIGN_IDENTITY }} --deep --strict labdesk-${{ env.VERSION }}.dmg -vvv
+          # notarize the labdesk-${{ env.VERSION }}.dmg
+          rcodesign notary-submit --api-key-path ${{ github.workspace }}/labdesk.json  --staple labdesk-${{ env.VERSION }}.dmg
 
-      - name: Rename rustdesk
+      - name: Rename labdesk
         run: |
-          for name in rustdesk*??.dmg; do
+          for name in labdesk*??.dmg; do
               mv "$name" "${name%%.dmg}-${{ matrix.job.arch }}-flutter${{ matrix.job.flutter }}-flutter${{ matrix.job.date }}.dmg"
           done
 
@@ -242,12 +247,12 @@ jobs:
           prerelease: true
           tag_name: ${{ env.TAG_NAME }}
           files: |
-            rustdesk*-${{ matrix.job.arch }}*.dmg
+            labdesk*-${{ matrix.job.arch }}*.dmg
 
 
-  build-rustdesk-android:
+  build-labdesk-android:
     if: false
-    name: build rustdesk android apk ${{ matrix.job.target }}
+    name: build labdesk android apk ${{ matrix.job.target }}
     runs-on: ${{ matrix.job.os }}
     strategy:
       fail-fast: false
@@ -323,7 +328,7 @@ jobs:
           sed -i 's/uni_links_desktop/#uni_links_desktop/g' flutter/pubspec.yaml
           pushd flutter/lib;  find . | grep dart | xargs sed -i 's/textScaler: TextScaler.linear(\(.*\)),/textScaleFactor: \1,/g'; popd;
           pushd flutter ; flutter pub get ; popd
-          ~/.cargo/bin/flutter_rust_bridge_codegen --rust-input ./src/flutter_ffi.rs --dart-output ./flutter/lib/generated_bridge.dart
+          ~/.cargo/bin/flutter_rust_bridge_codegen --class-name LabDesk --rust-input ./src/flutter_ffi.rs --dart-output ./flutter/lib/generated_bridge.dart
 
       - uses: nttld/setup-ndk@ed92fe6cadad69be94a966a7ee3271275e62f779 # v1
         id: setup-ndk
@@ -367,7 +372,7 @@ jobs:
           # cp -rf /opt/rustdesk_thirdparty_lib/vcpkg/* /opt/artifacts/vcpkg/
           ls -ls /opt/artifacts/vcpkg/installed/arm64-android/lib/
 
-      - name: Build rustdesk lib
+      - name: Build labdesk lib
         env:
           ANDROID_NDK_HOME: ${{ steps.setup-ndk.outputs.ndk-path }}
           ANDROID_NDK_ROOT: ${{ steps.setup-ndk.outputs.ndk-path }}
@@ -378,16 +383,16 @@ jobs:
             aarch64-linux-android)
               ./flutter/ndk_arm64.sh
               mkdir -p ./flutter/android/app/src/main/jniLibs/arm64-v8a
-              cp ./target/${{ matrix.job.target }}/release/liblibrustdesk.so ./flutter/android/app/src/main/jniLibs/arm64-v8a/librustdesk.so
+              cp ./target/${{ matrix.job.target }}/release/libliblabdesk.so ./flutter/android/app/src/main/jniLibs/arm64-v8a/liblabdesk.so
             ;;
             armv7-linux-androideabi)
               ./flutter/ndk_arm.sh
               mkdir -p ./flutter/android/app/src/main/jniLibs/armeabi-v7a
-              cp ./target/${{ matrix.job.target }}/release/liblibrustdesk.so ./flutter/android/app/src/main/jniLibs/armeabi-v7a/librustdesk.so
+              cp ./target/${{ matrix.job.target }}/release/libliblabdesk.so ./flutter/android/app/src/main/jniLibs/armeabi-v7a/liblabdesk.so
             ;;
           esac
 
-      - name: Build rustdesk
+      - name: Build labdesk
         shell: bash
         env:
           JAVA_HOME: /usr/lib/jvm/java-11-openjdk-amd64
@@ -399,30 +404,30 @@ jobs:
             aarch64-linux-android)
               mkdir -p ./flutter/android/app/src/main/jniLibs/arm64-v8a
               cp ${ANDROID_NDK_HOME}/toolchains/llvm/prebuilt/linux-x86_64/sysroot/usr/lib/aarch64-linux-android/libc++_shared.so ./flutter/android/app/src/main/jniLibs/arm64-v8a/
-              cp ./target/${{ matrix.job.target }}/release/liblibrustdesk.so ./flutter/android/app/src/main/jniLibs/arm64-v8a/librustdesk.so
+              cp ./target/${{ matrix.job.target }}/release/libliblabdesk.so ./flutter/android/app/src/main/jniLibs/arm64-v8a/liblabdesk.so
               # build flutter
               pushd flutter
               flutter build apk --release --target-platform android-arm64 --split-per-abi
-              mv build/app/outputs/flutter-apk/app-arm64-v8a-release.apk ../rustdesk-${{ env.VERSION }}-${{ matrix.job.arch }}.apk
+              mv build/app/outputs/flutter-apk/app-arm64-v8a-release.apk ../labdesk-${{ env.VERSION }}-${{ matrix.job.arch }}.apk
             ;;
             armv7-linux-androideabi)
               mkdir -p ./flutter/android/app/src/main/jniLibs/armeabi-v7a
               cp ${ANDROID_NDK_HOME}/toolchains/llvm/prebuilt/linux-x86_64/sysroot/usr/lib/arm-linux-androideabi/libc++_shared.so ./flutter/android/app/src/main/jniLibs/armeabi-v7a/
-              cp ./target/${{ matrix.job.target }}/release/liblibrustdesk.so ./flutter/android/app/src/main/jniLibs/armeabi-v7a/librustdesk.so
+              cp ./target/${{ matrix.job.target }}/release/libliblabdesk.so ./flutter/android/app/src/main/jniLibs/armeabi-v7a/liblabdesk.so
               # build flutter
               pushd flutter
               flutter build apk --release --target-platform android-arm --split-per-abi
-              mv build/app/outputs/flutter-apk/app-armeabi-v7a-release.apk ../rustdesk-${{ env.VERSION }}-${{ matrix.job.arch }}.apk
+              mv build/app/outputs/flutter-apk/app-armeabi-v7a-release.apk ../labdesk-${{ env.VERSION }}-${{ matrix.job.arch }}.apk
             ;;
           esac
           popd
           mkdir -p signed-apk; pushd signed-apk
-          mv ../rustdesk-${{ env.VERSION }}-${{ matrix.job.arch }}.apk ./rustdesk-test-${{ matrix.job.ref }}-${{ matrix.job.ndk }}.apk
+          mv ../labdesk-${{ env.VERSION }}-${{ matrix.job.arch }}.apk ./labdesk-test-${{ matrix.job.ref }}-${{ env.NDK_VERSION }}.apk
 
       - uses: r0adkll/sign-android-release@349ebdef58775b1e0d8099458af0816dc79b6407 # v1
         name: Sign app APK
         if: env.ANDROID_SIGNING_KEY != null
-        id: sign-rustdesk
+        id: sign-labdesk
         with:
           releaseDirectory: ./signed-apk
           signingKeyBase64: ${{ secrets.ANDROID_SIGNING_KEY }}
@@ -439,4 +444,4 @@ jobs:
           prerelease: true
           tag_name: ${{ env.TAG_NAME }}
           files: |
-            ${{steps.sign-rustdesk.outputs.signedReleaseFile}}
+            ${{steps.sign-labdesk.outputs.signedReleaseFile}}

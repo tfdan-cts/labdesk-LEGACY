@@ -83,7 +83,7 @@ impl AgentIdentity {
             .join(IDENTITY_FILE)
     }
 
-    /// Where the credential lives. The daemon is root (`res/rustdesk.service` sets
+    /// Where the credential lives. The daemon is root (`res/labdesk.service` sets
     /// `User=root`) and so is the `sudo` that runs `--enrol`, so both resolve the same
     /// directory; that is the same scope every existing root CLI command already assumes
     /// (src/core_main.rs:210-215).
@@ -284,8 +284,8 @@ fn sha256_hex(bytes: &[u8]) -> String {
 /// `Config::get_id()` inside the daemon, which cannot ask itself over IPC.
 ///
 /// The machine plane is always lab-desk.net. The `api-server` option is the profile's
-/// hbbs API, which on a machine whose config still carries the RustDesk name is a
-/// server that has never heard of `/agent/*` (`get_api_server_`, src/common.rs).
+/// hbbs API, which can point at a discovery server without `/agent/*` routes
+/// (`get_api_server_`, src/common.rs).
 #[cfg(not(any(target_os = "android", target_os = "ios")))]
 pub fn enrol(token: &str, peer_id: &str) -> ResultType<String> {
     let mut identity = AgentIdentity::load_or_create()?;

@@ -38,7 +38,6 @@ lazy_static::lazy_static! {
 }
 
 fn initialize(app_dir: &str, custom_client_config: &str) {
-    flutter::async_tasks::start_flutter_async_runner();
     // `APP_DIR` is set in `main_get_data_dir_ios()` on iOS.
     #[cfg(not(target_os = "ios"))]
     {
@@ -63,14 +62,14 @@ fn initialize(app_dir: &str, custom_client_config: &str) {
         hbb_common::init_log(false, "");
         #[cfg(feature = "mediacodec")]
         scrap::mediacodec::check_mediacodec();
-        crate::common::test_rendezvous_server();
-        crate::common::test_nat_type();
+
+
     }
     #[cfg(target_os = "ios")]
     {
         use hbb_common::env_logger::*;
         init_from_env(Env::default().filter_or(DEFAULT_FILTER_ENV, "debug"));
-        crate::common::test_nat_type();
+
     }
     #[cfg(any(target_os = "android", target_os = "ios"))]
     {
@@ -1025,9 +1024,7 @@ pub fn main_set_option(key: String, value: String) {
         }
         set_option(key, value.clone());
         #[cfg(target_os = "android")]
-        crate::rendezvous_mediator::RendezvousMediator::restart();
-        #[cfg(any(target_os = "android", target_os = "ios"))]
-        crate::common::test_rendezvous_server();
+        crate::network_service::NetworkService::restart();
     } else {
         set_option(key, value.clone());
     }
@@ -1875,7 +1872,7 @@ pub fn main_get_direct_access_port() -> i32 {
 
 /// The `direct-access-port` option read as a port: what it says when that is a
 /// usable port number, and otherwise the port the listener falls back to, which
-/// is the same reading `RendezvousMediator` makes before it binds.
+/// is the same reading `NetworkService` makes before it binds.
 fn direct_access_port(option: &str) -> i32 {
     match option.parse::<i32>() {
         Ok(port) if port > 0 => port,
@@ -2238,7 +2235,7 @@ pub fn main_stop_service() {
     #[cfg(target_os = "android")]
     {
         config::Config::set_option("stop-service".into(), "Y".into());
-        crate::rendezvous_mediator::RendezvousMediator::restart();
+        crate::network_service::NetworkService::restart();
     }
 }
 
@@ -2246,8 +2243,8 @@ pub fn main_start_service() {
     #[cfg(target_os = "android")]
     {
         config::Config::set_option("stop-service".into(), "".into());
-        crate::rendezvous_mediator::reset_needs_deploy_notification();
-        crate::rendezvous_mediator::RendezvousMediator::restart();
+
+        crate::network_service::NetworkService::restart();
     }
 }
 
@@ -2399,8 +2396,11 @@ pub fn session_register_gpu_texture(
     ))
 }
 
-pub fn query_onlines(ids: Vec<String>) {
-    let _ = flutter::async_tasks::query_onlines(ids);
+pub fn query_onlines(_ids: Vec<String>) {
+    let _ = flutter::push_global_event(
+        flutter::APP_TYPE_MAIN,
+        serde_json::json!({"name": "labdesk_refresh_fleet"}).to_string(),
+    );
 }
 
 pub fn version_to_number(v: String) -> SyncReturn<i64> {
@@ -3082,13 +3082,9 @@ pub fn main_set_common(_key: String, _value: String) {
                     "New version file is downloaded, update begin, {:?}",
                     new_version_file.to_str()
                 );
-                // The digest the release publishes for this asset. `update_to`
-                // hashes the file against it itself, as the last act before
-                // the elevated launch, so the file is not touched again
-                // between the check and the install; that is the ordering
-                // `updater::update_new_version` already documents and follows.
-                // An asset the release publishes no digest for, upstream
-                // GitHub included, gets no install at all.
+                // Authenticate the release digest before the platform installer
+                // verifies its protected payload copy. Missing or invalid signed
+                // metadata refuses the install.
                 match crate::updater::get_published_sha256(&_value) {
                     Err(e) => {
                         log::error!("Refusing to install the new version: {}", e);
@@ -3254,8 +3250,8 @@ pub mod server_side {
     pub unsafe extern "system" fn Java_ffi_FFI_startService(_env: JNIEnv, _class: JClass) {
         log::debug!("startService from jvm");
         config::Config::set_option("stop-service".into(), "".into());
-        crate::rendezvous_mediator::reset_needs_deploy_notification();
-        crate::rendezvous_mediator::RendezvousMediator::restart();
+
+        crate::network_service::NetworkService::restart();
     }
 
     #[no_mangle]

@@ -1,0 +1,13 @@
+{
+  "mode": "public",
+  "broker_host": "lab-desk.net",
+  "netbird_host": "nb.lab-desk.net",
+  "netbird_connect_ip": null,
+  "token_file": null,
+  "timeout_seconds": 5,
+  "tls_min_days": 21,
+  "backup_evidence": null,
+  "boot_volume_id": null,
+  "backup_max_age_seconds": 604800,
+  "evidence_max_age_seconds": 900
+}

@@ -1,0 +1,47 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<component type="desktop-application">
+  <id>net.lab_desk.LabDesk</id>
+  <developer id="net.lab_desk">
+    <name>LabDesk</name>
+  </developer>
+  <launchable type="desktop-id">net.lab_desk.LabDesk.desktop</launchable>
+  <metadata_license>CC0-1.0</metadata_license>
+  <project_license>AGPL-3.0-only</project_license>
+  <name>LabDesk</name>
+  <summary>Secure remote desktop access</summary>
+  <description>
+    <p>
+        LabDesk is a full-featured open source remote control alternative for self-hosting and security with minimal configuration.
+    </p>
+    <ul>
+      <li> Works on Windows, macOS, Linux, iOS, Android, Web. </li>
+      <li> Supports VP8 / VP9 / AV1 software codecs, and H264 / H265 hardware codecs. </li>
+      <li> Own your data, easily set up self-hosting solution on your infrastructure. </li>
+      <li> P2P connection with end-to-end encryption based on NaCl. </li>
+      <li> No administrative privileges or installation needed for Windows, elevate privilege locally or from remote on demand. </li>
+      <li> We like to keep things simple and will strive to make simpler where possible. </li>
+    </ul>
+    <p>
+        For self-hosting setup instructions please go to our home page.
+    </p>
+  </description>
+  <categories>
+    <category>Utility</category>
+  </categories>
+  <branding>
+    <color type="primary" scheme_preference="light">#d9eaf8</color>
+    <color type="primary" scheme_preference="dark">#0160ee</color>
+  </branding>
+  <url type="homepage">https://lab-desk.net</url>
+  <url type="bugtracker">https://github.com/tfdan-cts/LabDesk/issues</url>
+  <url type="vcs-browser">https://github.com/tfdan-cts/LabDesk</url>
+  <requires>
+    <display_length compare="ge">600</display_length>
+    <internet>always</internet>
+  </requires>
+  <supports>
+    <control>keyboard</control>
+    <control>pointing</control>
+  </supports>
+  <content_rating type="oars-1.1"/>
+</component>

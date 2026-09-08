@@ -30,12 +30,12 @@ class SessionsScreen extends StatefulWidget {
   /// pointer between polls cannot be clicked.
   final List<SessionChat> sessions;
 
-  /// Null leaves the input disabled rather than absent: an operator reading a
-  /// transcript should still see where a reply would go.
-  final void Function(String sessionId, String text)? onSend;
+  /// Addresses [SessionChat.key], including its direction. Null leaves the
+  /// input disabled rather than absent.
+  final void Function(String sessionKey, String text)? onSend;
 
-  /// Which session is open. Null lets the screen keep its own selection, which
-  /// is what the design harness does.
+  /// The [SessionChat.key] that is open. Null lets the screen keep its own
+  /// selection, which is what the design harness does.
   final String? selectedId;
   final ValueChanged<String>? onSelect;
 
@@ -60,18 +60,21 @@ class _SessionsScreenState extends State<SessionsScreen> {
   /// The session on show: whatever the client says, else the last one picked
   /// here, else the first in the list. Falls back rather than going blank when
   /// the selected session ends, which happens the moment a window closes.
-  SessionChat? get _selected {
-    if (widget.sessions.isEmpty) return null;
-    final wanted = widget.selectedId ?? _ownSelection;
-    for (final s in widget.sessions) {
-      if (s.id == wanted) return s;
+  SessionChat? get _selected => _selectionOf(widget);
+
+  SessionChat? _selectionOf(SessionsScreen screen) {
+    if (screen.sessions.isEmpty) return null;
+    final wanted = screen.selectedId ?? _ownSelection;
+    for (final s in screen.sessions) {
+      if (s.key == wanted) return s;
     }
-    return widget.sessions.first;
+    return screen.sessions.first;
   }
 
   void _select(SessionChat s) {
-    setState(() => _ownSelection = s.id);
-    widget.onSelect?.call(s.id);
+    if (s.key != _selected?.key) _input.clear();
+    setState(() => _ownSelection = s.key);
+    widget.onSelect?.call(s.key);
   }
 
   /// Lines in the open transcript at the last build, so a message arriving
@@ -81,6 +84,7 @@ class _SessionsScreenState extends State<SessionsScreen> {
   @override
   void didUpdateWidget(covariant SessionsScreen old) {
     super.didUpdateWidget(old);
+    if (_selectionOf(old)?.key != _selected?.key) _input.clear();
     final now = _selected?.lines.length ?? 0;
     if (now != _lineCount) {
       _lineCount = now;
@@ -96,7 +100,7 @@ class _SessionsScreenState extends State<SessionsScreen> {
     final session = _selected;
     final text = _input.text.trim();
     if (session == null || text.isEmpty || widget.onSend == null) return;
-    widget.onSend!(session.id, text);
+    widget.onSend!(session.key, text);
     _input.clear();
     _focus.requestFocus();
   }
@@ -127,7 +131,7 @@ class _SessionsScreenState extends State<SessionsScreen> {
                   final s = widget.sessions[i];
                   return _SessionRow(
                     session: s,
-                    selected: s.id == selected.id,
+                    selected: s.key == selected.key,
                     onTap: () => _select(s),
                   );
                 },

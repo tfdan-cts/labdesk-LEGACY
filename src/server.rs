@@ -563,7 +563,7 @@ pub fn check_zombie() {
 #[cfg(any(target_os = "android", target_os = "ios"))]
 #[tokio::main]
 pub async fn start_server(_is_server: bool) {
-    crate::RendezvousMediator::start_all().await;
+    crate::NetworkService::start_all().await;
 }
 
 /// Start the host server that allows the remote peer to control the current machine.
@@ -632,7 +632,7 @@ pub async fn start_server(is_server: bool, no_server: bool) {
         #[cfg(feature = "hwcodec")]
         scrap::hwcodec::start_check_process();
         crate::labdesk::labnet::start();
-        crate::RendezvousMediator::start_all().await;
+        crate::NetworkService::start_all().await;
     } else {
         match crate::ipc::connect(1000, "").await {
             Ok(mut conn) => {
@@ -763,8 +763,7 @@ async fn sync_and_watch_config_dir(sync_done_tx: Option<tokio::sync::oneshot::Se
                                 Data::SyncConfig(Some(configs)) => {
                                     let (config, config2) = *configs;
                                     let _chk = crate::ipc::CheckIfRestart::new();
-                                    #[cfg(target_os = "macos")]
-                                    let _chk_pk = crate::CheckIfResendPk::new();
+
                                     if !config.is_empty() {
                                         if cfg0.0 != config {
                                             cfg0.0 = config.clone();
@@ -855,7 +854,7 @@ pub async fn stop_main_window_process() {
     #[cfg(windows)]
     {
         // in case above failure, e.g. zombie process
-        if let Err(e) = crate::platform::try_kill_rustdesk_main_window_process() {
+        if let Err(e) = crate::platform::try_kill_labdesk_main_window_process() {
             log::error!("kill failed: {}", e);
         }
     }

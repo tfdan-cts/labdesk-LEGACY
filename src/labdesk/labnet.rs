@@ -47,6 +47,8 @@ pub enum LabnetRequest {
     Enrol { token: String },
     /// Commit a one-time ticket spend in the machine's privileged ledger.
     SpendTicket { id: String, expires_at: i64 },
+    /// Recheck a previously claimed managed session; no arbitrary path or body.
+    AuthorizeTicket { id: String },
     /// Drive the bundled netbird daemon. `action` is one of `install`, `start`, `up`,
     /// `down`, `status`; `setup_key` is read by `up` only; `management_url` by `install`
     /// and `up`. Answers the daemon's stdout.
@@ -69,6 +71,7 @@ impl std::fmt::Debug for LabnetRequest {
                 .finish_non_exhaustive(),
             Self::Enrol { .. } => formatter.debug_struct("Enrol").finish_non_exhaustive(),
             Self::SpendTicket { id, .. } => formatter.debug_struct("SpendTicket").field("id", id).finish_non_exhaustive(),
+            Self::AuthorizeTicket { id } => formatter.debug_struct("AuthorizeTicket").field("id", id).finish_non_exhaustive(),
             Self::Daemon {
                 action,
                 management_url,
@@ -89,7 +92,7 @@ impl LabnetRequest {
     pub fn ipc_timeout_ms(&self) -> u64 {
         match self {
             Self::Sign { .. } => 3_000,
-            Self::SpendTicket { .. } => 3_000,
+            Self::SpendTicket { .. } | Self::AuthorizeTicket { .. } => 5_000,
             Self::Enrol { .. } => 30_000,
             Self::Daemon { .. } => 120_000,
         }
@@ -121,9 +124,11 @@ pub fn serve(request: LabnetRequest) -> Result<String, String> {
         return Err("Not the privileged LabDesk process".to_owned());
     }
     match request {
-        LabnetRequest::Sign { method, path, body } => sign_here(&method, &path, body.as_bytes()),
+        LabnetRequest::Sign { method, path, body } => sign_console_request(&method, &path, body.as_bytes(), sign_here),
         LabnetRequest::SpendTicket { id, expires_at } => super::ticket::spend_here(&id, expires_at)
             .map(|spent| spent.to_string()).map_err(|err| err.to_string()),
+        LabnetRequest::AuthorizeTicket { id } => super::ticket::authority_here(&id, false)
+            .map(|authorized| authorized.to_string()).map_err(|err| err.to_string()),
         LabnetRequest::Enrol { token } => {
             super::identity::enrol(&token, &hbb_common::config::Config::get_id())
                 .map_err(|err| err.to_string())
@@ -134,6 +139,28 @@ pub fn serve(request: LabnetRequest) -> Result<String, String> {
             management_url,
         } => daemon(&action, &setup_key, &management_url),
     }
+}
+
+#[cfg(not(any(target_os = "android", target_os = "ios")))]
+fn sign_console_request(method: &str, path: &str, body: &[u8], signer: impl FnOnce(&str, &str, &[u8]) -> Result<String, String>) -> Result<String, String> {
+    // The UI can express local network consent, but cannot impersonate the
+    // privileged telemetry, job runner or ticket collector with the machine key.
+    let consent_id = |prefix: &str, suffix: &str| {
+        path.strip_prefix(prefix).and_then(|rest| rest.strip_suffix(suffix))
+            .map(|id| !id.is_empty() && id.len() <= 128
+                && id.bytes().all(|b| b.is_ascii_alphanumeric() || b == b'_' || b == b'-'))
+            .unwrap_or(false)
+    };
+    let allowed = matches!((method, path),
+        ("POST" | "DELETE", "/agent/overlay/enrol")
+        | ("POST", "/agent/overlay/self")
+        | ("GET", "/agent/overlay/inbox"))
+        || (method == "POST" && (consent_id("/agent/overlay/invites/", "/decide")
+            || consent_id("/agent/overlay/labnets/", "/leave")));
+    if !allowed || body.len() > 16 * 1024 {
+        return Err("This operation is not available to the console".to_owned());
+    }
+    signer(method, path, body)
 }
 
 /// What the FFI does: serve locally in a process that may, and otherwise ask the one
@@ -191,7 +218,7 @@ pub fn signature_json(
 }
 
 /// Path of the bundled `netbird` executable: beside this executable, the way the
-/// installer lays it out (`build.py` stages `netbird-dist` into `/usr/share/rustdesk/netbird`;
+/// installer lays it out (`build.py` stages `netbird-dist` into `/usr/share/labdesk/netbird`;
 /// the Windows package puts it under `netbird\` in the install directory).
 #[cfg(not(any(target_os = "android", target_os = "ios")))]
 fn netbird_binary() -> Result<PathBuf, String> {
@@ -272,7 +299,9 @@ pub fn netbird_args(
             s(SERVICE_NAME),
             s("--management-url"),
             s(management_url),
-            s("--disable-update-settings"),
+            // Login carries the settings used by `up`; disabling updates also
+            // rejects that login. Explicit false repairs earlier installations.
+            s("--disable-update-settings=false"),
             s("--config"),
             state_dir.join("default.json").display().to_string(),
             s("--log-file"),
@@ -288,6 +317,8 @@ pub fn netbird_args(
             key_file.display().to_string(),
             s("--management-url"),
             s(management_url),
+            s("--admin-url"),
+            s("https://lab-desk.net"),
             s("--hostname"),
             s(hostname),
             s("--interface-name"),
@@ -333,7 +364,10 @@ fn seed_owned_profile(dir: &Path) -> Result<(), String> {
         Err(err) => return Err(err.to_string()),
     };
     let seed = serde_json::json!({
-        "ManagementURL": { "Scheme": "https", "Host": MANAGEMENT_HOST },
+        // The daemon's gRPC dialer requires host:port. An already seeded URL
+        // bypasses NetBird's default-port normalization when Login repeats it.
+        "ManagementURL": { "Scheme": "https", "Host": format!("{}:443", MANAGEMENT_HOST) },
+        "AdminURL": { "Scheme": "https", "Host": "lab-desk.net" },
         "DisableAutoConnect": true,
         "WgIface": "labdesk0",
         "WgPort": 51821,
@@ -395,6 +429,53 @@ impl Drop for KeyFile {
     }
 }
 
+/// Inspect the actual Windows registration, not service.json, which NetBird
+/// writes before a reconfiguration succeeds. Reconfiguring an unchanged service
+/// deletes and recreates it and can race SCM's pending deletion.
+#[cfg(windows)]
+fn owned_windows_service_is_configured(binary: &Path, dir: &Path) -> bool {
+    use windows::{
+        core::PCWSTR,
+        Win32::{Foundation::{HLOCAL, LocalFree}, UI::Shell::CommandLineToArgvW},
+    };
+    use winreg::{enums::HKEY_LOCAL_MACHINE, RegKey};
+    let Ok(key) = RegKey::predef(HKEY_LOCAL_MACHINE)
+        .open_subkey(format!(r"SYSTEM\CurrentControlSet\Services\{}", SERVICE_NAME))
+    else { return false; };
+    let Ok(command): Result<String, _> = key.get_value("ImagePath") else { return false; };
+    let Ok(environment): Result<Vec<String>, _> = key.get_value("Environment") else { return false; };
+    let wide: Vec<u16> = command.encode_utf16().chain(Some(0)).collect();
+    let mut count = 0;
+    // Windows owns this argv allocation; release it after copying the strings.
+    let args = unsafe {
+        let pointer = CommandLineToArgvW(PCWSTR(wide.as_ptr()), &mut count);
+        if pointer.is_null() { return false; }
+        let result = std::slice::from_raw_parts(pointer, count as usize)
+            .iter().map(|arg| arg.to_string()).collect::<Result<Vec<_>, _>>();
+        let _ = LocalFree(Some(HLOCAL(pointer.cast())));
+        match result { Ok(args) => args, Err(_) => return false }
+    };
+    let same_path = |a: &str, b: &Path| a.replace('/', "\\").eq_ignore_ascii_case(&b.display().to_string().replace('/', "\\"));
+    if args.len() < 3 || !same_path(&args[0], binary) || args[1..3] != ["service", "run"] {
+        return false;
+    }
+    let mut values = std::collections::HashMap::new();
+    let mut remaining = args[3..].iter();
+    while let Some(flag) = remaining.next() {
+        let Some(value) = remaining.next() else { return false; };
+        if values.insert(flag.as_str(), value.as_str()).is_some() { return false; }
+    }
+    if values.keys().any(|flag| !matches!(*flag, "--log-level" | "--daemon-addr" | "--management-url" | "--config" | "--log-file")) {
+        return false;
+    }
+    values.get("--daemon-addr") == Some(&daemon_addr())
+        && values.get("--management-url").is_some_and(|url| management_url_is_ours(url))
+        && values.get("--config").is_some_and(|path| same_path(path, &dir.join("default.json")))
+        && values.get("--log-file").is_some_and(|path| same_path(path, &dir.join("client.log")))
+        && environment.len() == 1
+        && environment[0].strip_prefix("NB_STATE_DIR=").is_some_and(|path| same_path(path, dir))
+}
+
 #[cfg(not(any(target_os = "android", target_os = "ios")))]
 fn daemon(action: &str, setup_key: &str, management_url: &str) -> Result<String, String> {
     // This is served only after the privileged-process check in `serve`. It
@@ -424,6 +505,10 @@ fn daemon(action: &str, setup_key: &str, management_url: &str) -> Result<String,
         .ok_or("Missing service status command")?;
         if let Ok(status) = run_netbird(&binary, &args) {
             if action == "install" {
+                #[cfg(windows)]
+                if owned_windows_service_is_configured(&binary, &state_dir()) {
+                    return Ok(status);
+                }
                 // Earlier installations persisted the ordinary NetBird config
                 // path. Repair this owned service during explicit enable.
                 reconfigure = true;
@@ -554,7 +639,7 @@ fn run_netbird(binary: &Path, args: &[String]) -> Result<String, String> {
     Err(if stderr.is_empty() { stdout } else { stderr })
 }
 
-/// Run in the RustDesk server, which receives live option changes and keeps running
+/// Run in the LabDesk server, which receives live option changes and keeps running
 /// when the Flutter window closes. On Unix it asks the privileged service to sign
 /// and operate NetBird; the machine credential never moves into the desktop process.
 #[cfg(not(any(target_os = "android", target_os = "ios")))]
@@ -771,7 +856,9 @@ mod tests {
             management_url: String::new(),
         };
         assert!(sign.ipc_timeout_ms() < enrol.ipc_timeout_ms());
-        assert_eq!(LabnetRequest::SpendTicket { id: "ticket".into(), expires_at: 200 }.ipc_timeout_ms(), 3_000);
+        // Authority includes a bounded 3-second HTTPS round trip plus IPC overhead.
+        assert_eq!(LabnetRequest::SpendTicket { id: "ticket".into(), expires_at: 200 }.ipc_timeout_ms(), 5_000);
+        assert_eq!(LabnetRequest::AuthorizeTicket { id: "ticket".into() }.ipc_timeout_ms(), 5_000);
         assert!(enrol.ipc_timeout_ms() < daemon.ipc_timeout_ms());
     }
 
@@ -818,6 +905,34 @@ mod tests {
             })
             .is_err()
         );
+    }
+
+    #[cfg(not(any(target_os = "android", target_os = "ios")))]
+    #[test]
+    fn console_cannot_sign_privileged_agent_operations() {
+        for (method, path) in [
+            ("POST", "/agent/batch"), ("POST", "/agent/ticket/t1/claimed"),
+            ("GET", "/agent/tickets"), ("POST", "/agent/job/j1/complete"),
+            ("GET", "/agent/overlay/inbox?extra=1"), ("PATCH", "/agent/overlay/self"),
+            ("POST", "/agent/overlay/invites/../decide"), ("POST", "/agent/overlay/labnets/a/b/leave"),
+        ] {
+            let result = sign_console_request(method, path, b"", |_, _, _| Ok("signature".into()));
+            assert!(result.is_err(), "console signed {method} {path}");
+        }
+        assert!(sign_console_request("POST", "/agent/overlay/self", &vec![0; 16 * 1024 + 1], |_, _, _| Ok("signature".into())).is_err());
+    }
+
+    #[cfg(not(any(target_os = "android", target_os = "ios")))]
+    #[test]
+    fn console_can_sign_only_its_existing_network_consent_routes() {
+        for (method, path) in [
+            ("POST", "/agent/overlay/enrol"), ("DELETE", "/agent/overlay/enrol"),
+            ("POST", "/agent/overlay/self"), ("GET", "/agent/overlay/inbox"),
+            ("POST", "/agent/overlay/invites/123abc-DEF_9/decide"),
+            ("POST", "/agent/overlay/labnets/123abc-DEF_9/leave"),
+        ] {
+            assert_eq!(sign_console_request(method, path, b"", |m, p, _| Ok(format!("{m} {p}"))).unwrap(), format!("{method} {path}"));
+        }
     }
 
     #[cfg(not(any(target_os = "android", target_os = "ios")))]
@@ -904,7 +1019,7 @@ mod tests {
                 "labdesk-netbird",
                 "--management-url",
                 "https://nb.lab-desk.net",
-                "--disable-update-settings",
+                "--disable-update-settings=false",
                 "--config",
                 &config_path,
                 "--log-file",
@@ -934,6 +1049,8 @@ mod tests {
                 "/k/setup-key",
                 "--management-url",
                 "https://nb.lab-desk.net",
+                "--admin-url",
+                "https://lab-desk.net",
                 "--hostname",
                 "host-1",
                 "--interface-name",
@@ -965,7 +1082,8 @@ mod tests {
         seed_owned_profile(&dir).unwrap();
         let path = dir.join("default.json");
         let seed: serde_json::Value = serde_json::from_str(&std::fs::read_to_string(&path).unwrap()).unwrap();
-        assert_eq!(seed["ManagementURL"]["Host"], MANAGEMENT_HOST);
+        assert_eq!(seed["ManagementURL"]["Host"], "nb.lab-desk.net:443");
+        assert_eq!(seed["AdminURL"]["Host"], "lab-desk.net");
         assert_eq!(seed["DisableAutoConnect"], true);
         assert_eq!(seed["WgIface"], "labdesk0");
         std::fs::write(&path, "existing owned credential").unwrap();
@@ -978,12 +1096,12 @@ mod tests {
     #[cfg(not(any(target_os = "android", target_os = "ios")))]
     #[test]
     fn test_the_bundled_binary_sits_beside_this_executable() {
-        let path = bundled_netbird(Path::new("/usr/share/rustdesk"));
+        let path = bundled_netbird(Path::new("/usr/share/labdesk"));
         assert_eq!(path.parent().and_then(Path::file_name).unwrap(), "netbird");
         if cfg!(windows) {
             assert_eq!(path.file_name().unwrap(), "netbird.exe");
         } else {
-            assert_eq!(path, PathBuf::from("/usr/share/rustdesk/netbird/netbird"));
+            assert_eq!(path, PathBuf::from("/usr/share/labdesk/netbird/netbird"));
         }
     }
 

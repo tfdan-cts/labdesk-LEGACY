@@ -23,17 +23,26 @@
 # from passing a good file, waiting for the check, and swapping in another one.
 #
 # Called two ways:
-#   pkexec /usr/share/rustdesk/labdesk-helper install-update <package>
+#   pkexec /usr/share/labdesk/labdesk-helper install-update <package>
 #     from the desktop application, where an administrator authorises it.
-#   systemd-run ... /usr/share/rustdesk/labdesk-helper install-update <package>
+#   systemd-run ... /usr/share/labdesk/labdesk-helper install-update <package>
 #     from the root service, unattended. It has to be a transient unit of its
-#     own: res/DEBIAN/preinst stops rustdesk.service, and KillMode=mixed then
+#     own: res/DEBIAN/preinst stops labdesk.service, and KillMode=mixed then
 #     kills everything left in that unit's cgroup, which would be dpkg in the
 #     middle of unpacking.
 
 set -eu
 
 SITE="https://lab-desk.net"
+
+legacy_rpm_package() {
+    unit=/usr/share/rustdesk/files/rustdesk.service
+    [ -f "$unit" ] && [ ! -L "$unit" ] || return 0
+    [ "$(rpm -qf --qf '%{NAME}' "$unit" 2>/dev/null || true)" = rustdesk ] || return 0
+    [ "$(rpm -q --qf '%{SUMMARY}' rustdesk 2>/dev/null || true)" = 'LabDesk remote administration client' ] || return 0
+    grep -qx 'Description=LabDesk' "$unit" || return 0
+    printf '%s\n' rustdesk
+}
 
 fail() {
     echo "labdesk-helper: $1" >&2
@@ -93,6 +102,10 @@ else
     version=$(rpm -qp --nosignature --qf '%{VERSION}' "$pkg") || fail "not an RPM package: $name" 65
     installed=$(rpm -q --qf '%{VERSION}' "$package" 2>/dev/null || true)
 fi
+case "$package" in
+    labdesk|labdesk-unattended-wayland) ;;
+    *) fail "unexpected package identity: $package" 65 ;;
+esac
 # The version comes out of the package, so it is whatever whoever built that
 # package put there, and it is about to become part of a URL path. A Debian
 # version is digits, letters and a few punctuation marks; anything else is
@@ -133,8 +146,30 @@ actual=$(sha256sum -- "$pkg" | cut -d' ' -f1)
 
 echo "labdesk-helper: installing $package $version over ${installed:-nothing} from $name"
 if [ "$kind" = deb ]; then
+    dpkg-deb --control "$pkg" "$work/control"
+    [ -f "$work/control/preinst" ] || fail "package is missing the migration preflight" 65
+    legacy_packages=$(/bin/sh "$work/control/preinst" --legacy-package)
+    for legacy in $legacy_packages; do
+        case "$legacy" in
+            rustdesk|rustdesk-unattended-wayland) ;;
+            *) fail "unexpected legacy package identity: $legacy" 65 ;;
+        esac
+        legacy_version=$(dpkg-query -W -f='${Version}' "$legacy")
+        dpkg --compare-versions "$version" gt "$legacy_version" ||
+            fail "$package $version is not newer than the previous $legacy_version" 67
+        # Remove, never purge: the old package's purge hook deletes configuration.
+        dpkg --remove -- "$legacy"
+    done
     dpkg -i -- "$pkg"
 else
+    legacy=$(legacy_rpm_package)
+    if [ -n "$legacy" ]; then
+        legacy_version=$(rpm -q --qf '%{VERSION}' "$legacy")
+        [ "$version" != "$legacy_version" ] &&
+            [ "$(printf '%s\n%s\n' "$version" "$legacy_version" | sort -V | tail -n 1)" = "$version" ] ||
+            fail "$package $version is not newer than the previous $legacy_version" 67
+        rpm --erase "$legacy"
+    fi
     rpm -Uvh --replacepkgs -- "$pkg"
 fi
 echo "labdesk-helper: $package $version installed"

@@ -349,10 +349,10 @@ const helpTopics = <HelpTopic>[
             _organization),
         HelpEntry(
             'advanced-connections',
-            'Advanced connections & server profiles',
-            'A server profile stores an ID server, relay server, API address, and associated key settings. It controls a connection setup. It is not an organization membership or a fleet filter.',
-            'Use Advanced connections when you need to manage these server settings. Check the profile before activating it: its connection settings apply immediately.',
-            'Status-check frequency controls how often the console asks the ID server about registration. It is separate from the collector’s configured reporting cadence and from the age of an individual source reading.',
+            'Labnet connections',
+            'Labnet connects enrolled machines through encrypted tunnels. Membership and access rules belong to your organization.',
+            'Enroll this computer under This machine and turn on Labnet. Use Labnets to manage membership and allowed access.',
+            'Fleet status comes from machine reports. A successful connection also requires the Labnet service and an authorized session.',
             _organization),
         HelpEntry(
             'appearance-terms',

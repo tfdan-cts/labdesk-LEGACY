@@ -459,7 +459,7 @@ pub fn set_option(key: String, value: String) {
     }
     #[cfg(any(target_os = "android", target_os = "ios"))]
     {
-        let _nat = crate::CheckTestNatType::new();
+
         Config::set_option(key, value);
     }
 }
@@ -509,7 +509,7 @@ pub fn set_socks(proxy: String, username: String, password: String) {
     ipc::set_socks(socks).ok();
     #[cfg(any(target_os = "android", target_os = "ios"))]
     {
-        let _nat = crate::CheckTestNatType::new();
+
         if socks.proxy.is_empty() {
             Config::set_socks(None);
         } else {
@@ -519,7 +519,7 @@ pub fn set_socks(proxy: String, username: String, password: String) {
     }
     #[cfg(target_os = "android")]
     {
-        crate::RendezvousMediator::restart();
+        crate::NetworkService::restart();
     }
 }
 
@@ -1129,10 +1129,8 @@ pub fn deploy_device(token: String, new_id: Option<String>) -> DeployResult {
             }
             #[cfg(target_os = "android")]
             {
-                crate::rendezvous_mediator::NEEDS_DEPLOY
-                    .store(false, std::sync::atomic::Ordering::SeqCst);
-                crate::rendezvous_mediator::reset_needs_deploy_notification();
-                crate::rendezvous_mediator::RendezvousMediator::restart();
+
+                crate::network_service::NetworkService::restart();
             }
             DeployResult::Ok
         }
@@ -1355,7 +1353,7 @@ async fn check_connect_status_(reconnect: bool, rx: mpsc::UnboundedReceiver<ipc:
 
     loop {
         if let Ok(mut c) = ipc::connect(1000, "").await {
-            let mut timer = crate::rustdesk_interval(time::interval(time::Duration::from_secs(1)));
+            let mut timer = crate::labdesk_interval(time::interval(time::Duration::from_secs(1)));
             loop {
                 tokio::select! {
                     res = c.next() => {

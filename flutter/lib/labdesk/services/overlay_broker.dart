@@ -1,3 +1,4 @@
+import 'dart:async';
 import 'dart:convert';
 import 'dart:io';
 
@@ -6,6 +7,7 @@ import '../models/machine_metrics.dart';
 import '../models/machine_state.dart';
 import '../models/net_view.dart';
 import '../models/organization_context.dart';
+import '../models/health_event.dart';
 
 /// One HTTP exchange: status code and body text. Injected so the broker can
 /// be exercised without a network and run on `HttpClient` in the application.
@@ -265,14 +267,24 @@ class OverlayBroker {
       String method, Uri url, Map<String, String> headers, String? body) async {
     final client = HttpClient()
       ..connectionTimeout = const Duration(seconds: 10);
+    HttpClientRequest? request;
+    const deadline = Duration(seconds: 15);
     try {
-      final req = await client.openUrl(method, url);
-      headers.forEach(req.headers.set);
-      if (body != null) req.write(body);
-      final res = await req.close();
-      return (res.statusCode, await res.transform(utf8.decoder).join());
+      return await (() async {
+        final req = await client.openUrl(method, url);
+        request = req;
+        headers.forEach(req.headers.set);
+        if (body != null) req.write(body);
+        final res = await req.close();
+        return (res.statusCode, await res.transform(utf8.decoder).join());
+      })().timeout(deadline, onTimeout: () {
+        final error = TimeoutException(
+            'lab-desk.net did not respond within 15 seconds.', deadline);
+        request?.abort(error);
+        throw error;
+      });
     } finally {
-      client.close();
+      client.close(force: true);
     }
   }
 
@@ -290,6 +302,17 @@ class OverlayBroker {
       final decoded = jsonDecode(text);
       if (decoded is Map<String, dynamic>) json = decoded;
     } catch (_) {}
+    if (status == 202 &&
+        (path.endsWith('/leave') ||
+            (method == 'DELETE' && path.contains('/members/')))) {
+      final message = json['message'];
+      throw OverlayBrokerException(
+          status,
+          message is String && message.isNotEmpty
+              ? message
+              : 'Network removal is still pending. Retry to check progress.',
+          machinePlane: machinePlane);
+    }
     if (status < 200 || status >= 300) {
       final message = json['error'];
       throw OverlayBrokerException(
@@ -511,6 +534,42 @@ class OverlayBroker {
   Future<String> organizationRole() async =>
       _str((await _human('GET', '/console/org'))['role']);
 
+  /// The service applies organization and fleet authorization and returns its
+  /// newest 500 events. A malformed response is not an empty alert list.
+  Future<List<HealthEvent>> healthEvents() async {
+    final orgId = organizationId?.call();
+    final response = await _human('GET', '/console/org/events');
+    try {
+      final rows = response['events'];
+      if (rows is! List || rows.length > 500) {
+        throw const FormatException('Invalid alerts');
+      }
+      final events = rows.map(HealthEvent.fromJson).toList();
+      if (events.map((event) => event.id).toSet().length != events.length ||
+          (orgId != null && events.any((event) => event.orgId != orgId))) {
+        throw const FormatException('Invalid alert scope');
+      }
+      return List.unmodifiable(events);
+    } on FormatException {
+      throw const OverlayBrokerException(
+          502, 'The alert list could not be read. Refresh to try again.');
+    }
+  }
+
+  /// The response accepts the request; callers read the event again to show
+  /// persisted acknowledgment time and actor instead of inventing either.
+  Future<void> acknowledgeHealthEvent(String id) async {
+    if (id.isEmpty || id.length > 128 || id.contains(RegExp(r'[\x00-\x1f]'))) {
+      throw const OverlayBrokerException(400, 'Choose a valid alert.');
+    }
+    final response = await _human(
+        'POST', '/console/org/events/${Uri.encodeComponent(id)}/ack', {});
+    if (response['ok'] != true) {
+      throw const OverlayBrokerException(
+          502, 'The service did not confirm the acknowledgment request.');
+    }
+  }
+
   Future<OrgFleet> createFleet(String name) async {
     final j = await _human('POST', '/console/org/fleets', {'name': name});
     final id = _str(j['id']);
@@ -582,6 +641,7 @@ class OverlayBroker {
             name: _str(l['name']),
             fullAccess: l['fullAccess'] == true,
             fleetId: l['fleetId'] is String ? l['fleetId'] as String : null,
+            syncPending: l['syncPending'] == true,
             // Every labnet this route answers is one the same caller may
             // manage: it is scoped to their organization and narrowed to their
             // fleets by the predicate `ownedLabnet` applies to every write

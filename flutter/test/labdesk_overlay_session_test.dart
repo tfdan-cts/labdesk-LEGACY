@@ -90,6 +90,104 @@ class _World {
 }
 
 void main() {
+  test('account rejection is reported before stalled grant cleanup', () async {
+    final w = _World();
+    final releasing = Completer<void>();
+    final resumeRelease = Completer<void>();
+    addTearDown(() {
+      if (!resumeRelease.isCompleted) resumeRelease.complete();
+    });
+    final session = OverlaySession(
+      broker: OverlayBroker(
+        baseUrl: 'https://lab-desk.net',
+        token: () => w.token,
+        organizationId: () => w.organization,
+        http: (method, url, headers, body) async {
+          final response = await w.http(method, url, headers, body);
+          if (url.path.endsWith('/ready')) {
+            return (401, '{"error":"Sign in again."}');
+          }
+          if (method == 'DELETE') {
+            releasing.complete();
+            await resumeRelease.future;
+          }
+          return response;
+        },
+      ),
+      daemon: OverlayDaemon(call: w.call),
+      setOption: (key, value) async {
+        w.log.add('option $key=$value');
+        w.options[key] = value;
+      },
+    );
+    OverlayBrokerException? reported;
+    var settled = false;
+    final preparing = session.prepare('1', onAuthenticationFailure: (error) {
+      reported = error;
+      w.log.add('account rejected');
+      w.token = 'token-b';
+      w.organization = 'org-b';
+    }).whenComplete(() => settled = true);
+    final rejected = expectLater(
+        preparing,
+        throwsA(isA<OverlayBrokerException>().having(
+            (error) => identical(error, reported), 'reported error', isTrue)));
+
+    await releasing.future.timeout(const Duration(seconds: 1));
+    expect(reported?.signInAgain, isTrue);
+    expect(settled, isFalse);
+    expect(w.log.indexOf('account rejected'),
+        lessThan(w.log.indexWhere((entry) => entry.startsWith('option '))));
+    final deletion =
+        w.requests.singleWhere((request) => request.method == 'DELETE');
+    expect(deletion.headers['authorization'], 'Bearer token-a');
+    expect(deletion.headers['x-labdesk-organization'], 'org-a');
+    resumeRelease.complete();
+    await rejected;
+    expect(settled, isTrue);
+    expect(w.options.values, everyElement(isEmpty));
+  });
+
+  for (final stage in ['creation', 'readiness']) {
+    test('account rejection during $stage remains typed after cleanup', () async {
+      final w = _World();
+      final session = OverlaySession(
+        broker: OverlayBroker(
+          baseUrl: 'https://lab-desk.net',
+          token: () => w.token,
+          organizationId: () => w.organization,
+          http: (method, url, headers, body) async {
+            if ((stage == 'creation' && method == 'POST') ||
+                (stage == 'readiness' && url.path.endsWith('/ready'))) {
+              await w.http(method, url, headers, body);
+              w.token = 'token-b';
+              w.organization = 'org-b';
+              return (401, '{"error":"Sign in again."}');
+            }
+            return w.http(method, url, headers, body);
+          },
+        ),
+        daemon: OverlayDaemon(call: w.call),
+        setOption: (key, value) async => w.options[key] = value,
+      );
+
+      await expectLater(
+          session.prepare('1'),
+          throwsA(isA<OverlayBrokerException>()
+              .having((error) => error.signInAgain, 'account rejection', isTrue)
+              .having((error) => error.message, 'message', 'Sign in again.')));
+      expect(session.lastError, 'Sign in again.');
+      expect(session.hasGrants, isFalse);
+      expect(w.options.values, everyElement(isEmpty));
+      final deletions = w.requests.where((request) => request.method == 'DELETE');
+      expect(deletions.length, stage == 'readiness' ? 1 : 0);
+      for (final request in deletions) {
+        expect(request.headers['authorization'], 'Bearer token-a');
+        expect(request.headers['x-labdesk-organization'], 'org-a');
+      }
+    });
+  }
+
   for (final stage in ['creation', 'readiness']) {
     test('context switch during $stage keeps the grant in its original scope',
         () async {

@@ -332,8 +332,8 @@ pub struct Connection {
     server: super::ServerPtrWeak,
     hash: Hash,
     read_jobs: Vec<fs::TransferJob>,
-    timer: crate::RustDeskInterval,
-    file_timer: crate::RustDeskInterval,
+    timer: crate::LabDeskInterval,
+    file_timer: crate::LabDeskInterval,
     file_transfer: Option<(String, bool)>,
     view_camera: bool,
     terminal: bool,
@@ -341,6 +341,7 @@ pub struct Connection {
     port_forward_address: String,
     tx_to_cm: mpsc::UnboundedSender<ipc::Data>,
     authorized: bool,
+    ticket_lease: Option<tokio::sync::oneshot::Receiver<()>>,
     require_2fa: Option<totp_rs::TOTP>,
     awaiting_2fa: bool,
     keyboard: bool,
@@ -540,8 +541,8 @@ impl Connection {
             server,
             hash,
             read_jobs: Vec::new(),
-            timer: crate::rustdesk_interval(time::interval(SEC30)),
-            file_timer: crate::rustdesk_interval(time::interval(SEC30)),
+            timer: crate::labdesk_interval(time::interval(SEC30)),
+            file_timer: crate::labdesk_interval(time::interval(SEC30)),
             file_transfer: None,
             view_camera: false,
             terminal: false,
@@ -549,6 +550,7 @@ impl Connection {
             port_forward_address: "".to_owned(),
             tx_to_cm,
             authorized: false,
+            ticket_lease: None,
             keyboard: Self::permission(keys::OPTION_ENABLE_KEYBOARD, &control_permissions),
             clipboard: Self::permission(keys::OPTION_ENABLE_CLIPBOARD, &control_permissions),
             audio: Self::permission(keys::OPTION_ENABLE_AUDIO, &control_permissions),
@@ -663,7 +665,7 @@ impl Connection {
             conn.send_permission(Permission::PrivacyMode, false).await;
         }
         let mut test_delay_timer =
-            crate::rustdesk_interval(time::interval_at(Instant::now(), TEST_DELAY_TIMEOUT));
+            crate::labdesk_interval(time::interval_at(Instant::now(), TEST_DELAY_TIMEOUT));
         let mut last_recv_time = Instant::now();
 
         conn.stream.set_send_timeout(
@@ -676,7 +678,7 @@ impl Connection {
 
         #[cfg(not(any(target_os = "android", target_os = "ios")))]
         std::thread::spawn(move || Self::handle_input(_rx_input, tx_cloned));
-        let mut second_timer = crate::rustdesk_interval(time::interval(Duration::from_secs(1)));
+        let mut second_timer = crate::labdesk_interval(time::interval(Duration::from_secs(1)));
 
         #[cfg(feature = "unix-file-copy-paste")]
         let rx_clip_holder;
@@ -703,6 +705,12 @@ impl Connection {
         loop {
             tokio::select! {
                 // biased; // video has higher priority // causing test_delay_timer failed while transferring big file
+
+                _ = crate::labdesk::ticket::lease_ended(&mut conn.ticket_lease) => {
+                    conn.send_close_reason_no_retry("LabDesk session authorization ended").await;
+                    conn.on_close("LabDesk session authorization ended", true).await;
+                    break;
+                }
 
                 Some(data) = rx_from_cm.recv() => {
                     match data {
@@ -1002,7 +1010,7 @@ impl Connection {
                             }
                         }
                     } else {
-                        conn.file_timer = crate::rustdesk_interval(time::interval_at(Instant::now() + SEC30, SEC30));
+                        conn.file_timer = crate::labdesk_interval(time::interval_at(Instant::now() + SEC30, SEC30));
                     }
                 }
                 Ok(conns) = hbbs_rx.recv() => {
@@ -1310,6 +1318,9 @@ impl Connection {
             let mut hbbs_rx = crate::hbbs_http::sync::signal_receiver();
             loop {
                 tokio::select! {
+                    _ = crate::labdesk::ticket::lease_ended(&mut self.ticket_lease) => {
+                        bail!("LabDesk session authorization ended");
+                    }
                     Some(data) = rx_from_cm.recv() => {
                         match data {
                             ipc::Data::Close => {
@@ -2493,9 +2504,10 @@ impl Connection {
         // A connect ticket, before any stored password: the presented value is
         // sha256(H || salt) for a ticket issued to this connection's peer id,
         // and a second use of the same ticket is refused like a wrong password.
-        if claim_pending_ticket(&self.lr.my_id, |h| self.validate_password_plain(h)) {
+        if let Some(ticket_id) = claim_pending_ticket(&self.lr.my_id, |h| self.validate_password_plain(h)) {
             log::info!("Connect ticket claimed by {}", self.lr.my_id);
             self.set_conn_audit_primary_auth(ConnAuditPrimaryAuth::ConnectTicket);
+            self.ticket_lease = Some(crate::labdesk::ticket::monitor_lease(ticket_id));
             return true;
         }
         if password::temporary_enabled() {
@@ -3609,7 +3621,7 @@ impl Connection {
                             Some(file_action::Union::Receive(r)) => {
                                 // client to server
                                 // note: 1.1.10 introduced identical file detection, which breaks original logic of send/recv files
-                                // whenever got send/recv request, check peer version to ensure old version of rustdesk
+                                // whenever got send/recv request, check peer version to ensure old version of labdesk
                                 let od = can_enable_overwrite_detection(get_version_number(
                                     &self.lr.version,
                                 ));
@@ -4684,7 +4696,7 @@ impl Connection {
                     let name = display.name();
                     #[cfg(windows)]
                     if let Some(_ok) =
-                        virtual_display_manager::rustdesk_idd::change_resolution_if_is_virtual_display(
+                        virtual_display_manager::labdesk_idd::change_resolution_if_is_virtual_display(
                             &name,
                             r.width as _,
                             r.height as _,
@@ -5361,7 +5373,7 @@ impl Connection {
         job.is_remote = true;
         job.conn_id = self.inner.id();
         self.read_jobs.push(job);
-        self.file_timer = crate::rustdesk_interval(time::interval(MILLI1));
+        self.file_timer = crate::labdesk_interval(time::interval(MILLI1));
         let audit_path = if job_type == fs::JobType::Printer {
             "Remote print".to_owned()
         } else {
@@ -6068,7 +6080,7 @@ impl Connection {
     #[cfg(all(target_os = "windows", feature = "flutter"))]
     async fn send_printer_request(&mut self, data: Vec<u8>) {
         // This path is only used to identify the printer job.
-        let path = format!("RustDesk://FsJob//Printer/{}", get_time());
+        let path = format!("LabDesk://FsJob//Printer/{}", get_time());
 
         let msg = fs::new_send(0, fs::JobType::Printer, path.clone(), 1, false);
         self.send(msg).await;
@@ -6251,27 +6263,27 @@ pub fn insert_pending_ticket(
 /// whose `H` satisfies `matches` (the login's own password check). Never for
 /// another peer id, never twice.
 #[cfg(not(any(target_os = "android", target_os = "ios")))]
-pub fn claim_pending_ticket(controller_peer_id: &str, matches: impl Fn(&str) -> bool) -> bool {
+pub fn claim_pending_ticket(controller_peer_id: &str, matches: impl Fn(&str) -> bool) -> Option<String> {
     let mut tickets = PENDING_TICKETS.lock().unwrap();
     retain_live_tickets(&mut tickets);
     for t in tickets.iter_mut() {
         if t.controller_peer_id == controller_peer_id && !t.claimed && matches(&t.secret_hash) {
             #[cfg(test)]
-            return spend_pending_ticket(t, &mut SPENT_TICKETS.lock().unwrap());
+            return spend_pending_ticket(t, &mut SPENT_TICKETS.lock().unwrap()).then(|| t.id.clone());
             #[cfg(not(test))]
             {
                 let result = crate::labdesk::ticket::spend_on_machine(&t.id, t.expires_at);
-                return finish_pending_ticket(t, result);
+                return finish_pending_ticket(t, result).then(|| t.id.clone());
             }
         }
     }
-    false
+    None
 }
 
 // Mobile has no privileged LabDesk service to authorize a durable spend.
 #[cfg(any(target_os = "android", target_os = "ios"))]
-pub fn claim_pending_ticket(_controller_peer_id: &str, _matches: impl Fn(&str) -> bool) -> bool {
-    false
+pub fn claim_pending_ticket(_controller_peer_id: &str, _matches: impl Fn(&str) -> bool) -> Option<String> {
+    None
 }
 
 /// Persistence is part of authentication, not the later best-effort HTTP
@@ -7294,15 +7306,15 @@ mod test {
             "once per ticket id"
         );
         assert!(
-            !claim_pending_ticket("other-peer", |h| h == "h1"),
+            claim_pending_ticket("other-peer", |h| h == "h1").is_none(),
             "never for another peer id"
         );
         assert!(
-            !claim_pending_ticket(&peer, |h| h == "wrong"),
+            claim_pending_ticket(&peer, |h| h == "wrong").is_none(),
             "the presented password has to match H"
         );
-        assert!(claim_pending_ticket(&peer, |h| h == "h1"));
-        assert!(!claim_pending_ticket(&peer, |h| h == "h1"), "claimed once");
+        assert_eq!(claim_pending_ticket(&peer, |h| h == "h1"), Some(tid(1)));
+        assert!(claim_pending_ticket(&peer, |h| h == "h1").is_none(), "claimed once");
         assert!(
             !insert_pending_ticket(tid(1), peer.clone(), "h1".into(), live),
             "a claimed id stays known until it expires, so a replay mints nothing"
@@ -7310,14 +7322,14 @@ mod test {
         // A ticket past its expiry is never claimed.
         let expired = hbb_common::get_time() / 1000 - 1;
         assert!(insert_pending_ticket(tid(2), peer.clone(), "h2".into(), expired));
-        assert!(!claim_pending_ticket(&peer, |h| h == "h2"));
+        assert!(claim_pending_ticket(&peer, |h| h == "h2").is_none());
         // Two live tickets for one peer: each claimed once, in either order.
         assert!(insert_pending_ticket(tid(3), peer.clone(), "h3".into(), live));
         assert!(insert_pending_ticket(tid(4), peer.clone(), "h4".into(), live));
-        assert!(claim_pending_ticket(&peer, |h| h == "h4"));
-        assert!(!claim_pending_ticket(&peer, |h| h == "h4"));
-        assert!(claim_pending_ticket(&peer, |h| h == "h3"));
-        assert!(!claim_pending_ticket(&peer, |h| h == "h3"));
+        assert_eq!(claim_pending_ticket(&peer, |h| h == "h4"), Some(tid(4)));
+        assert!(claim_pending_ticket(&peer, |h| h == "h4").is_none());
+        assert_eq!(claim_pending_ticket(&peer, |h| h == "h3"), Some(tid(3)));
+        assert!(claim_pending_ticket(&peer, |h| h == "h3").is_none());
         // Every claim is owed to the server once: the daemon asks, reports,
         // and a second ask has nothing left to report.
         let mine = |ids: Vec<String>| {
@@ -7339,9 +7351,9 @@ mod test {
     #[test]
     #[cfg(any(target_os = "android", target_os = "ios"))]
     fn test_mobile_cannot_authorize_a_managed_ticket() {
-        assert!(!claim_pending_ticket("controller", |_| {
+        assert!(claim_pending_ticket("controller", |_| {
             panic!("mobile must refuse before checking a ticket secret")
-        }));
+        }).is_none());
     }
 
     #[test]

@@ -1,6 +1,6 @@
 import 'dart:convert';
 import 'package:flutter/foundation.dart';
-import 'package:flutter_hbb/common/labdesk_profiles.dart';
+import 'package:flutter_hbb/common/labdesk_status_polling.dart';
 import 'package:get/get.dart';
 import 'platform_model.dart';
 // ignore: depend_on_referenced_packages

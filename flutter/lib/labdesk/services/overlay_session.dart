@@ -22,8 +22,7 @@ typedef _ScopedGrant = ({SessionGrant grant, OverlayBroker broker});
 /// target peer Connected (the rule has to be signalled and the WireGuard
 /// handshake completed before a socket can cross), then writes the address
 /// hint, the target's id key and the one-time connect ticket for the client.
-/// Anything short of that clears stale hints and exposes the failure. A
-/// different connection provider requires an explicit choice in the console.
+/// Anything short of that clears stale hints and exposes the failure.
 ///
 /// `noteOpenSessions` is fed the ids of the sessions the console can see; a
 /// granted id that has gone is released and its hints cleared.
@@ -58,7 +57,10 @@ class OverlaySession {
   final _unseenPolls = <String, int>{};
 
   /// True when the client was handed the overlay address for [peerId].
-  Future<bool> prepare(String peerId) async {
+  /// Account rejection is rethrown so callers require sign-in before fallback.
+  /// [onAuthenticationFailure] runs synchronously before awaited cleanup.
+  Future<bool> prepare(String peerId,
+      {void Function(OverlayBrokerException)? onAuthenticationFailure}) async {
     if (!_preparing.add(peerId)) {
       lastError =
           'A labnet connection to this machine is already being prepared.';
@@ -153,6 +155,10 @@ class OverlaySession {
       return false;
     } on OverlayBrokerException catch (e) {
       lastError = e.message;
+      if (e.signInAgain) {
+        onAuthenticationFailure?.call(e);
+        rethrow;
+      }
       return false;
     } catch (e) {
       lastError = '$e';
@@ -237,10 +243,6 @@ class OverlaySession {
       await release(peerId);
     }
   }
-
-  /// Explicit fallback changes only the next dial, preserving any other open
-  /// session's WireGuard grant to the same machine.
-  Future<void> useRustDesk(String peerId) => _clearHints(peerId);
 
   bool get hasGrants => _grants.isNotEmpty;
 

@@ -1,15 +1,15 @@
 [package]
-name = "rustdesk"
-version = "1.2.6"
-authors = ["rustdesk <info@rustdesk.com>"]
+name = "labdesk"
+version = "1.4.0-alpha.6"
+authors = ["LabDesk contributors"]
 edition = "2021"
 build= "build.rs"
-description = "RustDesk Remote Desktop"
-default-run = "rustdesk"
-rust-version = "1.75"
+description = "LabDesk Remote Desktop"
+default-run = "labdesk"
+rust-version = "1.88"
 
 [lib]
-name = "librustdesk"
+name = "liblabdesk"
 crate-type = ["cdylib", "staticlib", "rlib"]
 
 [[bin]]
@@ -53,7 +53,7 @@ screencapturekit = ["cpal/screencapturekit"]
 [dependencies]
 async-trait = "0.1"
 scrap = { path = "libs/scrap", features = ["wayland"] }
-hbb_common = { path = "libs/hbb_common" }
+hbb_common = { path = "libs/labdesk_common" }
 serde_derive = "1.0"
 serde = "1.0"
 serde_json = "1.0"
@@ -232,8 +232,8 @@ jni = "0.21"
 android-wakelock = { git = "https://github.com/rustdesk-org/android-wakelock" }
 
 [workspace]
-members = ["libs/scrap", "libs/hbb_common", "libs/enigo", "libs/clipboard", "libs/virtual_display", "libs/virtual_display/dylib", "libs/portable", "libs/remote_printer"]
-exclude = ["vdi/host", "examples/custom_plugin"]
+members = ["libs/scrap", "libs/labdesk_common", "libs/enigo", "libs/clipboard", "libs/virtual_display", "libs/virtual_display/dylib", "libs/portable", "libs/remote_printer"]
+exclude = ["vdi/host", "examples/custom_plugin", "libs/hbb_common"]
 
 # Patch libxdo-sys to use a stub implementation that doesn't require libxdo
 # This allows building and running on systems without libxdo installed (e.g., Wayland-only)
@@ -245,7 +245,7 @@ CompanyName = "LabDesk"
 LegalCopyright = "Copyright © 2026 LabDesk contributors. Based on RustDesk, © Purslane Tech Pte. Ltd."
 ProductName = "LabDesk"
 FileDescription = "LabDesk Remote Desktop"
-OriginalFilename = "rustdesk.exe"
+OriginalFilename = "labdesk.exe"
 
 [target.'cfg(target_os="windows")'.build-dependencies]
 winres = "0.1"
@@ -253,16 +253,17 @@ winapi = { version = "0.3", features = [ "winnt", "pdh", "synchapi" ] }
 
 [build-dependencies]
 cc = "1.0"
-hbb_common = { path = "libs/hbb_common" }
+hbb_common = { path = "libs/labdesk_common" }
 os-version = "0.2"
 
 [dev-dependencies]
 hound = "3.5"
 docopt = "1.1"
+tokio-rustls = { version = "0.26", features = ["ring", "tls12"], default-features = false }
 
 [package.metadata.bundle]
-name = "RustDesk"
-identifier = "com.carriez.rustdesk"
+name = "LabDesk"
+identifier = "net.lab-desk.labdesk"
 icon = ["res/32x32.png", "res/128x128.png", "res/128x128@2x.png"]
 osx_minimum_system_version = "10.14"
 

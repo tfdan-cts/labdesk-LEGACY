@@ -75,15 +75,19 @@ class SessionChat {
     this.unread = 0,
   });
 
-  /// What the console addresses this session by when it sends. For an outgoing
-  /// session that is the peer id; for an incoming one the connection id, which
-  /// is the only handle the connection manager answers to.
+  /// The transport-specific identifier: an outgoing peer id or an incoming
+  /// connection handle. Console selection and callbacks use [key] so opposite
+  /// directions cannot collide.
   final String id;
 
   /// What the operator reads: a hostname or a user, falling back to the id.
   final String peerLabel;
 
   final SessionDirection direction;
+
+  /// Console selection and send address. A peer id can equal an incoming
+  /// connection id, so the transport id alone is not a session identity.
+  String get key => '${direction.name}/$id';
 
   /// Oldest first, which is reading order. The client's own chat model keeps
   /// them newest first for its list view; the conversion happens at the window
@@ -158,7 +162,7 @@ SessionChat? decodeSessionChat(Object? payload) {
 List<SessionChat> mergeSessionChats(Iterable<SessionChat> chats) {
   final byKey = <String, SessionChat>{};
   for (final c in chats) {
-    final key = '${c.direction.name}/${c.id}';
+    final key = c.key;
     final seen = byKey[key];
     if (seen == null || c.lines.length >= seen.lines.length) byKey[key] = c;
   }

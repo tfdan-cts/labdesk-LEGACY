@@ -10,6 +10,7 @@ import 'package:flutter_hbb/models/state_model.dart';
 import 'package:flutter_hbb/desktop/widgets/tabbar_widget.dart';
 import 'package:flutter_hbb/utils/multi_window_manager.dart';
 import 'package:flutter_hbb/models/model.dart';
+import 'package:flutter_hbb/labdesk/services/desktop_session_access.dart';
 import 'package:get/get.dart';
 
 import '../../models/platform_model.dart';
@@ -309,7 +310,7 @@ class _TerminalTabPageState extends State<TerminalTabPage> {
     // Add keyboard shortcut handler
     HardwareKeyboard.instance.addHandler(_handleKeyEvent);
 
-    rustDeskWinManager.setMethodHandler((call, fromWindowId) async {
+    labDeskWinManager.setMethodHandler((call, fromWindowId) async {
       print(
           "[Remote Terminal] call ${call.method} with args ${call.arguments} from window $fromWindowId");
       if (call.method == kWindowEventNewTerminal) {
@@ -354,7 +355,13 @@ class _TerminalTabPageState extends State<TerminalTabPage> {
       } else if (call.method == kWindowEventLabDeskTermRun) {
         final args = jsonDecode(call.arguments);
         return jsonEncode(
-            await LabDeskTerminalRpc.run(args['id'], args['command']));
+            await LabDeskTerminalRpc.run(args['id'], args['command'],
+                authority: fromWindowId == kMainWindowId &&
+                        args['authority'] is String
+                    ? args['authority'] : null));
+      } else if (call.method == DesktopSessionAccess.resetCommandsMethod &&
+          fromWindowId == kMainWindowId) {
+        await LabDeskTerminalRpc.resetUnauthorized();
       }
     });
     Future.delayed(Duration.zero, () {

@@ -33,7 +33,7 @@ class ToolbarSkin {
 
   /// A control that is currently on.
   static const Color activeColor = C.accent;
-  static const Color hoverActiveColor = Color(0xFFA79CF9);
+  static const Color hoverActiveColor = C.primaryFillHover;
 
   static const Color redColor = C.bad;
   static const Color hoverRedColor = Color(0xFFFF8E8E);
@@ -357,6 +357,7 @@ class ToolbarButtonSurface extends StatelessWidget {
   const ToolbarButtonSurface({
     super.key,
     required this.hover,
+    this.focused = false,
     required this.color,
     required this.hoverColor,
     this.glyph,
@@ -364,6 +365,7 @@ class ToolbarButtonSurface extends StatelessWidget {
   });
 
   final bool hover;
+  final bool focused;
   final Color color;
   final Color hoverColor;
 
@@ -390,7 +392,10 @@ class ToolbarButtonSurface extends StatelessWidget {
         // not enough to read over live video; the hairline gives the pad an
         // edge without inventing a colour outside the ramp.
         border: Border.all(
-            color: hover ? C.hairline : Colors.transparent, width: 1),
+            color: focused
+                ? C.focusRing
+                : (hover ? C.hairline : Colors.transparent),
+            width: focused ? C.focusRingWidth : 1),
         borderRadius: BorderRadius.circular(ToolbarSkin.iconRadius),
       ),
       child: icon,
@@ -435,11 +440,20 @@ class ToolbarIconButton extends StatefulWidget {
 
 class _ToolbarIconButtonState extends State<ToolbarIconButton> {
   bool hover = false;
+  bool focused = false;
 
   @override
   Widget build(BuildContext context) {
     assert(widget.glyph != null || widget.iconBuilder != null);
-    Widget button = Padding(
+    final surface = ToolbarButtonSurface(
+      hover: hover,
+      focused: focused,
+      color: widget.color,
+      hoverColor: widget.hoverColor,
+      glyph: widget.glyph,
+      iconBuilder: widget.iconBuilder,
+    );
+    final button = Padding(
       padding: EdgeInsets.symmetric(
         horizontal: widget.hMargin ?? ToolbarSkin.buttonHMargin,
         vertical: widget.vMargin ?? ToolbarSkin.buttonVMargin,
@@ -447,23 +461,31 @@ class _ToolbarIconButtonState extends State<ToolbarIconButton> {
       child: SizedBox(
         width: widget.width ?? ToolbarSkin.buttonSize,
         height: ToolbarSkin.buttonSize,
-        child: MenuItemButton(
-            style: ToolbarSkin.defaultMenuButtonStyle,
-            onHover: (value) => setState(() {
-                  hover = value;
-                }),
-            onPressed: widget.onPressed,
-            child: ToolbarButtonSurface(
-              hover: hover,
-              color: widget.color,
-              hoverColor: widget.hoverColor,
-              glyph: widget.glyph,
-              iconBuilder: widget.iconBuilder,
-            )),
+        child: widget.topLevel
+            ? TextButton(
+                style: ToolbarSkin.defaultMenuButtonStyle.copyWith(
+                  minimumSize: const WidgetStatePropertyAll(Size.zero),
+                  tapTargetSize: MaterialTapTargetSize.shrinkWrap,
+                ),
+                onHover: (value) => setState(() => hover = value),
+                onFocusChange: (value) => setState(() => focused = value),
+                onPressed: widget.onPressed,
+                child: surface,
+              )
+            : MenuItemButton(
+                style: ToolbarSkin.defaultMenuButtonStyle,
+                onHover: (value) => setState(() => hover = value),
+                onFocusChange: (value) => setState(() => focused = value),
+                onPressed: widget.onPressed,
+                child: surface,
+              ),
       ),
     );
-    button = Tooltip(message: widget.tooltip, child: button);
-    return widget.topLevel ? MenuBar(children: [button]) : button;
+    return Semantics(
+      label: widget.tooltip,
+      child: Tooltip(
+          message: widget.tooltip, excludeFromSemantics: true, child: button),
+    );
   }
 }
 

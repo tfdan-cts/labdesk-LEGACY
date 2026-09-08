@@ -29,7 +29,7 @@ import 'address_book.dart';
 // The console's modals.
 //
 // Every dialog below used to be a Material `AlertDialog` with Material buttons,
-// Material icons and RustDesk's accent, raised over three surfaces that have
+// Material icons and LabDesk's accent, raised over three surfaces that have
 // since been restyled — the console, the session windows, the connection
 // manager. The presentation now comes from `labdesk/theme/dialog_skin.dart`, so
 // they move together and so `tool/shots/dialogs_test.dart` can render them
@@ -1190,7 +1190,7 @@ _connectDialog(
         crossAxisAlignment: CrossAxisAlignment.stretch,
         mainAxisSize: MainAxisSize.min,
         children: [
-          descWidget(translate('verify_rustdesk_password_tip')),
+          descWidget(translate('verify_labdesk_password_tip')),
           PasswordWidget(
             controller: passwordController,
             autoFocus: osUsernameController == null,

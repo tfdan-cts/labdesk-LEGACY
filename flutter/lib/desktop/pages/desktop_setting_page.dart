@@ -6,7 +6,6 @@ import 'package:file_picker/file_picker.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:flutter_hbb/common.dart';
-import 'package:flutter_hbb/common/labdesk_profiles.dart';
 import 'package:flutter_hbb/common/widgets/audio_input.dart';
 import 'package:flutter_hbb/common/widgets/setting_widgets.dart';
 import 'package:flutter_hbb/consts.dart';
@@ -1585,20 +1584,9 @@ class _NetworkState extends State<_Network> with AutomaticKeepAliveClientMixin {
         block: locked,
         child: Column(crossAxisAlignment: CrossAxisAlignment.stretch, children: [
           network(context),
-          serverProfiles(context),
         ]),
       ),
     ]);
-  }
-
-  Widget serverProfiles(BuildContext context) {
-    if (isWeb || bind.mainGetBuildinOption(key: kOptionHideServerSetting) == 'Y') {
-      return Offstage();
-    }
-    return _Card(
-      title: 'Server profiles',
-      children: [const ServerProfilesSettings()],
-    );
   }
 
   Widget network(BuildContext context) {
@@ -1670,11 +1658,6 @@ class _NetworkState extends State<_Network> with AutomaticKeepAliveClientMixin {
     return _Card(
       title: 'Network',
       children: [
-        if (!hideServer)
-          row(
-            title: 'Servers',
-            onTap: () => showServerSettings(gFFI.dialogManager, setState),
-          ),
         if (!hideProxy)
           row(
             title: 'Proxy',
@@ -2523,14 +2506,14 @@ class _WaylandCardState extends State<WaylandCard> {
   final _clearShortcutsInhibitorFailedMsg = ''.obs;
   // Don't show the shortcuts permission reset button for now.
   // Users can change it manually:
-  //   "Settings" -> "Apps" -> "RustDesk" -> "Permissions" -> "Inhibit Shortcuts".
+  //   "Settings" -> "Apps" -> "LabDesk" -> "Permissions" -> "Inhibit Shortcuts".
   // For resetting(clearing) the permission from the portal permission store, you can
-  // use (replace <desktop-id> with the RustDesk desktop file ID):
+  // use (replace <desktop-id> with the LabDesk desktop file ID):
   //   busctl --user call org.freedesktop.impl.portal.PermissionStore \
   //   /org/freedesktop/impl/portal/PermissionStore org.freedesktop.impl.portal.PermissionStore \
   //   DeletePermission sss "gnome" "shortcuts-inhibitor" "<desktop-id>"
-  // On a native install this is typically "rustdesk.desktop"; on Flatpak it is usually
-  // the exported desktop ID derived from the Flatpak app-id (e.g. "com.rustdesk.RustDesk.desktop").
+  // On a native install this is typically "labdesk.desktop"; on Flatpak it is usually
+  // the exported desktop ID derived from the Flatpak app-id (e.g. "com.labdesk.LabDesk.desktop").
   //
   // We may add it back in the future if needed.
   final showResetInhibitorPermission = false;

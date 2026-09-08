@@ -24,6 +24,7 @@ class OrganizationContextController extends ChangeNotifier {
   DashboardLayout? layout;
   String? error;
   bool busy = false;
+  bool _authenticated = false;
   int revision = 0;
   int _credentialRevision = 0;
   int _selection = 0;
@@ -33,7 +34,9 @@ class OrganizationContextController extends ChangeNotifier {
   bool _disposed = false;
 
   bool matchesCredential(String value) => value == _credential;
-  bool get ready => userId.isNotEmpty && activeId != null;
+  /// An accepted account can exist without a selected organization.
+  bool get authenticated => !_disposed && _authenticated;
+  bool get ready => authenticated && userId.isNotEmpty && activeId != null;
   String get contextKey => '${_key(userId)}/${_key(activeId ?? '')}';
   String get _organizationPreference => 'labdesk-ui-org-v1-${_key(userId)}';
   String get _layoutPreference => 'labdesk-dashboard-v1-$contextKey';
@@ -55,6 +58,7 @@ class OrganizationContextController extends ChangeNotifier {
     _credentialRevision++;
     _selection++;
     _loading = null;
+    _authenticated = false;
     userId = '';
     activeId = null;
     organizations = const [];
@@ -72,6 +76,7 @@ class OrganizationContextController extends ChangeNotifier {
       _credentialRevision++;
       _selection++;
       _loading = null;
+      _authenticated = false;
       userId = '';
       activeId = null;
       organizations = const [];
@@ -102,6 +107,7 @@ class OrganizationContextController extends ChangeNotifier {
     try {
       final directory = await scopedBroker.organizations();
       if (!_current(credential, selection)) return;
+      _authenticated = true;
       userId = directory.userId;
       organizations = List.unmodifiable({
         for (final org in directory.organizations) org.id: org,
@@ -125,6 +131,10 @@ class OrganizationContextController extends ChangeNotifier {
       }
     } catch (failure) {
       if (_current(credential, selection)) {
+        if (failure is OverlayBrokerException && failure.signInAgain) {
+          invalidate(failure.message);
+          return;
+        }
         error = failure is OverlayBrokerException
             ? failure.message
             : 'Organizations could not be loaded. Try refreshing.';
@@ -166,6 +176,10 @@ class OrganizationContextController extends ChangeNotifier {
       await _write(preference, id);
     } catch (failure) {
       if (_current(credential, selection)) {
+        if (failure is OverlayBrokerException && failure.signInAgain) {
+          invalidate(failure.message);
+          return;
+        }
         error = failure is OverlayBrokerException
             ? failure.message
             : verified

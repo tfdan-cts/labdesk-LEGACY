@@ -25,7 +25,7 @@ void main() {
     await t.tap(find.text('Turn off'));
     expect(stopped, isTrue);
   });
-  testWidgets('failed labnet attempt offers RustDesk only as explicit choice',
+  testWidgets('failed labnet attempt explains recovery and can be closed',
       (t) async {
     await t.pumpWidget(const MaterialApp(
         home: LabnetConnectionFailure(
@@ -33,8 +33,9 @@ void main() {
     )));
     expect(find.text('Labnet connection unavailable'), findsOneWidget);
     expect(find.textContaining('session ticket'), findsOneWidget);
-    expect(find.text('Cancel'), findsOneWidget);
-    expect(find.text('Use RustDesk instead'), findsOneWidget);
+    expect(find.text('Close'), findsOneWidget);
+    expect(find.text('Use LabDesk instead'), findsNothing);
+    expect(find.textContaining('ID and relay servers'), findsNothing);
   });
   testWidgets('off offers Turn on and says what it changes', (t) async {
     var enabled = 0;

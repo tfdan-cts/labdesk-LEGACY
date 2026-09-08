@@ -2,7 +2,7 @@
 """Fail a build on analyzer issues in files LabDesk owns.
 
 `flutter analyze` reports several hundred issues in this repository. Nearly all
-of them are inherited from upstream RustDesk and predate the fork, so a gate
+of them are inherited from upstream LabDesk and predate the fork, so a gate
 that failed on the whole report would have to be switched off to be usable.
 This reads the report and fails only on issues in the files LabDesk wrote:
 
@@ -81,7 +81,7 @@ def main(path: str) -> int:
     for line in owned:
         print(f"  {line}", file=sys.stderr)
     print(
-        "\nFix these. Issues in upstream RustDesk files are not counted here.",
+        "\nFix these. Issues in upstream LabDesk files are not counted here.",
         file=sys.stderr,
     )
     return 1

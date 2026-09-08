@@ -2,7 +2,7 @@
 //
 // This runs in the `--service` daemon and nowhere else. That placement is the whole point:
 // on Linux `--server` is launched through `run_as_user` as the desktop user
-// (src/platform/linux.rs:713-717) while `res/rustdesk.service` runs `--service` as root,
+// (src/platform/linux.rs:713-717) while `res/labdesk.service` runs `--service` as root,
 // and on macOS `_service.plist` is installed under /Library/LaunchDaemons against
 // `_server.plist` under /Library/LaunchAgents (src/platform/macos.rs:190-195, :339-343).
 // On Windows `sc create ... binpath= "{exe} --service"` carries no `obj=`, so the service

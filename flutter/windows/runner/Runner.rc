@@ -92,9 +92,9 @@ BEGIN
             VALUE "CompanyName", "LabDesk" "\0"
             VALUE "FileDescription", "LabDesk Remote Desktop" "\0"
             VALUE "FileVersion", VERSION_AS_STRING "\0"
-            VALUE "InternalName", "rustdesk" "\0"
+            VALUE "InternalName", "labdesk" "\0"
             VALUE "LegalCopyright", "Copyright © 2026 LabDesk contributors. Based on RustDesk, © Purslane Tech Pte. Ltd." "\0"
-            VALUE "OriginalFilename", "rustdesk.exe" "\0"
+            VALUE "OriginalFilename", "labdesk.exe" "\0"
             VALUE "ProductName", "LabDesk" "\0"
             VALUE "ProductVersion", VERSION_AS_STRING "\0"
         END

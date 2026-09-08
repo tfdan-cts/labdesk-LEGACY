@@ -100,13 +100,14 @@ use winreg::{enums::*, RegKey};
 mod acl;
 mod installer_handoff;
 mod installer_shell;
+mod secure_update;
 pub(crate) use acl::current_process_user_sid_string;
 pub use acl::{
     set_path_permission, set_path_permission_for_portable_service_shmem_dir,
     set_path_permission_for_portable_service_shmem_file,
     validate_path_for_portable_service_shmem_dir,
 };
-use installer_handoff::run_cmds;
+use installer_handoff::{run_cmds, run_cmds_exit_code};
 use installer_shell::{
     embedded_shortcut_commands, embedded_tray_shortcut_commands, escape_nested_cmd_ampersands,
     shortcut_bytes, validate_install_value,
@@ -1254,8 +1255,8 @@ pub fn portable_service_logon_helper_paths() -> Option<(PathBuf, PathBuf)> {
         .home_dir()
         .join("AppData")
         .join("Local")
-        .join("rustdesk-sciter");
-    let dst = dir.join("rustdesk.exe");
+        .join("labdesk-sciter");
+    let dst = dir.join("labdesk.exe");
     Some((dir, dst))
 }
 
@@ -1624,7 +1625,7 @@ pub fn install_me(options: &str, path: String, silent: bool, debug: bool) -> Res
     }
     // The elevated runner expands this to `%~f0.dir`, beside its protected copy.
     // Do not stage privileged shortcut artifacts in the user-writable `%TEMP%`.
-    let tmp_path = "%RUSTDESK_OUTPUT_DIR%".to_owned();
+    let tmp_path = "%LABDESK_OUTPUT_DIR%".to_owned();
     let mk_shortcut_commands = embedded_shortcut_commands(
         shortcut_bytes(&exe, None, shortcut_icon_location.as_deref())?,
         &format!("{app_name}.lnk"),
@@ -1758,7 +1759,7 @@ copy /Y \"{tmp_path}\\Uninstall {app_name}.lnk\" \"{path}\\\"
         sleep = if debug { "timeout 300" } else { "" },
         dels = if debug { "" } else { &dels },
         copy_exe = copy_exe_cmd(&src_exe, &exe, &path)?,
-        // The copy preserves the payload's own file name, which is rustdesk.exe.
+        // The copy preserves the payload's own file name, which is labdesk.exe.
         // Everything written below, and the service and shortcuts, reference
         // {app_name}.exe instead. Upstream the two are the same file because
         // Windows ignores case, so the missing rename never showed; under a
@@ -2021,8 +2022,8 @@ fn get_public_base_dir() -> PathBuf {
 #[inline]
 pub fn get_custom_client_staging_dir() -> PathBuf {
     get_public_base_dir()
-        .join("RustDesk")
-        .join("RustDeskCustomClientStaging")
+        .join("LabDesk")
+        .join("LabDeskCustomClientStaging")
 }
 
 /// Removes the custom client staging directory.
@@ -2031,7 +2032,7 @@ pub fn get_custom_client_staging_dir() -> PathBuf {
 ///
 /// Rationale
 /// - The staging directory only contains a small `custom.txt`, leaving it is harmless.
-/// - Deleting directories under a public location (e.g., C:\\ProgramData\\RustDesk) is
+/// - Deleting directories under a public location (e.g., C:\\ProgramData\\LabDesk) is
 ///   susceptible to TOCTOU attacks if an unprivileged user can replace the path with a
 ///   symlink/junction between checks and deletion.
 ///
@@ -2203,7 +2204,7 @@ pub fn bootstrap() -> bool {
     }
     #[cfg(not(debug_assertions))]
     {
-        // This function will cause `'sciter.dll' was not found neither in PATH nor near the current executable.` when debugging RustDesk.
+        // This function will cause `'sciter.dll' was not found neither in PATH nor near the current executable.` when debugging LabDesk.
         // Only call set_safe_load_dll() on Windows 10 or greater
         if is_win_10_or_greater() {
             set_safe_load_dll()
@@ -3088,11 +3089,11 @@ mod cert {
     use hbb_common::ResultType;
 
     extern "C" {
-        fn DeleteRustDeskTestCertsW();
+        fn DeleteLabDeskTestCertsW();
     }
     pub fn uninstall_cert() -> ResultType<()> {
         unsafe {
-            DeleteRustDeskTestCertsW();
+            DeleteLabDeskTestCertsW();
         }
         Ok(())
     }
@@ -3197,7 +3198,7 @@ impl Drop for WakeLock {
 // and every miss spawns one more tray icon.
 //
 // The case confirmed in #15689: `run_after_run_cmds()` spawns the tray in the
-// caller's own context, so installing or toggling the service from a RustDesk
+// caller's own context, so installing or toggling the service from a LabDesk
 // that was itself started elevated leaves a high integrity tray behind. A main
 // window started normally afterwards runs at medium integrity and cannot open
 // that process with `PROCESS_QUERY_INFORMATION | PROCESS_VM_READ`. sysinfo then
@@ -3299,7 +3300,7 @@ fn get_install_service_commands(path: &str, exe: &str) -> ResultType<String> {
 chcp 65001
 taskkill /F /IM {app_name}.exe{filter}
 {tray_shortcut_commands}
-copy /Y \"%RUSTDESK_OUTPUT_DIR%\\{app_name} Tray.lnk\" \"%PROGRAMDATA%\\Microsoft\\Windows\\Start Menu\\Programs\\Startup\\\"
+copy /Y \"%LABDESK_OUTPUT_DIR%\\{app_name} Tray.lnk\" \"%PROGRAMDATA%\\Microsoft\\Windows\\Start Menu\\Programs\\Startup\\\"
 {import_config}
 {create_service}
     ",
@@ -3519,28 +3520,36 @@ reg add {subkey} /f /v EstimatedSize /t REG_DWORD /d {size}
     // md \"{path}\"
     //
     // We need `taskkill` because:
-    // 1. There may be some other processes like `rustdesk --connect` are running.
+    // 1. There may be some other processes like `labdesk --connect` are running.
     // 2. Sometimes, the main window and the tray icon are showing
     // while I cannot find them by `tasklist` or the methods above.
     // There's should be 4 processes running: service, server, tray and main window.
     // But only 2 processes are shown in the tasklist.
+    let source_directory = Path::new(&src_exe).parent()
+        .ok_or_else(|| anyhow!("The update executable has no parent directory"))?;
+    let copy_update = secure_update::copy_update_commands(
+        source_directory, Path::new(&path), &rename_exe_cmd(&src_exe, &path)?, &restore_service_cmd,
+    )?;
+    let reg_cmd = secure_update::required_update_commands(&reg_cmd, &restore_service_cmd);
+    let restore_service_checked = secure_update::required_update_commands(&restore_service_cmd, "");
     let cmds = format!(
         "
 chcp 65001
 sc stop {app_name}
 taskkill /F /IM {app_name}.exe{filter}
+{copy_update}
 {reg_cmd}
-{copy_exe}
-{rename_exe}
+copy /Y \"{origin_process_exe}\" \"{path}\\{broker_exe}\"
 {remove_meta_toml}
-{restore_service_cmd}
+{restore_service_checked}
 {uninstall_printer_cmd}
 {install_printer_cmd}
 {sleep}
+exit /b 0
     ",
         app_name = app_name,
-        copy_exe = copy_exe_cmd(&src_exe, &exe, &path)?,
-        rename_exe = rename_exe_cmd(&src_exe, &path)?,
+        origin_process_exe = win_topmost_window::ORIGIN_PROCESS_EXE,
+        broker_exe = win_topmost_window::INJECTED_PROCESS_EXE,
         remove_meta_toml = remove_meta_toml_cmd(is_msi.unwrap_or(true), &path),
         sleep = if debug { "timeout 300" } else { "" },
     );
@@ -3738,11 +3747,13 @@ pub fn handle_custom_client_staging_dir_before_update(
 }
 
 // Used for auto update and manual update in the main window.
-// `expected_sha256` is the digest the release published for this file. It is
-// checked here rather than at the call site so the check is the last act
-// before the elevated launch, after the staging work, and the file is not
-// touched again between the two.
+// The updater authenticates this digest with the pinned release signing key.
+// The elevated handoff verifies and consumes its own protected payload copy.
 pub fn update_to(file: &str, expected_sha256: &str) -> ResultType<()> {
+    install_verified_update(file, expected_sha256, false)
+}
+
+pub(crate) fn install_verified_update(file: &str, expected_sha256: &str, quiet: bool) -> ResultType<()> {
     if file.ends_with(".exe") {
         let custom_client_staging_dir = get_custom_client_staging_dir();
         if crate::is_custom_client() {
@@ -3752,16 +3763,15 @@ pub fn update_to(file: &str, expected_sha256: &str) -> ResultType<()> {
             allow_err!(remove_custom_client_staging_dir(&custom_client_staging_dir));
         }
         crate::updater::verify_downloaded_file(std::path::Path::new(file), expected_sha256)?;
-        if !run_uac(file, "--update")? {
-            bail!(
-                "Failed to run the update exe with UAC, error: {:?}",
-                std::io::Error::last_os_error()
-            );
+        let exit_code = secure_update::run(file, expected_sha256, quiet)?;
+        if exit_code != 0 {
+            bail!("The protected update executable failed with exit code {exit_code}");
         }
     } else if file.ends_with(".msi") {
         crate::updater::verify_downloaded_file(std::path::Path::new(file), expected_sha256)?;
-        if let Err(e) = update_me_msi(file, false) {
-            bail!("Failed to run the update msi: {}", e);
+        let outcome = msi_update_outcome(secure_update::run(file, expected_sha256, quiet)?)?;
+        if outcome == MsiUpdateOutcome::RebootRequired {
+            log::info!("MSI update installed successfully; Windows restart required (3010)");
         }
     } else {
         // unreachable!()
@@ -3780,12 +3790,30 @@ pub fn update_to(file: &str, expected_sha256: &str) -> ResultType<()> {
 //    3. Restore the tray app sessions.
 //    `1` and `3` must be done in custom actions.
 //    We need also to handle the command line parsing to find the tray processes.
-pub fn update_me_msi(msi: &str, quiet: bool) -> ResultType<()> {
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum MsiUpdateOutcome {
+    Installed,
+    RebootRequired,
+}
+
+fn msi_update_outcome(exit_code: u32) -> ResultType<MsiUpdateOutcome> {
+    match exit_code {
+        0 => Ok(MsiUpdateOutcome::Installed),
+        3010 => Ok(MsiUpdateOutcome::RebootRequired),
+        _ => bail!("MSI update failed with installer exit code {exit_code}"),
+    }
+}
+
+pub fn update_me_msi(msi: &str, quiet: bool) -> ResultType<MsiUpdateOutcome> {
+    validate_install_value(msi)?;
     let quiet_args = if quiet { " /qn LAUNCH_TRAY_APP=N" } else { "" };
     let cmds =
         format!("chcp 65001 && msiexec /i \"{msi}\"{quiet_args} REBOOT=ReallySuppress /norestart");
-    run_cmds(cmds, false, "update-msi")?;
-    Ok(())
+    let outcome = msi_update_outcome(run_cmds_exit_code(cmds, false)?)?;
+    if outcome == MsiUpdateOutcome::RebootRequired {
+        log::info!("MSI update installed successfully; Windows restart required (3010)");
+    }
+    Ok(outcome)
 }
 
 fn get_import_config(exe: &str) -> String {
@@ -3858,9 +3886,9 @@ pub fn try_remove_temp_update_files() {
                 let update_dir = path.is_dir()
                     && file_name.starts_with(crate::updater::UPDATE_DIR_PREFIX);
                 // Match staged installers: labdesk-*.msi or labdesk-*.exe, and the
-                // rustdesk-* names releases up to 1.2.1 were downloaded under.
+                // labdesk-* names releases up to 1.2.1 were downloaded under.
                 if update_dir
-                    || ((file_name.starts_with("labdesk-") || file_name.starts_with("rustdesk-"))
+                    || ((file_name.starts_with("labdesk-") || file_name.starts_with("labdesk-"))
                         && (file_name.ends_with(".msi") || file_name.ends_with(".exe")))
                 {
                     // Skip files modified within the last hour to avoid deleting files being downloaded
@@ -4069,8 +4097,8 @@ pub fn release_arch_suffix() -> Option<&'static str> {
     }
 }
 
-pub fn try_kill_rustdesk_main_window_process() -> ResultType<()> {
-    // Kill rustdesk.exe without extra arg, should only be called by --server
+pub fn try_kill_labdesk_main_window_process() -> ResultType<()> {
+    // Kill labdesk.exe without extra arg, should only be called by --server
     // We can find the exact process which occupies the ipc, see more from https://github.com/winsiderss/systeminformer
     let app_name = crate::get_app_name().to_lowercase();
     log::info!("try kill main window process");
@@ -4118,7 +4146,7 @@ pub fn try_kill_rustdesk_main_window_process() -> ResultType<()> {
         log::info!("kill process success: {:?}, pid = {:?}", p.cmd(), p.pid());
         return Ok(());
     }
-    bail!("failed to find rustdesk main window process");
+    bail!("failed to find labdesk main window process");
 }
 
 fn nt_terminate_process(process_id: DWORD) -> ResultType<()> {
@@ -4382,7 +4410,7 @@ pub fn send_raw_data_to_printer(printer_name: Option<String>, data: Vec<u8>) -> 
             data.len() as c_ulong,
         );
         if res != 0 {
-            bail!("Failed to send data to the printer, see logs in C:\\Windows\\temp\\test_rustdesk.log for more details.");
+            bail!("Failed to send data to the printer, see logs in C:\\Windows\\temp\\test_labdesk.log for more details.");
         } else {
             log::info!("Successfully sent data to the printer");
         }
@@ -4493,10 +4521,10 @@ fn get_pids_with_args_from_wmic_output<S2: AsRef<str>>(
     // CommandLine=
     // ProcessId=34668
     //
-    // CommandLine="C:\Program Files\RustDesk\RustDesk.exe" --tray
+    // CommandLine="C:\Program Files\LabDesk\LabDesk.exe" --tray
     // ProcessId=13728
     //
-    // CommandLine="C:\Program Files\RustDesk\RustDesk.exe"
+    // CommandLine="C:\Program Files\LabDesk\LabDesk.exe"
     // ProcessId=10136
     let mut pids = Vec::new();
     let mut proc_found = false;
@@ -4726,9 +4754,18 @@ mod tests {
     }
 
     #[test]
+    fn msi_update_exit_codes_distinguish_restart_from_failure() {
+        assert_eq!(msi_update_outcome(0).unwrap(), MsiUpdateOutcome::Installed);
+        assert_eq!(msi_update_outcome(3010).unwrap(), MsiUpdateOutcome::RebootRequired);
+        for code in [7, 1603, 1618] {
+            assert!(msi_update_outcome(code).unwrap_err().to_string().contains(&code.to_string()));
+        }
+    }
+
+    #[test]
     fn install_app_names_enforce_ascii_command_safety() {
-        assert!(validate_install_app_name("RustDesk-Admin1").is_ok());
-        for app_name in ["", "RustDesk_Admin", "RustDesk&whoami", "RustDesk应用"] {
+        assert!(validate_install_app_name("LabDesk-Admin1").is_ok());
+        for app_name in ["", "LabDesk_Admin", "LabDesk&whoami", "LabDesk应用"] {
             assert!(
                 validate_install_app_name(app_name).is_err(),
                 "unsafe application name was accepted: {app_name}"

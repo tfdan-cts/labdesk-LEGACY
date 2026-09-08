@@ -1,7 +1,7 @@
 import 'package:bot_toast/bot_toast.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
-import 'package:flutter_hbb/common/labdesk_profiles.dart';
+import 'package:flutter_hbb/common/labdesk_status_polling.dart';
 import 'package:flutter_hbb/common/labdesk_peer_status.dart';
 import 'package:flutter_hbb/common/labdesk_status_binding.dart';
 import 'package:flutter_hbb/common/widgets/dialog.dart';

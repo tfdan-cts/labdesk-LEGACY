@@ -2,6 +2,7 @@ import 'dart:async';
 
 import 'package:flutter/foundation.dart';
 import 'package:flutter_hbb/labdesk/services/link_verdict.dart';
+import 'package:flutter_hbb/labdesk/services/desktop_session_access.dart';
 import 'package:flutter_hbb/models/model.dart';
 
 /// The console's own connection to a machine, with no window behind it.
@@ -21,6 +22,8 @@ class LabDeskMachineLink {
 
   static final Map<String, FFI> _links = {};
   static final Map<String, Future<FFI?>> _opening = {};
+  static final Map<String, DesktopSessionContext> _scopes = {};
+  static final Map<String, Object> _attempts = {};
 
   /// Why the last attempt to reach a peer failed, in the far side's words
   /// ("ID does not exist", "the machine refused the saved password"). Cleared
@@ -38,7 +41,10 @@ class LabDeskMachineLink {
 
   static bool isOpen(String peerId) {
     final f = _links[peerId];
-    return f != null && !f.closed && f.ffiModel.pi.isSet.value;
+    return desktopSessionAccess.accepts(_scopes[peerId]) &&
+        f != null &&
+        !f.closed &&
+        f.ffiModel.pi.isSet.value;
   }
 
   static Iterable<String> get openIds =>
@@ -48,29 +54,52 @@ class LabDeskMachineLink {
   /// authenticated in time; the reason is whatever the far side wanted, and
   /// the caller says so rather than guessing.
   static Future<FFI?> open(String peerId,
-      {Future<String?> Function()? beforeOpen}) {
-    final existing = _links[peerId];
-    if (existing != null && !existing.closed) {
-      if (existing.ffiModel.pi.isSet.value) return Future.value(existing);
+      {Future<String?> Function()? beforeOpen, FFI Function()? createLink}) {
+    final authority = desktopSessionAccess.capture();
+    if (authority == null) {
+      close(peerId);
+      lastFailure[peerId] = 'Sign in before running machine commands';
+      return Future.value(null);
     }
+    if (_scopes[peerId] != authority) close(peerId);
+    _scopes[peerId] = authority;
     return _opening.putIfAbsent(peerId, () async {
+      final attempt = Object();
+      _attempts[peerId] = attempt;
+      bool current() =>
+          identical(_attempts[peerId], attempt) &&
+          desktopSessionAccess.accepts(authority);
+      FFI? created;
       try {
         // All headless RMM tools use this same admission point. A prepared
         // labnet ticket must exist before FFI starts its connection, and a
         // failure must not silently fall through to another provider.
-        final admissionError = await beforeOpen?.call();
+        final admissionError =
+            await Future<String?>.sync(() => beforeOpen?.call());
+        if (!current()) return null;
         if (admissionError != null) {
+          _links.remove(peerId)?.close();
           lastFailure[peerId] = admissionError;
           return null;
         }
+        // Recheck admission for each command, including a cached connection.
+        final existing = _links[peerId];
+        if (existing != null &&
+            !existing.closed &&
+            existing.ffiModel.pi.isSet.value) return existing;
         _links[peerId]?.close();
-        final ffi = FFI(null);
+        final ffi = created = createLink?.call() ?? FFI(null);
         _links[peerId] = ffi;
         lastFailure.remove(peerId);
         final ready = Completer<bool>();
         // No window, nobody watching: a dialog the client would raise is
         // either the reason this link failed, or progress to wait through.
         ffi.headlessMsgBox = (type, title, text) {
+          if (!desktopSessionAccess.accepts(authority) ||
+              !identical(_links[peerId], ffi)) {
+            if (!ready.isCompleted) ready.complete(false);
+            return;
+          }
           final why = linkFailure(type, title, text);
           if (why == null) return;
           lastFailure[peerId] = why;
@@ -83,31 +112,44 @@ class LabDeskMachineLink {
         if (ffi.ffiModel.pi.isSet.value && !ready.isCompleted) {
           ready.complete(true);
         }
-        final ok = await ready.future
-            .timeout(readyTimeout, onTimeout: () => false);
+        final ok =
+            await ready.future.timeout(readyTimeout, onTimeout: () => false);
         await sub.cancel();
-        if (!ok || ffi.closed) {
+        if (!current() || !ok || ffi.closed) {
           debugPrint('labdesk: link to $peerId: ${reason(peerId)}');
           ffi.close();
-          _links.remove(peerId);
+          if (identical(_links[peerId], ffi)) _links.remove(peerId);
           return null;
         }
         return ffi;
       } catch (e) {
-        lastFailure[peerId] = '$e';
-        _links.remove(peerId)?.close();
+        created?.close();
+        if (current()) {
+          lastFailure[peerId] = '$e';
+          _links.remove(peerId)?.close();
+        }
         return null;
       } finally {
-        _opening.remove(peerId);
+        if (identical(_attempts[peerId], attempt)) {
+          _attempts.remove(peerId);
+          _opening.remove(peerId);
+          if (!_links.containsKey(peerId)) _scopes.remove(peerId);
+        }
       }
     });
   }
 
   static void close(String peerId) {
+    _attempts.remove(peerId);
+    _opening.remove(peerId);
+    _scopes.remove(peerId);
     _links.remove(peerId)?.close();
   }
 
   static void closeAll() {
+    _attempts.clear();
+    _opening.clear();
+    _scopes.clear();
     for (final f in _links.values) {
       f.close();
     }

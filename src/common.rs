@@ -53,7 +53,7 @@ pub enum GrabState {
 pub type NotifyMessageBox = fn(String, String, String, String) -> dyn Future<Output = ()>;
 
 // the executable name of the portable version
-pub const PORTABLE_APPNAME_RUNTIME_ENV_KEY: &str = "RUSTDESK_APPNAME";
+pub const PORTABLE_APPNAME_RUNTIME_ENV_KEY: &str = "LABDESK_APPNAME";
 
 pub const PLATFORM_WINDOWS: &str = "Windows";
 pub const PLATFORM_LINUX: &str = "Linux";
@@ -559,130 +559,6 @@ audio_rechannel!(audio_rechannel_8_5, 8, 5);
 audio_rechannel!(audio_rechannel_8_6, 8, 6);
 audio_rechannel!(audio_rechannel_8_7, 8, 7);
 
-pub struct CheckTestNatType {
-    is_direct: bool,
-}
-
-impl CheckTestNatType {
-    pub fn new() -> Self {
-        Self {
-            is_direct: Config::get_socks().is_none() && !config::use_ws(),
-        }
-    }
-}
-
-impl Drop for CheckTestNatType {
-    fn drop(&mut self) {
-        let is_direct = Config::get_socks().is_none() && !config::use_ws();
-        if self.is_direct != is_direct {
-            test_nat_type();
-        }
-    }
-}
-
-pub fn test_nat_type() {
-    test_ipv6_sync();
-    use std::sync::atomic::{AtomicBool, Ordering};
-    std::thread::spawn(move || {
-        static IS_RUNNING: AtomicBool = AtomicBool::new(false);
-        if IS_RUNNING.load(Ordering::SeqCst) {
-            return;
-        }
-        IS_RUNNING.store(true, Ordering::SeqCst);
-
-        #[cfg(not(any(target_os = "android", target_os = "ios")))]
-        crate::ipc::get_socks_ws();
-        let is_direct = Config::get_socks().is_none() && !config::use_ws();
-        if !is_direct {
-            Config::set_nat_type(NatType::SYMMETRIC as _);
-            IS_RUNNING.store(false, Ordering::SeqCst);
-            return;
-        }
-
-        let mut i = 0;
-        loop {
-            match test_nat_type_() {
-                Ok(true) => break,
-                Err(err) => {
-                    log::error!("test nat: {}", err);
-                }
-                _ => {}
-            }
-            if Config::get_nat_type() != 0 {
-                break;
-            }
-            i = i * 2 + 1;
-            if i > 300 {
-                i = 300;
-            }
-            std::thread::sleep(std::time::Duration::from_secs(i));
-        }
-
-        IS_RUNNING.store(false, Ordering::SeqCst);
-    });
-}
-
-#[tokio::main(flavor = "current_thread")]
-async fn test_nat_type_() -> ResultType<bool> {
-    log::info!("Testing nat ...");
-    let start = std::time::Instant::now();
-    let server1 = Config::get_rendezvous_server();
-    let server2 = crate::increase_port(&server1, -1);
-    let mut msg_out = RendezvousMessage::new();
-    let serial = Config::get_serial();
-    msg_out.set_test_nat_request(TestNatRequest {
-        serial,
-        ..Default::default()
-    });
-    let mut port1 = 0;
-    let mut port2 = 0;
-    let mut local_addr = None;
-    for i in 0..2 {
-        let server = if i == 0 { &*server1 } else { &*server2 };
-        let mut socket =
-            socket_client::connect_tcp_local(server, local_addr, CONNECT_TIMEOUT).await?;
-        if i == 0 {
-            // reuse the local addr is required for nat test
-            local_addr = Some(socket.local_addr());
-            Config::set_option(
-                "local-ip-addr".to_owned(),
-                socket.local_addr().ip().to_string(),
-            );
-        }
-        socket.send(&msg_out).await?;
-        if let Some(msg_in) = get_next_nonkeyexchange_msg(&mut socket, None).await {
-            if let Some(rendezvous_message::Union::TestNatResponse(tnr)) = msg_in.union {
-                log::debug!("Got nat response from {}: port={}", server, tnr.port);
-                if i == 0 {
-                    port1 = tnr.port;
-                } else {
-                    port2 = tnr.port;
-                }
-                if let Some(cu) = tnr.cu.as_ref() {
-                    Config::set_option(
-                        "rendezvous-servers".to_owned(),
-                        cu.rendezvous_servers.join(","),
-                    );
-                    Config::set_serial(cu.serial);
-                }
-            }
-        } else {
-            break;
-        }
-    }
-    let ok = port1 > 0 && port2 > 0;
-    if ok {
-        let t = if port1 == port2 {
-            NatType::ASYMMETRIC
-        } else {
-            NatType::SYMMETRIC
-        };
-        Config::set_nat_type(t as _);
-        log::info!("Tested nat type: {:?} in {:?}", t, start.elapsed());
-    }
-    Ok(ok)
-}
-
 pub async fn get_rendezvous_server(ms_timeout: u64) -> (String, Vec<String>, bool) {
     #[cfg(any(target_os = "android", target_os = "ios"))]
     let (mut a, mut b) = get_rendezvous_server_(ms_timeout);
@@ -733,50 +609,6 @@ pub async fn get_nat_type(_ms_timeout: u64) -> i32 {
 #[cfg(not(any(target_os = "android", target_os = "ios")))]
 pub async fn get_nat_type(ms_timeout: u64) -> i32 {
     crate::ipc::get_nat_type(ms_timeout).await
-}
-
-// used for client to test which server is faster in case stop-servic=Y
-#[tokio::main(flavor = "current_thread")]
-async fn test_rendezvous_server_() {
-    let servers = Config::get_rendezvous_servers();
-    if servers.len() <= 1 {
-        return;
-    }
-    let mut futs = Vec::new();
-    for host in servers {
-        futs.push(tokio::spawn(async move {
-            let tm = std::time::Instant::now();
-            if socket_client::connect_tcp(
-                crate::check_port(&host, RENDEZVOUS_PORT),
-                CONNECT_TIMEOUT,
-            )
-            .await
-            .is_ok()
-            {
-                let elapsed = tm.elapsed().as_micros();
-                Config::update_latency(&host, elapsed as _);
-            } else {
-                Config::update_latency(&host, -1);
-            }
-        }));
-    }
-    join_all(futs).await;
-    Config::reset_online();
-}
-
-pub fn test_rendezvous_server() {
-    std::thread::spawn(test_rendezvous_server_);
-}
-
-pub fn refresh_rendezvous_server() {
-    #[cfg(any(target_os = "android", target_os = "ios"))]
-    test_rendezvous_server();
-    #[cfg(not(any(target_os = "android", target_os = "ios")))]
-    std::thread::spawn(|| {
-        if crate::ipc::test_rendezvous_server().is_err() {
-            test_rendezvous_server();
-        }
-    });
 }
 
 pub fn run_me<T: AsRef<std::ffi::OsStr>>(args: Vec<T>) -> std::io::Result<std::process::Child> {
@@ -948,8 +780,6 @@ pub fn is_labdesk() -> bool {
 }
 
 pub fn check_software_update() {
-    // Upstream skips the check for every renamed build because api.rustdesk.com
-    // knows nothing about them. LabDesk has its own update service.
     if is_custom_client() && !is_labdesk() {
         return;
     }
@@ -960,12 +790,11 @@ pub fn check_software_update() {
 }
 
 // No need to check `danger_accept_invalid_cert` for now.
-// Because the url is always `https://api.rustdesk.com/version/latest`,
-// or lab-desk.net's equivalent for LabDesk.
+// The update endpoint belongs to LabDesk.
 #[tokio::main(flavor = "current_thread")]
 pub async fn do_check_software_update() -> hbb_common::ResultType<()> {
     let (request, url) =
-        hbb_common::version_check_request(hbb_common::VER_TYPE_RUSTDESK_CLIENT.to_string());
+        hbb_common::version_check_request(hbb_common::VER_TYPE_LABDESK_CLIENT.to_string());
     let url = if is_labdesk() {
         format!("{}/version/latest", LABDESK_SITE)
     } else {
@@ -1021,10 +850,6 @@ pub fn get_app_name() -> String {
     hbb_common::config::APP_NAME.read().unwrap().clone()
 }
 
-#[inline]
-pub fn is_rustdesk() -> bool {
-    hbb_common::config::APP_NAME.read().unwrap().eq("RustDesk")
-}
 
 #[inline]
 pub fn get_uri_prefix() -> String {
@@ -1078,38 +903,8 @@ pub fn get_api_server(api: String, custom: String) -> String {
     res
 }
 
-fn get_api_server_(api: String, custom: String) -> String {
-    // LabDesk accounts are global: login, address book and heartbeat always go
-    // to lab-desk.net whatever server profile is active. The per-profile api
-    // field is ignored on purpose (owner decision 2026-09-03).
-    if is_labdesk() {
-        return LABDESK_SITE.to_owned();
-    }
-    #[cfg(windows)]
-    if let Ok(lic) = crate::platform::windows::get_license_from_exe_name() {
-        if !lic.api.is_empty() {
-            return lic.api.clone();
-        }
-    }
-    if !api.is_empty() {
-        return api.to_owned();
-    }
-    let s0 = get_custom_rendezvous_server(custom);
-    if !s0.is_empty() {
-        let s = crate::increase_port(&s0, -2);
-        if s == s0 {
-            return format!("http://{}:{}", s, config::RENDEZVOUS_PORT - 2);
-        } else {
-            return format!("http://{}", s);
-        }
-    }
-    "https://admin.rustdesk.com".to_owned()
-}
-
-#[inline]
-pub fn is_public(url: &str) -> bool {
-    let url = url.to_ascii_lowercase();
-    url.contains("rustdesk.com/") || url.ends_with("rustdesk.com")
+fn get_api_server_(_api: String, _custom: String) -> String {
+    LABDESK_SITE.to_owned()
 }
 
 pub fn get_udp_punch_enabled() -> bool {
@@ -1130,9 +925,7 @@ pub fn get_local_option(key: &str) -> String {
     let v = LocalConfig::get_option(key);
     if key == keys::OPTION_ENABLE_UDP_PUNCH || key == keys::OPTION_ENABLE_IPV6_PUNCH {
         if v.is_empty() {
-            if !is_public(&Config::get_rendezvous_server()) {
-                return "N".to_owned();
-            }
+            return "N".to_owned();
         }
     }
     v
@@ -1140,7 +933,7 @@ pub fn get_local_option(key: &str) -> String {
 
 pub fn get_audit_server(api: String, custom: String, typ: String) -> String {
     let url = get_api_server(api, custom);
-    if url.is_empty() || is_public(&url) {
+    if url.is_empty() {
         return "".to_owned();
     }
     format!("{}/api/audit/{}", url, typ)
@@ -1164,7 +957,7 @@ fn can_fallback_to_raw_tcp(url: &str) -> bool {
 
 #[inline]
 fn should_use_tcp_proxy_for_api_url(url: &str, api_url: &str) -> bool {
-    if api_url.is_empty() || is_public(api_url) {
+    if api_url.is_empty() {
         return false;
     }
 
@@ -1892,9 +1685,6 @@ pub async fn get_key(sync: bool) -> String {
         let mut options = crate::ipc::get_options_async().await;
         options.remove("key").unwrap_or_default()
     };
-    if key.is_empty() {
-        key = config::RS_PUB_KEY.to_owned();
-    }
     key
 }
 
@@ -1997,7 +1787,7 @@ pub fn check_process(arg: &str, mut same_uid: bool) -> bool {
         if same_uid && p.user_id() != my_uid {
             continue;
         }
-        // on mac, p.cmd() get "/Applications/RustDesk.app/Contents/MacOS/RustDesk", "XPC_SERVICE_NAME=com.carriez.RustDesk_server"
+        // on mac, p.cmd() get "/Applications/LabDesk.app/Contents/MacOS/LabDesk", "XPC_SERVICE_NAME=com.carriez.LabDesk_server"
         let parg = if p.cmd().len() <= 1 { "" } else { &p.cmd()[1] };
         if arg.is_empty() {
             if !parg.starts_with("--") {
@@ -2148,10 +1938,10 @@ impl ThrottledInterval {
     }
 }
 
-pub type RustDeskInterval = ThrottledInterval;
+pub type LabDeskInterval = ThrottledInterval;
 
 #[inline]
-pub fn rustdesk_interval(i: Interval) -> ThrottledInterval {
+pub fn labdesk_interval(i: Interval) -> ThrottledInterval {
     ThrottledInterval::new(i)
 }
 
@@ -2356,7 +2146,8 @@ pub fn get_builtin_option(key: &str) -> String {
 
 #[inline]
 pub fn is_custom_client() -> bool {
-    get_app_name() != "RustDesk"
+    // The managed distribution uses the custom installer and configuration paths.
+    true
 }
 
 pub fn verify_login(_raw: &str, _id: &str) -> bool {
@@ -2768,12 +2559,12 @@ mod tests {
     // ThrottledInterval tick at the same time as tokio interval, if no sleeps
     #[allow(non_snake_case)]
     #[tokio::test]
-    async fn test_RustDesk_interval() {
+    async fn test_LabDesk_interval() {
         let base_intervals = [interval_maker, interval_at_maker];
         for maker in base_intervals.into_iter() {
             let mut tokio_timer = maker();
             let mut tokio_times = Vec::new();
-            let mut timer = rustdesk_interval(maker());
+            let mut timer = labdesk_interval(maker());
             let mut times = Vec::new();
             loop {
                 tokio::select! {
@@ -2817,10 +2608,10 @@ mod tests {
     // ThrottledInterval tick less times than tokio interval, if there're sleeps
     #[allow(non_snake_case)]
     #[tokio::test]
-    async fn test_RustDesk_interval_sleep() {
+    async fn test_LabDesk_interval_sleep() {
         let base_intervals = [interval_maker, interval_at_maker];
         for (i, maker) in base_intervals.into_iter().enumerate() {
-            let mut timer = rustdesk_interval(maker());
+            let mut timer = labdesk_interval(maker());
             let mut times = Vec::new();
             sleep(Duration::from_secs(3)).await;
             loop {
@@ -2876,30 +2667,6 @@ mod tests {
         );
     }
 
-    #[test]
-    fn test_is_public() {
-        // Test URLs containing "rustdesk.com/"
-        assert!(is_public("https://rustdesk.com/"));
-        assert!(is_public("https://www.rustdesk.com/"));
-        assert!(is_public("https://api.rustdesk.com/v1"));
-        assert!(is_public("https://API.RUSTDESK.COM/v1"));
-        assert!(is_public("https://rustdesk.com/path"));
-
-        // Test URLs ending with "rustdesk.com"
-        assert!(is_public("rustdesk.com"));
-        assert!(is_public("https://rustdesk.com"));
-        assert!(is_public("https://RustDesk.com"));
-        assert!(is_public("http://www.rustdesk.com"));
-        assert!(is_public("https://api.rustdesk.com"));
-
-        // Test non-public URLs
-        assert!(!is_public("https://example.com"));
-        assert!(!is_public("https://custom-server.com"));
-        assert!(!is_public("http://192.168.1.1"));
-        assert!(!is_public("localhost"));
-        assert!(!is_public("https://rustdesk.computer.com"));
-        assert!(!is_public("rustdesk.comhello.com"));
-    }
 
     #[test]
     fn test_should_use_tcp_proxy_for_api_url() {

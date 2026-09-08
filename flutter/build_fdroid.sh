@@ -1,7 +1,7 @@
 #!/bin/bash
 
 #
-# Script to build F-Droid release of RustDesk
+# Script to build F-Droid release of LabDesk
 #
 # Copyright (C) 2024, The RustDesk Authors
 #               2024, Vasyl Gello <vasek.gello@gmail.com>
@@ -77,25 +77,25 @@ arm64-v8a)
 	FLUTTER_TARGET=android-arm64
 	NDK_TARGET=aarch64-linux-android
 	RUST_TARGET=aarch64-linux-android
-	RUSTDESK_FEATURES='flutter,hwcodec'
+	LABDESK_FEATURES='flutter,hwcodec'
 	;;
 armeabi-v7a)
 	FLUTTER_TARGET=android-arm
 	NDK_TARGET=arm-linux-androideabi
 	RUST_TARGET=armv7-linux-androideabi
-	RUSTDESK_FEATURES='flutter,hwcodec'
+	LABDESK_FEATURES='flutter,hwcodec'
 	;;
 x86_64)
 	FLUTTER_TARGET=android-x64
 	NDK_TARGET=x86_64-linux-android
 	RUST_TARGET=x86_64-linux-android
-	RUSTDESK_FEATURES='flutter'
+	LABDESK_FEATURES='flutter'
 	;;
 x86)
 	FLUTTER_TARGET=android-x86
 	NDK_TARGET=i686-linux-android
 	RUST_TARGET=i686-linux-android
-	RUSTDESK_FEATURES='flutter'
+	LABDESK_FEATURES='flutter'
 	;;
 *)
 	echo "ERROR: Unknown Android ABI '${ANDROID_ABI}'!" >&2
@@ -135,7 +135,7 @@ prebuild)
 		.env.CARGO_NDK_VERSION \
 		.github/workflows/flutter-build.yml)"
 
-	# Flutter used to compile main Rustdesk library
+	# Flutter used to compile main LabDesk library
 
 	FLUTTER_VERSION="$(yq -r \
 		.env.ANDROID_FLUTTER_VERSION \
@@ -302,12 +302,12 @@ prebuild)
 		fi
 	fi
 
-	# Patch the RustDesk sources
+	# Patch the LabDesk sources
 
 	git apply res/fdroid/patches/*.patch
 
 	# If Flutter version used to generate bridge files differs from Flutter
-	# version used to compile Rustdesk library, generate bridge using the
+	# version used to compile LabDesk library, generate bridge using the
 	# `FLUTTER_BRIDGE_VERSION` an restore the pubspec later
 
 	if [ "${FLUTTER_VERSION}" != "${FLUTTER_BRIDGE_VERSION}" ]; then
@@ -350,6 +350,7 @@ prebuild)
 		# Generate FFI bindings
 
 		flutter_rust_bridge_codegen \
+			--class-name LabDesk \
 			--rust-input ./src/flutter_ffi.rs \
 			--dart-output ./flutter/lib/generated_bridge.dart \
 			--llvm-path "${BRIDGE_LLVM_PATH}"
@@ -367,7 +368,7 @@ prebuild)
 		unset BRIDGE_LLVM_PATH
 	fi
 
-	# Install Flutter version for RustDesk library build
+	# Install Flutter version for LabDesk library build
 
 	prepare_flutter "${FLUTTER_VERSION}" "${HOME}/flutter"
 
@@ -407,7 +408,7 @@ build)
 	# '.github/workflows/flutter-build.yml'
 	#
 
-	# Flutter used to compile main Rustdesk library
+	# Flutter used to compile main LabDesk library
 
 	FLUTTER_VERSION="$(yq -r \
 		.env.ANDROID_FLUTTER_VERSION \
@@ -453,7 +454,7 @@ build)
 
 	bash flutter/build_android_deps.sh "${ANDROID_ABI}"
 
-	# Build rustdesk lib
+	# Build labdesk lib
 
 	cargo ndk \
 		--platform 21 \
@@ -462,12 +463,12 @@ build)
 		build \
 		--locked \
 		--release \
-		--features "${RUSTDESK_FEATURES}"
+		--features "${LABDESK_FEATURES}"
 
 	mkdir -p "flutter/android/app/src/main/jniLibs/${ANDROID_ABI}"
 
-	cp "target/${RUST_TARGET}/release/liblibrustdesk.so" \
-		"flutter/android/app/src/main/jniLibs/${ANDROID_ABI}/librustdesk.so"
+	cp "target/${RUST_TARGET}/release/libliblabdesk.so" \
+		"flutter/android/app/src/main/jniLibs/${ANDROID_ABI}/liblabdesk.so"
 
 	cp "${ANDROID_NDK_HOME}/toolchains/llvm/prebuilt/linux-x86_64/sysroot/usr/lib/${NDK_TARGET}/libc++_shared.so" \
 		"flutter/android/app/src/main/jniLibs/${ANDROID_ABI}/"

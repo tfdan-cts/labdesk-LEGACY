@@ -1,4 +1,4 @@
-pkgname=rustdesk
+pkgname=labdesk
 pkgver=1.4.9
 pkgrel=0
 epoch=
@@ -23,13 +23,16 @@ md5sums=() #generate with 'makepkg -g'
 
 package() {
   if [[ ${FLUTTER} ]]; then
-	  mkdir -p "${pkgdir}/usr/share/rustdesk" && cp -r ${HBB}/flutter/build/linux/x64/release/bundle/* -t "${pkgdir}/usr/share/rustdesk"
+	  mkdir -p "${pkgdir}/usr/share/labdesk" && cp -r ${HBB}/flutter/build/linux/x64/release/bundle/* -t "${pkgdir}/usr/share/labdesk"
   fi
+  install -Dm 755 "$HBB/res/labdesk-helper" "${pkgdir}/usr/share/labdesk/labdesk-helper"
+  install -Dm 644 "$HBB/res/release-signing-public-key" "${pkgdir}/usr/share/labdesk/release-signing-public-key"
+  install -Dm 644 "$HBB/res/polkit/net.lab-desk.LabDesk.policy" "${pkgdir}/usr/share/polkit-1/actions/net.lab-desk.LabDesk.policy"
   mkdir -p "${pkgdir}/usr/bin"
-  pushd ${pkgdir} && ln -s /usr/share/rustdesk/rustdesk usr/bin/rustdesk && popd
-  install -Dm 644 $HBB/res/rustdesk.service -t "${pkgdir}/usr/share/rustdesk/files"
-  install -Dm 644 $HBB/res/rustdesk.desktop -t "${pkgdir}/usr/share/rustdesk/files"
-  install -Dm 644 $HBB/res/rustdesk-link.desktop -t "${pkgdir}/usr/share/rustdesk/files"
-  install -Dm 644 $HBB/res/128x128@2x.png "${pkgdir}/usr/share/icons/hicolor/256x256/apps/rustdesk.png"
-  install -Dm 644 $HBB/res/scalable.svg "${pkgdir}/usr/share/icons/hicolor/scalable/apps/rustdesk.svg"
+  pushd ${pkgdir} && ln -s /usr/share/labdesk/labdesk usr/bin/labdesk && popd
+  install -Dm 644 $HBB/res/labdesk.service -t "${pkgdir}/usr/share/labdesk/files"
+  install -Dm 644 $HBB/res/labdesk.desktop -t "${pkgdir}/usr/share/labdesk/files"
+  install -Dm 644 $HBB/res/labdesk-link.desktop -t "${pkgdir}/usr/share/labdesk/files"
+  install -Dm 644 $HBB/res/128x128@2x.png "${pkgdir}/usr/share/icons/hicolor/256x256/apps/labdesk.png"
+  install -Dm 644 $HBB/res/scalable.svg "${pkgdir}/usr/share/icons/hicolor/scalable/apps/labdesk.svg"
 }

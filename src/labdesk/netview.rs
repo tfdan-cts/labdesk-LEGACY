@@ -1,6 +1,6 @@
 // The per-adapter network view: the `net.adapters` attribute.
 //
-// The sampler's sysinfo fork (`rustdesk-org/sysinfo`, branch `rlim_max`)
+// The sampler's sysinfo fork (`labdesk-org/sysinfo`, branch `rlim_max`)
 // offers a name, a MAC and the two byte counters per interface and nothing
 // else, so link state and addresses come from the operating system here:
 // `getifaddrs` on Linux and macOS through the `libc` that `hbb_common`

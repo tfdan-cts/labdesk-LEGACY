@@ -39,16 +39,13 @@ g_arpsystemcomponent = {
     },
 }
 
-def default_revision_version():
-    return int(datetime.datetime.now().timestamp() / 60)
-
 def make_parser():
     parser = argparse.ArgumentParser(description="Msi preprocess script.")
     parser.add_argument(
         "-d",
         "--dist-dir",
         type=str,
-        default="../../rustdesk",
+        default="../../labdesk",
         help="The dist directory to install.",
     )
     parser.add_argument(
@@ -73,13 +70,13 @@ def make_parser():
         help='Connection type, e.g. "incoming", "outgoing". Default is empty, means incoming-outgoing',
     )
     parser.add_argument(
-        "--app-name", type=str, default="RustDesk", help="The app name."
+        "--app-name", type=str, default="LabDesk", help="The app name."
     )
     parser.add_argument(
         "-v", "--version", type=str, default="", help="The app version."
     )
     parser.add_argument(
-        "--revision-version", type=int, default=default_revision_version(), help="The revision version."
+        "--revision-version", type=int, required=True, help="The monotonically increasing application build number (1–65535)."
     )
     parser.add_argument(
         "-m",
@@ -128,8 +125,9 @@ def insert_components_between_tags(lines, index_start, app_name, dist_dir):
             # Don't generate Component Id and File Id like 'Component_{idx}' and 'File_{idx}'
             # because it will cause error
             # "Error WIX0130	The primary key 'xxxx' is duplicated in table 'Directory'"
+            # WiX derives a stable component GUID from the installed key-file path.
             to_insert_lines = f"""
-{indent}<Component Guid="{uuid.uuid4()}" {dir_attr}>
+{indent}<Component Guid="*" {dir_attr}>
 {indent}{g_indent_unit}<File Source="{file_path.as_posix()}" KeyPath="yes" Checksum="yes" />
 {indent}</Component>
 """
@@ -141,7 +139,7 @@ def insert_components_between_tags(lines, index_start, app_name, dist_dir):
 
 def gen_auto_component(app_name, dist_dir):
     return gen_content_between_tags(
-        "Package/Components/RustDesk.wxs",
+        "Package/Components/LabDesk.wxs",
         "<!--$AutoComonentStart$-->",
         "<!--$AutoComponentEnd$-->",
         lambda lines, index_start: insert_components_between_tags(
@@ -185,7 +183,7 @@ def replace_app_name_in_langs(app_name):
         with open(file_path, "r", encoding="utf-8") as f:
             lines = f.readlines()
         for i, line in enumerate(lines):
-            lines[i] = line.replace("RustDesk", app_name)
+            lines[i] = line.replace("LabDesk", app_name)
         with open(file_path, "w", encoding="utf-8") as f:
             f.writelines(lines)
 
@@ -195,8 +193,7 @@ def replace_app_name_in_custom_actions(app_name):
         with open(file_path, "r", encoding="utf-8") as f:
             lines = f.readlines()
         for i, line in enumerate(lines):
-            line = re.sub(r"\bRustDesk\b", app_name, line)
-            line = line.replace(f"{app_name} v4 Printer Driver", "RustDesk v4 Printer Driver")
+            line = re.sub(r"\bLabDesk\b", app_name, line)
             lines[i] = line
         with open(file_path, "w", encoding="utf-8") as f:
             f.writelines(lines)
@@ -459,28 +456,26 @@ def init_global_vars(dist_dir, app_name, args):
 
     def read_process_output(args):
         process = subprocess.Popen(
-            f"{dist_app} {args}",
+            [str(dist_app), args],
             stdout=subprocess.PIPE,
             stderr=subprocess.STDOUT,
-            shell=True,
         )
         output, _ = process.communicate()
         return output.decode("utf-8").strip()
 
     global g_version
     global g_build_date
-    g_version = args.version.replace("-", ".")
-    if g_version == "":
-        g_version = read_process_output("--version")
-    version_pattern = re.compile(r"\d+\.\d+\.\d+.*")
-    if not version_pattern.match(g_version):
-        print(f"Error: version {g_version} not found in {dist_app}")
+    app_version = args.version or read_process_output("--version")
+    version = re.fullmatch(r"(0|[1-9]\d*)\.(0|[1-9]\d*)\.(0|[1-9]\d*)(?:-[0-9A-Za-z-]+(?:\.[0-9A-Za-z-]+)*)?(?:\+[0-9A-Za-z-]+(?:\.[0-9A-Za-z-]+)*)?", app_version)
+    if not version:
+        print(f"Error: invalid application version {app_version}")
         return False
-    if g_version.count(".") == 2:
-        # https://github.com/dotnet/runtime/blob/5535e31a712343a63f5d7d796cd874e563e5ac14/src/libraries/System.Private.CoreLib/src/System/Version.cs
-        if args.revision_version < 0 or args.revision_version > 2147483647:
-            raise ValueError(f"Invalid revision version: {args.revision_version}")    
-        g_version = f"{g_version}.{args.revision_version}"
+    major, minor = map(int, version.group(1, 2))
+    if major > 255 or minor > 255 or not 1 <= args.revision_version <= 65535:
+        print("Error: MSI version fields exceed the supported 255.255.65535 bounds")
+        return False
+    # Windows Installer compares only three fields; the global build orders all candidates.
+    g_version = f"{major}.{minor}.{args.revision_version}"
 
     g_build_date = read_process_output("--build-date")
     build_date_pattern = re.compile(r"\d{4}-\d{2}-\d{2} \d{2}:\d{2}")
@@ -491,19 +486,6 @@ def init_global_vars(dist_dir, app_name, args):
     return True
 
 
-def update_license_file(app_name):
-    if app_name == "RustDesk":
-        return
-    license_file = Path(sys.argv[0]).parent.joinpath("Package/License.rtf")
-    with open(license_file, "r", encoding="utf-8") as f:
-        license_content = f.read()
-    license_content = license_content.replace("website rustdesk.com and other ", "")
-    license_content = license_content.replace("RustDesk", app_name)
-    license_content = re.sub(r"Purslane(?: Tech Pte\.)? Ltd", app_name, license_content, flags=re.IGNORECASE)
-    with open(license_file, "w", encoding="utf-8") as f:
-        f.write(license_content)
-
-
 def replace_component_guids_in_wxs():
     langs_dir = Path(sys.argv[0]).parent.joinpath("Package")
     for file_path in langs_dir.glob("**/*.wxs"):
@@ -512,9 +494,9 @@ def replace_component_guids_in_wxs():
 
         # <Component Id="Product.Registry.DefaultIcon" Guid="6DBF2690-0955-4C6A-940F-634DDA503F49">
         for i, line in enumerate(lines):
-            match = re.search(r'Component.+Guid="([^"]+)"', line)
+            match = re.search(r'<Component\s+Id="([^"]+)"[^>]*\sGuid="[^"]+"', line)
             if match:
-                lines[i] = re.sub(r'Guid="[^"]+"', f'Guid="{uuid.uuid4()}"', line)
+                lines[i] = re.sub(r'Guid="[^"]+"', f'Guid="{uuid.uuid5(uuid.NAMESPACE_OID, app_name + ".component." + match.group(1))}"', line)
 
         with open(file_path, "w", encoding="utf-8") as f:
             f.writelines(lines)
@@ -533,13 +515,10 @@ if __name__ == "__main__":
     if not init_global_vars(dist_dir, app_name, args):
         sys.exit(-1)
 
-    update_license_file(app_name)
-
     if not gen_pre_vars(args, dist_dir):
         sys.exit(-1)
 
-    if app_name != "RustDesk":
-        replace_component_guids_in_wxs()
+    replace_component_guids_in_wxs()
 
     if not gen_upgrade_info():
         sys.exit(-1)

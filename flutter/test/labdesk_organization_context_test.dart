@@ -88,6 +88,61 @@ String pref(String user) =>
     'labdesk-ui-org-v1-${base64Url.encode(utf8.encode(user))}';
 
 void main() {
+  test('an account without an organization is authenticated, not ready',
+      () async {
+    final h = _Harness();
+    addTearDown(h.controller.dispose);
+    expect(h.controller.authenticated, isFalse);
+    final loading = h.sync('token');
+    expect(h.controller.authenticated, isFalse);
+    h.directory(organizations: const []);
+    await loading;
+    expect(h.controller.authenticated, isTrue);
+    expect(h.controller.ready, isFalse);
+    await h.sync('');
+    expect(h.controller.authenticated, isFalse);
+  });
+
+  test('expired verification cannot retain a directory account as authority',
+      () async {
+    final h = _Harness();
+    addTearDown(h.controller.dispose);
+    final loading = h.sync('expired-token');
+    h.directory(organizations: ['a']);
+    await tick();
+    h.verify('a', status: 401);
+    await loading;
+    expect(h.controller.authenticated, isFalse);
+    expect(h.controller.userId, isEmpty);
+  });
+
+  test('invalidating an account rejects old in-flight verification', () async {
+    final h = _Harness();
+    addTearDown(h.controller.dispose);
+    final loading = h.sync('token');
+    h.directory(organizations: ['a']);
+    await tick();
+    h.controller.invalidate('Session expired');
+    h.verify('a');
+    await loading;
+    expect(h.controller.authenticated, isFalse);
+    expect(h.controller.ready, isFalse);
+  });
+
+  test('401 during a later organization selection removes previous authority',
+      () async {
+    final h = _Harness();
+    addTearDown(h.controller.dispose);
+    await h.ready();
+    expect(h.controller.authenticated, isTrue);
+    final selection = h.controller.select('b');
+    h.verify('b', status: 401);
+    await selection;
+    expect(h.controller.authenticated, isFalse);
+    expect(h.controller.ready, isFalse);
+    expect(h.controller.activeId, isNull);
+  });
+
   test('rejected authority clears context and permits membership refresh',
       () async {
     final h = _Harness();
@@ -248,9 +303,10 @@ void main() {
     await tick();
     h.verify('a');
     await next;
-    h.verify('b', status: 403);
+    h.verify('b', status: 401);
     await old;
     expect(h.controller.userId, 'new-user');
+    expect(h.controller.authenticated, isTrue);
     expect(h.controller.error, isNull);
     expect(h.controller.busy, isFalse);
     expect(h.controller.activeId, 'a');

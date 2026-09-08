@@ -14,7 +14,7 @@
 //   * `NVME_IOCTL_ADMIN_CMD` needs CAP_SYS_ADMIN.
 //   * `SG_IO` with an ATA PASS-THROUGH(16) command needs CAP_SYS_RAWIO.
 //
-// The daemon has both because `res/rustdesk.service` runs it as `User=root`.
+// The daemon has both because `res/labdesk.service` runs it as `User=root`.
 // In `--server`, running as the logged-in user, both privileged calls fail on
 // every machine and the collector is left with the free tier.
 //

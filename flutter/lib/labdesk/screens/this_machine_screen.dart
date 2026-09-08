@@ -19,7 +19,6 @@ class ThisMachineScreen extends StatelessWidget {
     required this.password,
     this.passwordIsTemporary = true,
     this.serviceRunning,
-    this.profileSwitcher,
     this.enrol,
     this.labnet,
     this.selfHeal,
@@ -44,7 +43,6 @@ class ThisMachineScreen extends StatelessWidget {
   final bool? serviceRunning;
 
   /// The client's own profile switcher, mounted whole rather than reimplemented.
-  final Widget? profileSwitcher;
 
   /// The organization card: enrolling this machine with an enrolment token.
   final Widget? enrol;
@@ -206,18 +204,6 @@ class ThisMachineScreen extends StatelessWidget {
               ],
             ),
           ),
-          if (profileSwitcher != null) ...[
-            const SizedBox(height: 16),
-            _Card(
-              // No title: the switcher mounted below prints its own "Server
-              // profile" caption, and the card was printing it a second time
-              // directly above it.
-              title: 'Servers',
-              subtitle:
-                  'Which ID and relay servers this machine is registered with.',
-              child: profileSwitcher!,
-            ),
-          ],
           if (enrol != null) ...[
             const SizedBox(height: 16),
             enrol!,

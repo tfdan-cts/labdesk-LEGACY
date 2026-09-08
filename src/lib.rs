@@ -14,9 +14,9 @@ pub use self::server::*;
 mod client;
 mod lan;
 #[cfg(not(any(target_os = "ios")))]
-mod rendezvous_mediator;
+mod network_service;
 #[cfg(not(any(target_os = "ios")))]
-pub use self::rendezvous_mediator::*;
+pub use self::network_service::*;
 /// cbindgen:ignore
 pub mod common;
 #[cfg(not(any(target_os = "ios")))]

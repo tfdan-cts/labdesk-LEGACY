@@ -34,7 +34,15 @@ def manifest():
 def fetch(name, entries):
     digest, url = entries[name]
     print(f"fetching {name}")
-    data = urllib.request.urlopen(url, timeout=120).read()
+    archive_dir = os.environ.get("LABDESK_NETBIRD_ARCHIVE_DIR")
+    cached = os.path.join(archive_dir, name) if archive_dir else None
+    if cached and os.path.isfile(cached):
+        with open(cached, "rb") as stream:
+            data = stream.read()
+    elif url.startswith("local:"):
+        sys.exit(f"{name}: pinned private archive missing; set LABDESK_NETBIRD_ARCHIVE_DIR")
+    else:
+        data = urllib.request.urlopen(url, timeout=120).read()
     got = hashlib.sha256(data).hexdigest()
     if got != digest:
         sys.exit(f"{name}: sha256 {got} does not match the pinned {digest}")

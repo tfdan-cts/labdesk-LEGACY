@@ -11,6 +11,3 @@ EXPORTS
     TryDeleteStartupShortcut
     SetPropertyFromConfig
     AddRegSoftwareSASGeneration
-    RemoveAmyuniIdd
-    InstallPrinter
-    UninstallPrinter

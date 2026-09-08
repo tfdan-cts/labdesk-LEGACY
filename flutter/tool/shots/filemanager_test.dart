@@ -238,6 +238,7 @@ Widget _pane({
     children: [
       FmPaneHeader(
         title: title,
+        subtitle: isLocal ? 'Local Computer' : 'Remote Computer',
         badge: LdIcon(platformGlyph, size: 18, color: C.textMuted),
       ),
       _tools(
@@ -419,7 +420,7 @@ void main() {
                       flex: 3,
                       child: _pane(
                         isLocal: true,
-                        title: 'Local Computer',
+                        title: 'Local workstation',
                         platformGlyph: LdIcons.linux,
                         location: _bread(['home', 'ops', 'lab']),
                         entries: _local,
@@ -437,7 +438,7 @@ void main() {
                       flex: 3,
                       child: _pane(
                         isLocal: false,
-                        title: 'Remote Computer',
+                        title: 'Remote workstation',
                         platformGlyph: LdIcons.windows,
                         location: _bread(['C:', 'lab', 'incoming']),
                         entries: _remote,

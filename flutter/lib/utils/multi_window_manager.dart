@@ -8,6 +8,7 @@ import 'package:flutter_hbb/consts.dart';
 import 'package:flutter_hbb/common.dart';
 import 'package:flutter_hbb/main.dart';
 import 'package:flutter_hbb/models/input_model.dart';
+import 'package:flutter_hbb/labdesk/services/desktop_session_access.dart';
 
 /// must keep the order
 // ignore: constant_identifier_names
@@ -52,10 +53,15 @@ class MultiWindowCallResult {
 /// Window Manager
 /// mainly use it in `Main Window`
 /// use it in sub window is not recommended
-class RustDeskMultiWindowManager {
-  RustDeskMultiWindowManager._();
+class LabDeskMultiWindowManager {
+  LabDeskMultiWindowManager._();
 
-  static final instance = RustDeskMultiWindowManager._();
+  @visibleForTesting
+  LabDeskMultiWindowManager.forTesting({List<int> terminalWindows = const []}) {
+    _terminalWindows.addAll(terminalWindows);
+  }
+
+  static final instance = LabDeskMultiWindowManager._();
 
   final Set<int> _inactiveWindows = {};
   final Set<int> _activeWindows = {};
@@ -150,7 +156,11 @@ class RustDeskMultiWindowManager {
     String msg,
     List<int> windows,
     bool withScreenRect,
+    {DesktopSessionContext? authority}
   ) async {
+    if (authority != null && !desktopSessionAccess.accepts(authority)) {
+      return kInvalidWindowId;
+    }
     final windowController = await DesktopMultiWindow.createWindow(msg);
     if (isWindows) {
       windowController.setInitBackgroundColor(Colors.black);
@@ -187,11 +197,14 @@ class RustDeskMultiWindowManager {
     List<int> windows,
     String msg, {
     Rect? screenRect,
+    DesktopSessionContext? authority,
   }) async {
+    bool current() => authority == null || desktopSessionAccess.accepts(authority);
+    if (!current()) return MultiWindowCallResult(kInvalidWindowId, null);
     if (openInTabs) {
       if (windows.isEmpty) {
         final windowId = await newSessionWindow(
-            type, remoteId, msg, windows, screenRect != null);
+            type, remoteId, msg, windows, screenRect != null, authority: authority);
         return MultiWindowCallResult(windowId, null);
       } else {
         return call(type, methodName, msg);
@@ -204,6 +217,7 @@ class RustDeskMultiWindowManager {
               await restoreWindowPosition(type,
                   windowId: windowId, peerId: remoteId);
             }
+            if (!current()) return MultiWindowCallResult(kInvalidWindowId, null);
             await DesktopMultiWindow.invokeMethod(windowId, methodName, msg);
             if (methodName != kWindowEventNewRemoteDesktop) {
               WindowController.fromWindowId(windowId).show();
@@ -214,7 +228,7 @@ class RustDeskMultiWindowManager {
         }
       }
       final windowId = await newSessionWindow(
-          type, remoteId, msg, windows, screenRect != null);
+          type, remoteId, msg, windows, screenRect != null, authority: authority);
       return MultiWindowCallResult(windowId, null);
     }
   }
@@ -231,6 +245,8 @@ class RustDeskMultiWindowManager {
     bool? isSharedPassword,
     String? connToken,
   }) async {
+    final authority = desktopSessionAccess.capture();
+    if (authority == null) return MultiWindowCallResult(kInvalidWindowId, null);
     var params = {
       "type": type.index,
       "id": remoteId,
@@ -257,14 +273,19 @@ class RustDeskMultiWindowManager {
 
     if (windows.length > 1 || !openInTabs) {
       for (final windowId in windows) {
-        if (await DesktopMultiWindow.invokeMethod(
-            windowId, kWindowEventActiveSession, remoteId)) {
+        final active = await DesktopMultiWindow.invokeMethod(
+            windowId, kWindowEventActiveSession, remoteId);
+        if (!desktopSessionAccess.accepts(authority)) {
+          return MultiWindowCallResult(kInvalidWindowId, null);
+        }
+        if (active == true) {
           return MultiWindowCallResult(windowId, null);
         }
       }
     }
 
-    return _newSession(openInTabs, type, methodName, remoteId, windows, msg);
+    return _newSession(openInTabs, type, methodName, remoteId, windows, msg,
+        authority: authority);
   }
 
   Future<MultiWindowCallResult> newRemoteDesktop(
@@ -353,13 +374,20 @@ class RustDeskMultiWindowManager {
     bool? isSharedPassword,
     bool? forceRelay,
     String? connToken,
+    bool terminalAdmin = false,
   }) async {
+    final authority = desktopSessionAccess.capture();
+    if (authority == null) return MultiWindowCallResult(kInvalidWindowId, null);
     // Iterate through terminal windows in reverse order to prioritize
     // the most recently added or used windows, as they are more likely
     // to have an active session.
     for (final windowId in _terminalWindows.reversed) {
-      if (await DesktopMultiWindow.invokeMethod(
-          windowId, kWindowEventActiveSession, remoteId)) {
+      final active = await DesktopMultiWindow.invokeMethod(
+          windowId, kWindowEventActiveSession, remoteId);
+      if (!desktopSessionAccess.accepts(authority)) {
+        return MultiWindowCallResult(kInvalidWindowId, null);
+      }
+      if (active == true) {
         return MultiWindowCallResult(windowId, null);
       }
     }
@@ -378,8 +406,13 @@ class RustDeskMultiWindowManager {
     final msg = jsonEncode(params);
 
     // Always create a new window for terminal
+    if (!desktopSessionAccess.accepts(authority)) {
+      return MultiWindowCallResult(kInvalidWindowId, null);
+    }
+    if (terminalAdmin) setEnvTerminalAdmin();
     final windowId = await newSessionWindow(
-        WindowType.Terminal, remoteId, msg, _terminalWindows, false);
+        WindowType.Terminal, remoteId, msg, _terminalWindows, false,
+        authority: authority);
     return MultiWindowCallResult(windowId, null);
   }
 
@@ -532,7 +565,7 @@ class RustDeskMultiWindowManager {
   /// [Availability]
   /// This function should only be called from main window.
   /// For other windows, please post a unregister(hide) event to main window handler:
-  /// `rustDeskWinManager.call(WindowType.Main, kWindowEventHide, {"id": windowId!});`
+  /// `labDeskWinManager.call(WindowType.Main, kWindowEventHide, {"id": windowId!});`
   Future<void> unregisterActiveWindow(int windowId) async {
     _activeWindows.remove(windowId);
     if (windowId != kMainWindowId) {
@@ -583,4 +616,4 @@ class RustDeskMultiWindowManager {
   }
 }
 
-final rustDeskWinManager = RustDeskMultiWindowManager.instance;
+final labDeskWinManager = LabDeskMultiWindowManager.instance;

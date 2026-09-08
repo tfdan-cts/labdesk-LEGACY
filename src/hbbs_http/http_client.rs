@@ -12,8 +12,57 @@ use hbb_common::{
 };
 use reqwest::{blocking::Client as SyncClient, Client as AsyncClient};
 
+#[cfg(test)]
+mod tls_security_tests {
+    use super::*;
+    use hbb_common::tokio::{self, io::{AsyncReadExt, AsyncWriteExt}, net::TcpListener};
+    use std::{sync::Arc, time::Duration};
+    use tokio_rustls::{rustls::{self, pki_types::{CertificateDer, PrivateKeyDer, PrivatePkcs8KeyDer}}, TlsAcceptor};
+
+    #[tokio::test]
+    async fn untrusted_tls_cannot_be_enabled_by_flags_cache_or_request_fallback() {
+        assert!(Config::get_socks().is_none(), "TLS fixture requires proxy-free test configuration");
+        let certificate = CertificateDer::from(include_bytes!("../../tests/fixtures/tls/localhost-cert.der").to_vec());
+        let key = PrivateKeyDer::Pkcs8(PrivatePkcs8KeyDer::from(include_bytes!("../../tests/fixtures/tls/localhost-test-key.der").to_vec()));
+        let config = rustls::ServerConfig::builder_with_provider(Arc::new(rustls::crypto::ring::default_provider()))
+            .with_safe_default_protocol_versions().unwrap()
+            .with_no_client_auth().with_single_cert(vec![certificate], key).unwrap();
+        let acceptor = TlsAcceptor::from(Arc::new(config));
+        let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let url = format!("https://{}/", listener.local_addr().unwrap());
+        let server = tokio::spawn(async move {
+            while let Ok((socket, _)) = listener.accept().await {
+                let acceptor = acceptor.clone();
+                tokio::spawn(async move {
+                    if let Ok(Ok(mut tls)) = tokio::time::timeout(Duration::from_secs(5), acceptor.accept(socket)).await {
+                        let mut input = [0u8; 4096];
+                        if matches!(tokio::time::timeout(Duration::from_secs(5), tls.read(&mut input)).await, Ok(Ok(n)) if n > 0) {
+                            let _ = tls.write_all(b"HTTP/1.1 200 OK\r\nContent-Length: 2\r\nConnection: close\r\n\r\nok").await;
+                        }
+                    }
+                });
+            }
+        });
+        // Positive fixture control: the server responds if a test client deliberately trusts it.
+        let control = AsyncClient::builder().no_proxy().danger_accept_invalid_certs(true).build().unwrap()
+            .get(&url).timeout(Duration::from_secs(5)).send().await.unwrap();
+        assert_eq!(control.status().as_u16(), 200);
+        assert!(create_http_client_async(TlsType::Rustls, false).get(&url).timeout(Duration::from_secs(5)).send().await.is_err());
+        let explicit_flag = create_http_client_async(TlsType::Rustls, true).get(&url).timeout(Duration::from_secs(5)).send().await.is_err();
+        let native_flag = create_http_client_async(TlsType::NativeTls, true).get(&url).timeout(Duration::from_secs(5)).send().await.is_err();
+        let post_fallback = crate::post_request(url.clone(), "{}".into(), "").await.is_err();
+        upsert_tls_cache(&url, TlsType::Rustls, true);
+        let cached_flag = create_http_client_async_with_url(&url).await.get(&url).timeout(Duration::from_secs(5)).send().await.is_err();
+        let sync_url = url.clone();
+        let blocking_flag = tokio::task::spawn_blocking(move || create_http_client_with_url(&sync_url).get(&sync_url).timeout(Duration::from_secs(5)).send().is_err()).await.unwrap();
+        server.abort();
+        assert!(explicit_flag && native_flag && post_fallback && cached_flag && blocking_flag,
+            "Certificate rejection: explicit={explicit_flag}, native={native_flag}, post={post_fallback}, cached={cached_flag}, blocking={blocking_flag}");
+    }
+}
+
 macro_rules! configure_http_client {
-    ($builder:expr, $tls_type:expr, $danger_accept_invalid_cert:expr, $Client: ty) => {{
+    ($builder:expr, $tls_type:expr, $Client: ty) => {{
         // https://github.com/rustdesk/rustdesk/issues/11569
         // https://docs.rs/reqwest/latest/reqwest/struct.ClientBuilder.html#method.no_proxy
         let mut builder = $builder.no_proxy();
@@ -22,13 +71,10 @@ macro_rules! configure_http_client {
             TlsType::Plain => {}
             TlsType::NativeTls => {
                 builder = builder.use_native_tls();
-                if $danger_accept_invalid_cert {
-                    builder = builder.danger_accept_invalid_certs(true);
-                }
             }
             TlsType::Rustls => {
                 #[cfg(any(target_os = "android", target_os = "ios"))]
-                match hbb_common::verifier::client_config($danger_accept_invalid_cert) {
+                match hbb_common::verifier::client_config(false) {
                     Ok(client_config) => {
                         builder = builder.use_preconfigured_tls(client_config);
                     }
@@ -39,9 +85,6 @@ macro_rules! configure_http_client {
                 #[cfg(not(any(target_os = "android", target_os = "ios")))]
                 {
                     builder = builder.use_rustls_tls();
-                    if $danger_accept_invalid_cert {
-                        builder = builder.danger_accept_invalid_certs(true);
-                    }
                 }
             }
         }
@@ -98,17 +141,19 @@ macro_rules! configure_http_client {
     }};
 }
 
-pub fn create_http_client(tls_type: TlsType, danger_accept_invalid_cert: bool) -> SyncClient {
+// Keep the existing internal call signature while retiring its unsafe option.
+// Every LabDesk HTTP client validates the server certificate.
+pub fn create_http_client(tls_type: TlsType, _danger_accept_invalid_cert: bool) -> SyncClient {
     let builder = SyncClient::builder();
-    configure_http_client!(builder, tls_type, danger_accept_invalid_cert, SyncClient)
+    configure_http_client!(builder, tls_type, SyncClient)
 }
 
 pub fn create_http_client_async(
     tls_type: TlsType,
-    danger_accept_invalid_cert: bool,
+    _danger_accept_invalid_cert: bool,
 ) -> AsyncClient {
     let builder = AsyncClient::builder();
-    configure_http_client!(builder, tls_type, danger_accept_invalid_cert, AsyncClient)
+    configure_http_client!(builder, tls_type, AsyncClient)
 }
 
 pub fn get_url_for_tls<'a>(url: &'a str, proxy_conf: &'a Option<Socks5Server>) -> &'a str {

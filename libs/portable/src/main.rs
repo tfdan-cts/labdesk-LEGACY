@@ -9,6 +9,8 @@ use bin_reader::BinaryReader;
 
 pub mod bin_reader;
 #[cfg(windows)]
+mod protected_update;
+#[cfg(windows)]
 mod ui;
 
 #[cfg(windows)]
@@ -17,8 +19,8 @@ const APP_METADATA: &[u8] = include_bytes!("../app_metadata.toml");
 const APP_METADATA: &[u8] = &[];
 const APP_METADATA_CONFIG: &str = "meta.toml";
 const META_LINE_PREFIX_TIMESTAMP: &str = "timestamp = ";
-const APP_PREFIX: &str = "rustdesk";
-const APPNAME_RUNTIME_ENV_KEY: &str = "RUSTDESK_APPNAME";
+const APP_PREFIX: &str = "labdesk";
+const APPNAME_RUNTIME_ENV_KEY: &str = "LABDESK_APPNAME";
 #[cfg(windows)]
 const SET_FOREGROUND_WINDOW_ENV_KEY: &str = "SET_FOREGROUND_WINDOW";
 
@@ -132,14 +134,27 @@ fn is_windows_7() -> bool {
     false
 }
 
-fn execute(path: PathBuf, args: Vec<String>, _ui: bool) {
+fn execute(
+    path: PathBuf,
+    args: Vec<String>,
+    _ui: bool,
+    update_temp: Option<&Path>,
+) -> std::io::Result<i32> {
     println!("executing {}", path.display());
     // setup env
     let exe = std::env::current_exe().unwrap_or_default();
     let exe_name = exe.file_name().unwrap_or_default();
     // run executable
-    let mut cmd = Command::new(path);
+    let mut cmd = Command::new(&path);
     cmd.args(args);
+    if let Some(temporary) = update_temp {
+        let directory = path
+            .parent()
+            .ok_or_else(|| std::io::Error::other("Missing update directory"))?;
+        cmd.current_dir(directory)
+            .env("TEMP", temporary)
+            .env("TMP", temporary);
+    }
     #[cfg(windows)]
     {
         use std::os::windows::process::CommandExt;
@@ -159,18 +174,18 @@ fn execute(path: PathBuf, args: Vec<String>, _ui: bool) {
             .stdout(Stdio::inherit())
             .stderr(Stdio::inherit());
     }
-    let _child = cmd.spawn();
+    let mut child = cmd.spawn()?;
 
     #[cfg(windows)]
     if _ui {
-        match _child {
-            Ok(child) => unsafe {
-                winapi::um::winuser::AllowSetForegroundWindow(child.id() as u32);
-            },
-            Err(e) => {
-                eprintln!("{:?}", e);
-            }
+        unsafe {
+            winapi::um::winuser::AllowSetForegroundWindow(child.id() as u32);
         }
+    }
+    if update_temp.is_some() {
+        Ok(child.wait()?.code().unwrap_or(1))
+    } else {
+        Ok(0)
     }
 }
 
@@ -194,6 +209,29 @@ fn main() {
 
     let mut ui = false;
     let reader = BinaryReader::default();
+    #[cfg(windows)]
+    if args.iter().any(|arg| arg == "--update") {
+        let result = (|| -> std::io::Result<i32> {
+            let directory = protected_update::UpdateDirectory::create()?;
+            let payload = directory.path().join("payload");
+            let temporary = directory.path().join("temp");
+            std::fs::create_dir(&payload)?;
+            std::fs::create_dir(&temporary)?;
+            let exe = reader.extract_update(&payload)?;
+            // The directory remains protected until the inner executable and its
+            // DLLs finish. Never reuse the ordinary per-user portable cache here.
+            // The native updater copies its payload directory into the install
+            // directory; keep transient installer scripts outside that tree.
+            execute(exe, args, false, Some(&temporary))
+        })();
+        match result {
+            Ok(code) => std::process::exit(code),
+            Err(error) => {
+                eprintln!("Protected update failed: {error}");
+                std::process::exit(1);
+            }
+        }
+    }
     if let Some(exe) = setup(
         reader,
         None,
@@ -206,7 +244,10 @@ fn main() {
         } else if quick_support {
             args = vec!["--quick_support".to_owned()];
         }
-        execute(exe, args, ui);
+        if let Err(error) = execute(exe, args, ui, None) {
+            eprintln!("Failed to launch portable application: {error}");
+            std::process::exit(1);
+        }
     }
 }
 
@@ -216,7 +257,7 @@ mod win {
 
     // Used for privacy mode(magnifier impl).
     pub const RUNTIME_BROKER_EXE: &'static str = "C:\\Windows\\System32\\RuntimeBroker.exe";
-    pub const WIN_TOPMOST_INJECTED_PROCESS_EXE: &'static str = "RuntimeBroker_rustdesk.exe";
+    pub const WIN_TOPMOST_INJECTED_PROCESS_EXE: &'static str = "RuntimeBroker_labdesk.exe";
 
     pub(super) fn copy_runtime_broker(dir: &Path) {
         let src = RUNTIME_BROKER_EXE;
@@ -232,7 +273,7 @@ mod win {
             }
         }
         let _allow_err = Command::new("taskkill")
-            .args(&["/F", "/IM", "RuntimeBroker_rustdesk.exe"])
+            .args(&["/F", "/IM", "RuntimeBroker_labdesk.exe"])
             .creation_flags(winapi::um::winbase::CREATE_NO_WINDOW)
             .output();
         let _allow_err = std::fs::copy(src, &format!("{}\\{}", dir.to_string_lossy(), tgt));

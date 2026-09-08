@@ -98,7 +98,7 @@ String? _peerPlatformGlyph(String tabKey) {
 }
 
 /// The window's own buttons carry [IconData] in their public API, and four
-/// pages outside this file still hand them Material and RustDesk icon-font
+/// pages outside this file still hand them Material and LabDesk icon-font
 /// values. Mapping here means those callers draw the console's glyphs without
 /// being touched, and anything unmapped still draws what it asked for.
 final Map<IconData, String> _kLdGlyphs = {
@@ -534,7 +534,7 @@ class _DesktopTabState extends State<DesktopTab>
         controller.clear();
       }
       await windowController.hide();
-      await rustDeskWinManager
+      await labDeskWinManager
           .call(WindowType.Main, kWindowEventHide, {"id": kWindowId!});
     }
 
@@ -558,8 +558,8 @@ class _DesktopTabState extends State<DesktopTab>
 
     // hide window on close
     if (isMainWindow) {
-      if (rustDeskWinManager.getActiveWindows().contains(kMainWindowId)) {
-        await rustDeskWinManager.unregisterActiveWindow(kMainWindowId);
+      if (labDeskWinManager.getActiveWindows().contains(kMainWindowId)) {
+        await labDeskWinManager.unregisterActiveWindow(kMainWindowId);
       }
       // macOS specific workaround, the window is not hiding when in fullscreen.
       if (isMacOS && await windowManager.isFullScreen()) {
@@ -1192,7 +1192,11 @@ class _TabState extends State<_Tab> with RestorationMixin {
           constraints: BoxConstraints(maxWidth: widget.maxLabelWidth ?? 200),
           child: Tooltip(
             message:
-                widget.tabType == DesktopTabType.main ? '' : widget.label.value,
+                widget.tabType == DesktopTabType.main
+                    ? ''
+                    : widget.label.value == widget.tabInfoKey
+                        ? widget.label.value
+                        : '${widget.label.value}\n${widget.tabInfoKey}',
             child: Text(
               widget.tabType == DesktopTabType.main
                   ? translate(widget.label.value)
@@ -1369,7 +1373,7 @@ class AddButton extends StatelessWidget {
     return ActionIcon(
         message: 'New Connection',
         icon: IconFont.add,
-        onTap: () => rustDeskWinManager.call(
+        onTap: () => labDeskWinManager.call(
             WindowType.Main, kWindowMainWindowOnTop, ""),
         isClose: false);
   }

@@ -1,0 +1,1 @@
+These public test fixtures form a self-signed localhost TLS endpoint for certificate-rejection regressions. The private key is deliberately public and has never protected a real service or account. Do not trust or install this certificate.

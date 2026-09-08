@@ -760,7 +760,7 @@ mod tests {
     /// Regenerate the committed byte fixtures from the builders in `ata::fixture`
     /// and `nvme::fixture`, which document every field they set:
     ///
-    ///   LABDESK_WRITE_FIXTURES=1 cargo test -p rustdesk labdesk::disk::write_fixtures
+    ///   LABDESK_WRITE_FIXTURES=1 cargo test -p labdesk labdesk::disk::write_fixtures
     ///
     /// It is inert without that variable, so a normal test run never writes to
     /// the source tree. `fixtures_match_builders` in ata.rs and nvme.rs is what

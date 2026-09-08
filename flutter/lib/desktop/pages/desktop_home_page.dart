@@ -12,7 +12,6 @@ import 'package:flutter_hbb/consts.dart';
 import 'package:flutter_hbb/desktop/pages/connection_page.dart';
 import 'package:flutter_hbb/desktop/pages/desktop_setting_page.dart';
 import 'package:flutter_hbb/desktop/pages/desktop_tab_page.dart';
-import 'package:flutter_hbb/desktop/widgets/server_profile_switcher.dart';
 import 'package:flutter_hbb/desktop/widgets/update_progress.dart';
 import 'package:flutter_hbb/models/platform_model.dart';
 import 'package:flutter_hbb/models/server_model.dart';
@@ -25,10 +24,13 @@ import 'package:provider/provider.dart';
 import 'package:url_launcher/url_launcher.dart';
 import 'package:window_manager/window_manager.dart';
 import 'package:window_size/window_size.dart' as window_size;
+import 'package:flutter_hbb/labdesk/services/desktop_session_access.dart';
 import '../widgets/button.dart';
 
 class DesktopHomePage extends StatefulWidget {
-  const DesktopHomePage({Key? key}) : super(key: key);
+  const DesktopHomePage({Key? key, this.noticesOnly = false}) : super(key: key);
+
+  final bool noticesOnly;
 
   @override
   State<DesktopHomePage> createState() => _DesktopHomePageState();
@@ -60,6 +62,10 @@ class _DesktopHomePageState extends State<DesktopHomePage>
   @override
   Widget build(BuildContext context) {
     super.build(context);
+    if (widget.noticesOnly) {
+      return Obx(() => buildHelpCards(stateGlobal.updateUrl.value,
+          platformOnly: true));
+    }
     final isIncomingOnly = bind.isIncomingOnly();
     return _buildBlock(
         child: Row(
@@ -92,7 +98,6 @@ class _DesktopHomePageState extends State<DesktopHomePage>
         child: loadLogo(),
       ),
       buildTip(context),
-      if (!isOutgoingOnly) const ServerProfileSwitcher(),
       if (!isOutgoingOnly) buildIDBoard(context),
       if (!isOutgoingOnly) buildPasswordBoard(context),
       FutureBuilder<Widget>(
@@ -431,11 +436,11 @@ class _DesktopHomePageState extends State<DesktopHomePage>
     );
   }
 
-  Widget buildHelpCards(String updateUrl) {
-    if (!bind.isCustomClient() &&
+  Widget buildHelpCards(String updateUrl, {bool platformOnly = false}) {
+    if (!platformOnly && !bind.isCustomClient() &&
         updateUrl.isNotEmpty &&
         !isCardClosed &&
-        bind.mainUriPrefixSync().contains('rustdesk')) {
+        bind.mainUriPrefixSync().contains('labdesk')) {
       final isToUpdate = (isWindows || isMacOS) && bind.mainIsInstalled();
       String btnText = isToUpdate ? 'Update' : 'Download';
       GestureTapCallback onPressed = () async {
@@ -463,18 +468,18 @@ class _DesktopHomePageState extends State<DesktopHomePage>
     }
 
     if (isWindows && !bind.isDisableInstallation()) {
-      if (!bind.mainIsInstalled()) {
+      if (!platformOnly && !bind.mainIsInstalled()) {
         return buildInstallCard(
             "", bind.isOutgoingOnly() ? "" : "install_tip", "Install",
             () async {
-          await rustDeskWinManager.closeAllSubWindows();
+          await labDeskWinManager.closeAllSubWindows();
           bind.mainGotoInstall();
         });
-      } else if (bind.mainIsInstalledLowerVersion()) {
+      } else if (bind.mainIsInstalled() && bind.mainIsInstalledLowerVersion()) {
         return buildInstallCard(
             "Status", "Your installation is lower version.", "Click to upgrade",
             () async {
-          await rustDeskWinManager.closeAllSubWindows();
+          await labDeskWinManager.closeAllSubWindows();
           bind.mainUpdateMe();
         });
       }
@@ -498,7 +503,7 @@ class _DesktopHomePageState extends State<DesktopHomePage>
           bind.mainIsCanInputMonitoring(prompt: true);
           watchIsInputMonitoring = true;
         }, help: 'Help', link: translate("doc_mac_permission"));
-      } else if (!isOutgoingOnly &&
+      } else if (!platformOnly && !isOutgoingOnly &&
           !svcStopped.value &&
           bind.mainIsInstalled() &&
           !bind.mainIsInstalledDaemon(prompt: false)) {
@@ -532,7 +537,7 @@ class _DesktopHomePageState extends State<DesktopHomePage>
             marginTop: LinuxCards.isEmpty ? 20.0 : 5.0,
             help: 'Help',
             link:
-                'https://rustdesk.com/docs/en/client/linux/#permissions-issue',
+                'https://lab-desk.net/help?topic=device&entry=manual-linux-display&view=manual',
             closeButton: true,
             closeOption: keyShowSelinuxHelpTip,
           ));
@@ -543,13 +548,13 @@ class _DesktopHomePageState extends State<DesktopHomePage>
             "Warning", "wayland_experiment_tip", "", () async {},
             marginTop: LinuxCards.isEmpty ? 20.0 : 5.0,
             help: 'Help',
-            link: 'https://rustdesk.com/docs/en/client/linux/#x11-required'));
+            link: 'https://lab-desk.net/help?topic=device&entry=manual-linux-display&view=manual'));
       } else if (bind.mainIsLoginWayland()) {
         LinuxCards.add(buildInstallCard("Warning",
             "Login screen using Wayland is not supported", "", () async {},
             marginTop: LinuxCards.isEmpty ? 20.0 : 5.0,
             help: 'Help',
-            link: 'https://rustdesk.com/docs/en/client/linux/#login-screen'));
+            link: 'https://lab-desk.net/help?topic=device&entry=manual-linux-display&view=manual'));
       }
       if (LinuxCards.isNotEmpty) {
         return Column(
@@ -557,7 +562,7 @@ class _DesktopHomePageState extends State<DesktopHomePage>
         );
       }
     }
-    if (bind.isIncomingOnly()) {
+    if (!platformOnly && bind.isIncomingOnly()) {
       return Align(
         alignment: Alignment.centerRight,
         child: OutlinedButton(
@@ -572,7 +577,7 @@ class _DesktopHomePageState extends State<DesktopHomePage>
         ),
       ).marginAll(14);
     }
-    return Container();
+    return const SizedBox.shrink();
   }
 
   Widget buildInstallCard(String title, String content, String btnText,
@@ -728,7 +733,7 @@ class _DesktopHomePageState extends State<DesktopHomePage>
           watchIsInputMonitoring = false;
           // Do not notify for now.
           // Monitoring may not take effect until the process is restarted.
-          // rustDeskWinManager.call(
+          // labDeskWinManager.call(
           //     WindowType.RemoteDesktop, kWindowDisableGrabKeyboard, '');
           setState(() {});
         }
@@ -749,7 +754,7 @@ class _DesktopHomePageState extends State<DesktopHomePage>
       }
     });
     Get.put<RxBool>(svcStopped, tag: 'stop-service');
-    rustDeskWinManager.registerActiveWindowListener(onActiveWindowChanged);
+    labDeskWinManager.registerActiveWindowListener(onActiveWindowChanged);
 
     screenToMap(window_size.Screen screen) => {
           'frame': {
@@ -775,7 +780,7 @@ class _DesktopHomePageState extends State<DesktopHomePage>
       return false;
     }
 
-    rustDeskWinManager.setMethodHandler((call, fromWindowId) async {
+    labDeskWinManager.setMethodHandler((call, fromWindowId) async {
       if (!isChattyMethod(call.method)) {
         debugPrint(
           "[Main] call ${call.method} with args ${call.arguments} from window $fromWindowId");
@@ -797,9 +802,9 @@ class _DesktopHomePageState extends State<DesktopHomePage>
       } else if (call.method == kWindowActionRebuild) {
         reloadCurrentWindow();
       } else if (call.method == kWindowEventShow) {
-        await rustDeskWinManager.registerActiveWindow(call.arguments["id"]);
+        await labDeskWinManager.registerActiveWindow(call.arguments["id"]);
       } else if (call.method == kWindowEventHide) {
-        await rustDeskWinManager.unregisterActiveWindow(call.arguments['id']);
+        await labDeskWinManager.unregisterActiveWindow(call.arguments['id']);
       } else if (call.method == kWindowConnect) {
         await connectMainDesktop(
           call.arguments['id'],
@@ -811,7 +816,10 @@ class _DesktopHomePageState extends State<DesktopHomePage>
           password: call.arguments['password'],
           forceRelay: call.arguments['forceRelay'],
           connToken: call.arguments['connToken'],
+          terminalAdmin: call.arguments['terminalAdmin'] == true,
         );
+      } else if (call.method == DesktopSessionAccess.verifyMethod) {
+        return desktopSessionAccess.acceptsNonce(call.arguments);
       } else if (call.method == kWindowBumpMouse) {
         return RdPlatformChannel.instance.bumpMouse(
           dx: call.arguments['dx'],
@@ -831,7 +839,7 @@ class _DesktopHomePageState extends State<DesktopHomePage>
           debugPrint("Failed to parse window type '${call.arguments}': $e");
         }
         if (windowId != null && windowType != null) {
-          await rustDeskWinManager.moveTabToNewWindow(
+          await labDeskWinManager.moveTabToNewWindow(
               windowId, args[1], args[2], windowType);
         }
       } else if (call.method == kWindowEventOpenMonitorSession) {
@@ -842,13 +850,13 @@ class _DesktopHomePageState extends State<DesktopHomePage>
         final displayCount = args['display_count'] as int;
         final windowType = args['window_type'] as int;
         final screenRect = parseParamScreenRect(args);
-        await rustDeskWinManager.openMonitorSession(
+        await labDeskWinManager.openMonitorSession(
             windowId, peerId, display, displayCount, screenRect, windowType);
       } else if (call.method == kWindowEventRemoteWindowCoords) {
         final windowId = int.tryParse(call.arguments);
         if (windowId != null) {
           return jsonEncode(
-              await rustDeskWinManager.getOtherRemoteWindowCoords(windowId));
+              await labDeskWinManager.getOtherRemoteWindowCoords(windowId));
         }
       }
     });

@@ -90,7 +90,7 @@ jobs:
 
       # The analyzer runs over the whole package, because that is the only way
       # to resolve the imports, but only issues in files LabDesk owns fail the
-      # job. Everything else is inherited from upstream RustDesk and predates
+      # job. Everything else is inherited from upstream LabDesk and predates
       # this fork by years; failing on it would mean either fixing several
       # hundred upstream issues or turning the check off, and neither of those
       # protects LabDesk's own code.

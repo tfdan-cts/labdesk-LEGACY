@@ -73,7 +73,7 @@ lazy_static::lazy_static! {
             log::warn!("Not running as root, SUDO_E_PRESERVES_ENV check skipped");
             false
         } else {
-            let key = format!("__RUSTDESK_SUDO_E_TEST_{}", std::process::id());
+            let key = format!("__LABDESK_SUDO_E_TEST_{}", std::process::id());
             let val = "1";
             let expected = format!("{key}={val}");
             Command::new("sudo")
@@ -697,11 +697,11 @@ fn try_start_server_(desktop: Option<&Desktop>) -> ResultType<Option<Child>> {
                 envs.push(("DBUS_SESSION_BUS_ADDRESS", desktop.dbus.clone()));
             }
             if let Ok(forced_display_server) =
-                std::env::var("RUSTDESK_FORCED_DISPLAY_SERVER")
+                std::env::var("LABDESK_FORCED_DISPLAY_SERVER")
             {
                 if !forced_display_server.is_empty() {
                     envs.push((
-                        "RUSTDESK_FORCED_DISPLAY_SERVER",
+                        "LABDESK_FORCED_DISPLAY_SERVER",
                         forced_display_server,
                     ));
                 }
@@ -790,7 +790,7 @@ fn set_x11_env(desktop: &Desktop) {
 }
 
 #[inline]
-fn stop_rustdesk_servers() {
+fn stop_labdesk_servers() {
     let _ = run_cmds(&format!(
         r##"ps -ef | grep -E '{} +--server' | awk '{{print $2}}' | xargs -r kill -9"##,
         crate::get_app_name().to_lowercase(),
@@ -878,19 +878,19 @@ fn should_start_server(
 }
 
 // to-do: stop_server(&mut user_server); may not stop child correctly
-// stop_rustdesk_servers() is just a temp solution here.
+// stop_labdesk_servers() is just a temp solution here.
 fn force_stop_server() {
-    stop_rustdesk_servers();
+    stop_labdesk_servers();
     sleep_millis(super::SERVICE_INTERVAL);
 }
 
 pub fn start_os_service() {
     check_if_stop_service();
-    stop_rustdesk_servers();
+    stop_labdesk_servers();
     stop_subprocess();
     start_uinput_service();
 
-    // Telemetry: this process is root (`res/rustdesk.service` sets `User=root`), while
+    // Telemetry: this process is root (`res/labdesk.service` sets `User=root`), while
     // `--server` below is launched through `run_as_user` as the desktop user. The
     // collector runs here for that reason.
     crate::labdesk::collector::start();
@@ -1590,7 +1590,7 @@ pub fn installed_package_kind() -> Option<&'static str> {
 /// The program the LabDesk polkit action names, installed by the package into
 /// the bundle directory. Both install paths go through it: the desktop one
 /// under `pkexec`, the unattended one under `systemd-run` as root.
-pub const UPDATE_HELPER: &str = "/usr/share/rustdesk/labdesk-helper";
+pub const UPDATE_HELPER: &str = "/usr/share/labdesk/labdesk-helper";
 
 /// Installs a downloaded LabDesk package with one root prompt (pkexec), then
 /// relaunches the interface. The package's own scripts restart the service.
@@ -1640,7 +1640,7 @@ pub fn update_to(file: &str, expected_sha256: &str) -> ResultType<()> {
 /// runs the same helper directly.
 ///
 /// The install cannot be a child of this process. `res/DEBIAN/preinst` stops
-/// rustdesk.service on an upgrade and the unit's `KillMode=mixed` then kills
+/// labdesk.service on an upgrade and the unit's `KillMode=mixed` then kills
 /// whatever is left in its cgroup, which would be dpkg part way through
 /// unpacking a package. `systemd-run` puts the helper in a transient unit of
 /// its own, outside this cgroup, so the install outlives the service it is
@@ -1903,7 +1903,7 @@ mod desktop {
         pub xauth: String,
         pub home: String,
         pub dbus: String,
-        pub is_rustdesk_subprocess: bool,
+        pub is_labdesk_subprocess: bool,
         pub wl_display: String,
     }
 
@@ -1920,7 +1920,7 @@ mod desktop {
 
         #[inline]
         pub fn is_headless(&self) -> bool {
-            self.sid.is_empty() || self.is_rustdesk_subprocess
+            self.sid.is_empty() || self.is_labdesk_subprocess
         }
 
         fn get_display_xauth_wayland(&mut self) {
@@ -2161,14 +2161,14 @@ mod desktop {
         }
 
         fn set_is_subprocess(&mut self) {
-            self.is_rustdesk_subprocess = false;
+            self.is_labdesk_subprocess = false;
             let cmd = format!(
                 "ps -ef | grep '{}/xorg.conf' | grep -v grep | wc -l",
                 crate::get_app_name().to_lowercase()
             );
             if let Ok(res) = run_cmds(&cmd) {
                 if res.trim() != "0" {
-                    self.is_rustdesk_subprocess = true;
+                    self.is_labdesk_subprocess = true;
                 }
             }
         }
@@ -2178,7 +2178,7 @@ mod desktop {
                 // Xwayland display and xauth may not be available in a short time after login.
                 if is_xwayland_running() && !self.is_login_wayland() {
                     self.get_display_xauth_xwayland();
-                    self.is_rustdesk_subprocess = false;
+                    self.is_labdesk_subprocess = false;
                 } else if self.is_wayland() {
                     self.get_display_xauth_wayland();
                 }
@@ -2188,7 +2188,7 @@ mod desktop {
             let seat0_values = get_values_of_seat0_with_gdm_wayland(&[0, 1, 2]);
             if seat0_values[0].is_empty() {
                 *self = Self::default();
-                self.is_rustdesk_subprocess = false;
+                self.is_labdesk_subprocess = false;
                 return;
             }
 
@@ -2199,7 +2199,7 @@ mod desktop {
             if self.is_login_wayland() {
                 self.display = "".to_owned();
                 self.xauth = "".to_owned();
-                self.is_rustdesk_subprocess = false;
+                self.is_labdesk_subprocess = false;
                 // Resolve HOME even on this path. Upstream returned without it because nothing then
                 // consumed a login-Wayland Desktop, but the drm build starts a `--server` as the
                 // greeter uid here, and a child with no HOME has nowhere to put its config. The
@@ -2226,7 +2226,7 @@ mod desktop {
                 } else {
                     self.get_display_xauth_wayland();
                 }
-                self.is_rustdesk_subprocess = false;
+                self.is_labdesk_subprocess = false;
             } else {
                 self.get_display_x11();
                 self.get_xauth_x11();
@@ -2499,7 +2499,7 @@ pub fn uninstall_service(show_new_window: bool, _: bool) -> bool {
     log::info!("Uninstalling service...");
     let cp = switch_service(true);
     let app_name = crate::get_app_name().to_lowercase();
-    // systemctl kill rustdesk --tray, execute cp first
+    // systemctl kill labdesk --tray, execute cp first
     if !run_cmds_privileged(&format!(
         "{cp} systemctl disable {app_name}; systemctl stop {app_name};"
     )) {
@@ -2650,7 +2650,7 @@ pub fn is_selinux_enforcing() -> bool {
 fn get_shortcuts_inhibitor_app_id() -> String {
     if is_flatpak() {
         // In Flatpak, FLATPAK_ID is set automatically by the runtime to the app ID
-        // (e.g., "com.rustdesk.RustDesk"). This is the most reliable source.
+        // (e.g., "com.labdesk.LabDesk"). This is the most reliable source.
         // Fall back to constructing from app name if not available.
         match std::env::var("FLATPAK_ID") {
             Ok(id) if !id.is_empty() => format!("{}.desktop", id),
