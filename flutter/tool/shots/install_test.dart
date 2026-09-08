@@ -84,7 +84,7 @@ void main() {
             onInstall: () {},
             onCancel: () {},
             onRunWithoutInstall: () {},
-            agreementUrl: 'https://rustdesk.com/privacy.html',
+            agreementUrl: 'https://lab-desk.net/privacy',
             onOpenAgreement: () {},
           ),
         ),

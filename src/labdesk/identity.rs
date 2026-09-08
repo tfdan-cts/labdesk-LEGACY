@@ -70,7 +70,7 @@ impl AgentIdentity {
     ///
     /// This is the daemon's own config directory: `Config::path()` resolves LocalSystem's
     /// roaming AppData and `patch()` rewrites it to `ServiceProfiles\LocalService`
-    /// (libs/hbb_common/src/config.rs:463-473). Administrators can write there and
+    /// (libs/labdesk_common/src/config.rs:463-473). Administrators can write there and
     /// interactive users cannot read it.
     #[cfg(windows)]
     pub fn path() -> PathBuf {
@@ -219,7 +219,7 @@ impl AgentIdentity {
     }
 
     fn store_to(&self, path: &Path) -> ResultType<()> {
-        // `store_path` writes the file 0600 on unix, see libs/hbb_common/src/config.rs.
+        // `store_path` writes the file 0600 on unix, see libs/labdesk_common/src/config.rs.
         config::store_path(path.to_path_buf(), self)?;
         #[cfg(windows)]
         {

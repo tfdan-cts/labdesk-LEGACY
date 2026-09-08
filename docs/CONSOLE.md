@@ -420,9 +420,9 @@ book routes. What the console has no surface for is managing the organization. C
 * **No update is driven from the console.** The update banner offers the client's own flow, which
   installs in place on Windows and, through the service process, on macOS and, since 2026-09-05, on
   Linux. `crate::updater::start_auto_update_linux` runs in the root service that
-  `res/rustdesk.service` starts, asks the desktop user's `--server` over IPC whether a session is
+  `res/labdesk.service` starts, asks the desktop user's `--server` over IPC whether a session is
   live, downloads the deb or rpm the release publishes for this platform, checks it against the
-  digest lab-desk.net publishes, and hands it to `/usr/share/rustdesk/labdesk-helper` through
+  digest lab-desk.net publishes, and hands it to `/usr/share/labdesk/labdesk-helper` through
   `systemd-run`. The helper is the same program the polkit action
   `net.lab-desk.LabDesk.install-update` names, so the console's own banner and the unattended loop
   install through one gate; the helper fetches the published digest itself and refuses anything

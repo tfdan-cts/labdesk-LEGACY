@@ -233,7 +233,7 @@ fn publish(status: Reachability) {
 /// from this process's memory.
 ///
 /// `CONFIG2` is a `lazy_static` loaded once per process
-/// (`libs/hbb_common/src/config.rs`, `Config2::load`). On Linux and macOS the
+/// (`libs/labdesk_common/src/config.rs`, `Config2::load`). On Linux and macOS the
 /// `--server` process syncs its copy to this daemon over `_service`, so
 /// `Config::get_option` follows a flip from the console there; on Windows
 /// `--server` and `--service` are two LocalSystem processes reading the same

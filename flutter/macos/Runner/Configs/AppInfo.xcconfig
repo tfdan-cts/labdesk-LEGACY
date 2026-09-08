@@ -11,4 +11,4 @@ PRODUCT_NAME = LabDesk
 PRODUCT_BUNDLE_IDENTIFIER = net.lab-desk.labdesk
 
 // The copyright displayed in application information
-PRODUCT_COPYRIGHT = Copyright © 2026 LabDesk contributors. Based on RustDesk, © Purslane Tech Pte. Ltd.
+PRODUCT_COPYRIGHT = Copyright © 2026 LabDesk contributors. Licensed under AGPL-3.0; third-party notices in docs/THIRD-PARTY.md.

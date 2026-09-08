@@ -1,8 +1,8 @@
 use hbb_common::{bail, platform::windows::is_windows_version_or_greater, ResultType};
 
-// This string is defined here.
-//  https://github.com/rustdesk-org/RustDeskIddDriver/blob/b370aad3f50028b039aad211df60c8051c4a64d6/RustDeskIddDriver/RustDeskIddDriver.inf#LL73C1-L73C40
-pub const LABDESK_IDD_DEVICE_STRING: &'static str = "RustDeskIddDriver Device\0";
+// Must match the device string in the LabDesk IDD driver INF. The labdesk_idd path needs a
+// LabDesk-signed driver package with hardware id LabDeskIddDriver; none ships yet.
+pub const LABDESK_IDD_DEVICE_STRING: &'static str = "LabDeskIddDriver Device\0";
 pub const AMYUNI_IDD_DEVICE_STRING: &'static str = "USB Mobile Monitor Virtual Display\0";
 
 const IDD_IMPL: &str = IDD_IMPL_AMYUNI;

@@ -206,12 +206,49 @@ update-desktop-database() { echo desktop; }
     print("Four Arch post-install/upgrade fixtures passed; unresolved migration never activates the new service")
 
 
+# Tracked files that may keep the legacy product name: legal notices, history, and the
+# migration code that recognises packages installed before the rename.
+IDENTITY_ALLOWED_FILES = {
+    "LICENCE", "CHANGELOG.md", "docs/THIRD-PARTY.md", "scripts/check-packaging-identity.py",
+    "install.sh", "res/labdesk-helper", "res/DEBIAN/preinst", "res/pacman_install",
+    ".github/workflows/third-party-window-injection.yml",
+}
+IDENTITY_ALLOWED_PREFIXES = ("docs/plans/", "res/vcpkg/", "res/rpm")
+# Dependency provenance (pinned forks, upstream issue links) and the AGPL attribution line.
+IDENTITY_ALLOWED_LINE = re.compile(
+    r"github\.com/(rustdesk|rustdesk-org|fufesou)/|rustdesk\.com/docs/|doc\.rustdesk\.com|reddit\.com/r/rustdesk"
+    r"|uses: rustdesk-org/|ubuntu18\.04-rustdesk|Based on RustDesk", re.I)
+
+
+def check_source_identity():
+    listed = subprocess.run(["git", "-C", str(ROOT), "ls-files", "-z"], capture_output=True, check=True).stdout.decode().split("\0")
+    failures = []
+    for relative in filter(None, listed):
+        if "rustdesk" in relative.lower():
+            failures.append(f"{relative}: legacy name in path")
+        if relative in IDENTITY_ALLOWED_FILES or relative.startswith(IDENTITY_ALLOWED_PREFIXES) or relative.endswith(".lock"):
+            continue
+        path = ROOT / relative
+        if not path.is_file():
+            continue
+        data = path.read_bytes()
+        text = data.decode("utf-16") if data[:2] in (b"\xff\xfe", b"\xfe\xff") else data.decode("utf-8", errors="replace")
+        for number, line in enumerate(text.splitlines(), 1):
+            if "rustdesk" in line.lower() and not IDENTITY_ALLOWED_LINE.search(line):
+                failures.append(f"{relative}:{number}: {line.strip()[:120]}")
+    if failures:
+        raise AssertionError("Legacy product identity in tracked sources:\n" + "\n".join(failures))
+    print(f"Source identity passed: {len(listed) - 1} tracked files")
+
+
 if __name__ == "__main__":
     if len(sys.argv) == 3 and sys.argv[1] == "--payload":
         check_payload(sys.argv[2])
+    elif len(sys.argv) == 2 and sys.argv[1] == "--source-identity":
+        check_source_identity()
     elif len(sys.argv) == 1:
         check_source()
         check_generated_metadata()
         check_migration()
     else:
-        sys.exit("usage: check-packaging-identity.py [--payload DIRECTORY]")
+        sys.exit("usage: check-packaging-identity.py [--payload DIRECTORY | --source-identity]")

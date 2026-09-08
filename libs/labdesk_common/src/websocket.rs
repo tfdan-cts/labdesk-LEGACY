@@ -417,14 +417,14 @@ mod tests {
         assert_eq!(check_ws("127.0.0.1:21115"), "ws://127.0.0.1:21118");
         assert_eq!(check_ws("127.0.0.1:21116"), "ws://127.0.0.1:21118");
         assert_eq!(check_ws("127.0.0.1:21117"), "ws://127.0.0.1:21119");
-        assert_eq!(check_ws("rustdesk.com:21115"), "ws://rustdesk.com/ws/id");
-        assert_eq!(check_ws("rustdesk.com:21116"), "ws://rustdesk.com/ws/id");
-        assert_eq!(check_ws("rustdesk.com:21117"), "ws://rustdesk.com/ws/relay");
+        assert_eq!(check_ws("lab-desk.net:21115"), "ws://lab-desk.net/ws/id");
+        assert_eq!(check_ws("lab-desk.net:21116"), "ws://lab-desk.net/ws/id");
+        assert_eq!(check_ws("lab-desk.net:21117"), "ws://lab-desk.net/ws/relay");
         // set relay-server without port
         Config::set_option("relay-server".to_string(), "127.0.0.1".to_string());
         Config::set_option(
             "api-server".to_string(),
-            "https://api.rustdesk.com".to_string(),
+            "https://api.lab-desk.net".to_string(),
         );
         assert_eq!(
             check_ws("[0:0:0:0:0:0:0:1]:21115"),
@@ -438,11 +438,11 @@ mod tests {
             check_ws("[0:0:0:0:0:0:0:1]:21117"),
             "ws://[0:0:0:0:0:0:0:1]:21119"
         );
-        assert_eq!(check_ws("rustdesk.com:21115"), "wss://rustdesk.com/ws/id");
-        assert_eq!(check_ws("rustdesk.com:21116"), "wss://rustdesk.com/ws/id");
+        assert_eq!(check_ws("lab-desk.net:21115"), "wss://lab-desk.net/ws/id");
+        assert_eq!(check_ws("lab-desk.net:21116"), "wss://lab-desk.net/ws/id");
         assert_eq!(
-            check_ws("rustdesk.com:21117"),
-            "wss://rustdesk.com/ws/relay"
+            check_ws("lab-desk.net:21117"),
+            "wss://lab-desk.net/ws/relay"
         );
         // set relay-server with default port
         Config::set_option("relay-server".to_string(), "127.0.0.1:21117".to_string());
@@ -451,11 +451,11 @@ mod tests {
         assert_eq!(check_ws("127.0.0.1:21117"), "ws://127.0.0.1:21119");
         // set relay-server with custom port
         Config::set_option("relay-server".to_string(), "127.0.0.1:34567".to_string());
-        assert_eq!(check_ws("rustdesk.com:21115"), "wss://rustdesk.com/ws/id");
-        assert_eq!(check_ws("rustdesk.com:21116"), "wss://rustdesk.com/ws/id");
+        assert_eq!(check_ws("lab-desk.net:21115"), "wss://lab-desk.net/ws/id");
+        assert_eq!(check_ws("lab-desk.net:21116"), "wss://lab-desk.net/ws/id");
         assert_eq!(
-            check_ws("rustdesk.com:34567"),
-            "wss://rustdesk.com/ws/relay"
+            check_ws("lab-desk.net:34567"),
+            "wss://lab-desk.net/ws/relay"
         );
 
         // set custom-rendezvous-server without port

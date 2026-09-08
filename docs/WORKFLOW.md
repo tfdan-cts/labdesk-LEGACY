@@ -12,7 +12,7 @@ this one, this one wins.
 | `labdesk-next` | The integration branch. Finished work waiting to be released together. | Only by pull-request merge from a feature branch. Never by direct push. |
 | `feat/*`, `fix/*`, `docs/*`, `chore/*` | One unit of work each. | Branched from `labdesk-next`, pushed once when ready. |
 
-`master` additionally tracks upstream RustDesk. Upstream merges land on `labdesk-next` first
+`master` additionally tracks the upstream remote-access engine. Upstream merges land on `labdesk-next` first
 and reach `master` through the same release pull request as everything else.
 
 Nobody pushes to `master` directly. This is enforced by `.githooks/pre-push`; see *Enabling the
@@ -40,7 +40,7 @@ anything else, do not cut the release: surface it and wait.
 
 ## Versions
 
-LabDesk carries its own semantic version, separate from the RustDesk core's. It is written in
+LabDesk carries its own semantic version, separate from the upstream engine core's. It is written in
 five files that must agree and is only ever changed by `scripts/set-version.ps1`; a release is
 the tag `v<version>` the owner creates when the release pull request lands. The rules, the list
 of files and the reason the first self-reported version is 1.2.0 are in `docs/VERSIONING.md`;
@@ -57,7 +57,7 @@ flutter analyze --no-fatal-infos      # must add no new issues under lib/labdesk
 
 Notes on the gates as they stand today:
 
-- `flutter analyze` reports issues inherited from upstream RustDesk, so the total is never zero.
+- `flutter analyze` reports issues inherited from the upstream engine, so the total is never zero.
   The gate is that LabDesk's own files contribute none of them. Two measurements from
   2026-08-29, and the difference between them is the point:
 

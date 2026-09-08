@@ -56,12 +56,6 @@ pub struct PluginInfo {
 static PLUGIN_SOURCE_LOCAL: &str = "local";
 
 fn get_plugin_source_list() -> Vec<PluginSource> {
-    // Only one source for now.
-    // vec![PluginSource {
-    //     name: "labdesk".to_string(),
-    //     url: "https://raw.githubusercontent.com/fufesou/rustdesk-plugins/main".to_string(),
-    //     description: "".to_string(),
-    // }]
     vec![]
 }
 

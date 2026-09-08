@@ -42,7 +42,7 @@ route calls it.
 **3. A console token holder.** `Authorization: Bearer <token>` against a SHA-256
 in `app_token`, resolved by `bearerUser()` (`src/worker/routes/client-api.ts:58`).
 This is what the desktop client gets from `POST /api/login`. It reaches the
-legacy RustDesk plane only: `/api/currentUser`, `/api/heartbeat`, `/api/sysinfo`,
+legacy compatibility plane only: `/api/currentUser`, `/api/heartbeat`, `/api/sysinfo`,
 and the address book routes. It is not read anywhere under `/agent/*`, and
 `actor()` does not look at it, so a stolen console token cannot speak as a
 machine and cannot reach the organization plane.

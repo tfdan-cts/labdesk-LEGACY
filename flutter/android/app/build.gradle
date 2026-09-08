@@ -86,7 +86,7 @@ android {
     sourceSets {
         main.java.srcDirs += 'src/main/kotlin'
 
-        main.proto.srcDirs += '../../../libs/hbb_common/protos'
+        main.proto.srcDirs += '../../../libs/labdesk_common/protos'
         main.proto.includes += "message.proto"
     }
 

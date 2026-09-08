@@ -4,17 +4,19 @@
 
 # LabDesk
 
-LabDesk is a fork of [RustDesk](https://github.com/rustdesk/rustdesk) for people who connect to more than one self-hosted ID/relay server and manage fleets of machines across separate networks.
+LabDesk is a remote administration client for people who look after fleets of machines across
+separate networks. It is its own application: LabDesk Connect is the remote-access feature, Fleet
+is the management console, and Labnet is the encrypted machine-to-machine network that carries
+both, brokered by [lab-desk.net](https://lab-desk.net).
 
-Stock RustDesk stores a single ID/Relay/API/key configuration; pointing the client at a different server means retyping everything. LabDesk fixes that, and adds fleet-organization features on top.
-
-## What LabDesk adds
+## What LabDesk does
 
 LabDesk opens on a **console**. It is the whole interface rather than a screen beside one: a
 single sidebar carrying Connect, Fleet, Health, Terminal, Actions, This machine and Settings.
 
-- **Connect** is where you work: type a machine's id, or pick one from recent sessions,
-  favourites, discovered machines, your address book, or a group.
+- **Connect** is where you work: pick a machine from your fleet, recent sessions or favourites,
+  and open a desktop, file-transfer or terminal session. Every session is authorised by the
+  broker and carried over Labnet, and a revoked grant ends the session.
 - **Fleet** shows reachability across the session. Every machine's recent checks are drawn as a
   strip rather than a single dot, so a machine that keeps dropping looks different from one that
   is simply down, and a machine nobody has asked about yet reads as unknown rather than offline.
@@ -22,22 +24,20 @@ single sidebar carrying Connect, Fleet, Health, Terminal, Actions, This machine 
   read nothing rather than showing zeroes.
 - **Terminal** and **Actions** act on the machine selected in Fleet. Actions that need an open
   session are disabled with their reason shown, never hidden and never inert.
-- **This machine** is this computer's own identity: its id, its password with a plain statement
-  of whether it is one-time or permanent, its server profile, and whether the background service
-  is running.
+- **This machine** is this computer's own identity, its enrollment, and whether the background
+  service and the Labnet tunnel are running.
 - **Settings** nests its pages in the same sidebar, so there is one place to navigate.
 
 Underneath that:
 
-- **Server profiles**: save any number of named ID/Relay/API/key configurations, switch between
-  them from the console, and have the change applied live with no restart.
+- **Labnet**: each enrolled machine joins an owned WireGuard overlay. A remote session is a
+  temporary, one-way rule between two machines; a labnet is a persistent group a machine joins
+  only after approval on the machine itself.
 - **Machine groups** and **machine icons**: organise machines into local groups with themed
-  icons. Stored locally, no server required.
+  icons.
 - **Live reachability**: green, red, and a real unknown state, with a manual refresh for an
-  immediate re-check after switching profiles or networks.
+  immediate re-check.
 - **Purple theme and branding** throughout, including the installer.
-
-Connection protocol, encryption, file transfer, and server compatibility are all inherited from upstream RustDesk. LabDesk works with the standard open-source `rustdesk-server` (hbbs/hbbr) and RustDesk Server Pro.
 
 ## Installing
 
@@ -60,10 +60,9 @@ architecture, it says so and stops without changing anything. A full release is
 preferred; when only a pre-release carries the installer, the script says which
 pre-release it is about to install before it does.
 
-To point the client at a server during the install, download the script first,
-because piping to `iex` leaves no way to pass parameters. Windows refuses to run
-downloaded scripts under its default execution policy, so bypass it for this one
-run:
+To pass settings during the install, download the script first, because piping
+to `iex` leaves no way to pass parameters. Windows refuses to run downloaded
+scripts under its default execution policy, so bypass it for this one run:
 
 ```powershell
 irm https://raw.githubusercontent.com/tfdan-cts/LabDesk/master/install.ps1 -OutFile install.ps1
@@ -82,13 +81,13 @@ curl -fsSL https://raw.githubusercontent.com/tfdan-cts/LabDesk/master/install.sh
 
 The script detects the architecture and the package manager, then installs the
 matching `.deb`, `.rpm`, or `.pkg.tar.zst` from the newest full release. Unlike
-the Windows script it does not consider pre-releases, because the Linux packages
-keep the upstream layout and every full release carries them. It supports
-apt, dnf, yum, zypper, and pacman on x86_64 and aarch64, and it installs the
-`rustdesk` systemd service along with the desktop entries. Re-running it
-upgrades in place.
+the Windows script it does not consider pre-releases, because every full release
+carries the Linux packages. It supports apt, dnf, yum, zypper, and pacman on
+x86_64 and aarch64, and it installs the `labdesk` systemd service along with the
+desktop entries. Re-running it upgrades in place, and an installation from a
+release before the package rename is migrated in place.
 
-Server settings are passed as environment variables:
+Settings are passed as environment variables:
 
 ```sh
 curl -fsSL https://raw.githubusercontent.com/tfdan-cts/LabDesk/master/install.sh   | sudo LABDESK_HOST=id.example.com LABDESK_KEY=YOURKEY sh
@@ -101,7 +100,7 @@ for the shell that `sudo` runs, which is why they go after `sudo` and not before
 
 On a Wayland session the script warns that screen capture and unattended access
 need X11, and prints the change required to switch. LabDesk also publishes a
-separate `rustdesk-unattended-wayland` package that captures through DRM/KMS
+separate `labdesk-unattended-wayland` package that captures through DRM/KMS
 without switching to X11. It is a distinct package because it bypasses the
 desktop's consent prompt, so install it deliberately rather than as routine.
 
@@ -136,22 +135,19 @@ prompt:
 On Linux, remove the package with the same tool that installed it:
 
 ```sh
-sudo apt remove rustdesk       # Debian, Ubuntu
-sudo dnf remove rustdesk       # Fedora, RHEL
-sudo zypper remove rustdesk    # openSUSE
-sudo pacman -R rustdesk        # Arch
+sudo apt remove labdesk       # Debian, Ubuntu
+sudo dnf remove labdesk       # Fedora, RHEL
+sudo zypper remove labdesk    # openSUSE
+sudo pacman -R labdesk        # Arch
 ```
 
-The package is named `rustdesk` on every distribution, because the build
-pipeline keeps the upstream package name.
-
-Neither removes your settings. Machine groups, icons and server profiles live in
-the configuration directory (`%APPDATA%\LabDesk` on Windows, `~/.config/labdesk`
+Neither removes your settings. Machine groups and icons live in the
+configuration directory (`%APPDATA%\LabDesk` on Windows, `~/.config/labdesk`
 on Linux, lower case) and survive an uninstall, so reinstalling restores them.
 Delete that directory if you want a clean slate.
 
 On Windows the service keeps a second copy of the configuration under its own
-account's profile, holding the servers, the key and the peer history. Uninstalling
+account's profile, holding the enrollment and the peer history. Uninstalling
 with the `.exe` installer removes it. Uninstalling an `.msi` installation does not,
 because Windows Installer only removes what it installed and that directory is
 written at runtime. Clear it explicitly before handing a machine on:
@@ -168,31 +164,26 @@ Packaged builds for **Windows, macOS, Linux (deb/rpm/AppImage/flatpak), and Andr
 
 Binaries are unsigned; on Windows, SmartScreen will warn on first run. Binary filenames are `labdesk-<version>-<arch>.<kind>` on every platform.
 
-LabDesk uses its own configuration directory (`LabDesk` instead of `RustDesk`) and generates its own machine ID, so it can be installed alongside stock RustDesk without conflicts.
+LabDesk uses its own configuration directory and generates its own machine identity, so it can be installed alongside other remote-desktop tools without conflicts.
 
 ## Building
 
-Build steps are identical to upstream RustDesk; see the [upstream build documentation](https://github.com/rustdesk/rustdesk#raw-steps-to-build). This repo's CI (`.github/workflows/labdesk-dispatch.yml`) runs the full upstream `flutter-build.yml` pipeline and publishes artifacts to a release tag.
+`build.py` is the build entry point on every platform and `.github/workflows/flutter-build.yml`
+records the pinned toolchains and the exact steps CI runs. `docs/WORKFLOW.md` is the binding
+branch and release workflow.
 
-## Upstream and license
+## License
 
-LabDesk is based on RustDesk and stays close to upstream `master` for easy rebasing. All credit for the core remote desktop functionality goes to the [RustDesk project](https://github.com/rustdesk/rustdesk). Like upstream, this repository is licensed under [AGPL-3.0](LICENCE).
+LabDesk is licensed under [AGPL-3.0](LICENCE).
 
-### Modifications
+The remote-access engine inside LabDesk Connect is derived from an AGPL-3.0 upstream project.
+Based on RustDesk (rustdesk/rustdesk at commit `1d09760ef`, release line 1.4.9), modified from
+2026-08-11 onward by the LabDesk maintainers; AGPL-3.0 section 5(a) asks a modified work to say so
+and to carry the date. The copyright notices of the upstream authors are kept in the source, and
+every included third-party component is listed in [docs/THIRD-PARTY.md](docs/THIRD-PARTY.md). The
+commit history in this repository is the full record of what changed.
 
-This is a modified version of RustDesk, not the original. AGPL-3.0 section 5(a)
-asks a modified work to say so and to carry the date, so:
-
-- **Base:** rustdesk/rustdesk at commit `1d09760ef`, release line 1.4.9.
-- **Modified from 2026-08-11 onward** by the LabDesk maintainers.
-
-What was changed: named server profiles replacing the single ID/Relay/API/key
-configuration, local machine groups and per-machine icons, per-peer reachability
-with a distinct unknown state, a fleet console, application renaming and theming,
-and one-line installers for Windows and Linux. The commit history in this
-repository is the full record.
-
-Please report LabDesk problems here rather than to upstream RustDesk. Bugs in a
+Please report LabDesk problems here, not to the upstream project. Bugs in a
 modified build are not theirs to answer for.
 
 > [!Caution]

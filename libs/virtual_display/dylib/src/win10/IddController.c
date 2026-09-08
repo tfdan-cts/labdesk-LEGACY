@@ -79,7 +79,7 @@ BOOL InstallUpdate(LPCWSTR fullInfPath, PBOOL rebootRequired)
     // UpdateDriverForPlugAndPlayDevicesW may return FALSE while driver was successfully installed...
     if (FALSE == UpdateDriverForPlugAndPlayDevicesW(
         NULL,
-        L"RustDeskIddDriver",    // match hardware id in the inf file
+        L"LabDeskIddDriver",    // match hardware id in the inf file
         fullInfPath,
         INSTALLFLAG_FORCE
             // | INSTALLFLAG_NONINTERACTIVE  // INSTALLFLAG_NONINTERACTIVE may cause error 0xe0000247
@@ -97,7 +97,7 @@ BOOL InstallUpdate(LPCWSTR fullInfPath, PBOOL rebootRequired)
                 SetLastMsg("Failed InstallUpdate UpdateDriverForPlugAndPlayDevicesW, error: 0x%x, %s  Please try: Reinstall LabDesk with the cert option.\n", error, errorString == NULL ? "(NULL)\n" : errorString);
                 break;
             case 0xe0000247:
-                SetLastMsg("Failed InstallUpdate UpdateDriverForPlugAndPlayDevicesW, error: 0x%x, %s  Please try: \n1. Check the device manager and event viewer.\n2. Uninstall \"RustDeskIddDriver Device\" in device manager, then reinstall LabDesk with the cert option.\n", error, errorString == NULL ? "(NULL)\n" : errorString);
+                SetLastMsg("Failed InstallUpdate UpdateDriverForPlugAndPlayDevicesW, error: 0x%x, %s  Please try: \n1. Check the device manager and event viewer.\n2. Uninstall \"LabDeskIddDriver Device\" in device manager, then reinstall LabDesk with the cert option.\n", error, errorString == NULL ? "(NULL)\n" : errorString);
                 break;
             default:
                 SetLastMsg("Failed InstallUpdate UpdateDriverForPlugAndPlayDevicesW, error: 0x%x, %s  Please try: Check the device manager and event viewer.\n", error, errorString == NULL ? "(NULL)\n" : errorString);
@@ -268,9 +268,9 @@ BOOL DeviceCreateWithLifetime(SW_DEVICE_LIFETIME *lifetime, PHSWDEVICE hSwDevice
     PCWSTR description = L"LabDesk Idd Driver";
 
     // These match the Pnp id's in the inf file so OS will load the driver when the device is created
-    PCWSTR instanceId = L"RustDeskIddDriver";
-    PCWSTR hardwareIds = L"RustDeskIddDriver\0\0";
-    PCWSTR compatibleIds = L"RustDeskIddDriver\0\0";
+    PCWSTR instanceId = L"LabDeskIddDriver";
+    PCWSTR hardwareIds = L"LabDeskIddDriver\0\0";
+    PCWSTR compatibleIds = L"LabDeskIddDriver\0\0";
 
     createInfo.cbSize = sizeof(createInfo);
     createInfo.pszzCompatibleIds = compatibleIds;
@@ -283,7 +283,7 @@ BOOL DeviceCreateWithLifetime(SW_DEVICE_LIFETIME *lifetime, PHSWDEVICE hSwDevice
         SWDeviceCapabilitiesDriverRequired;
 
     // Create the device
-    HRESULT hr = SwDeviceCreate(L"RustDeskIddDriver",
+    HRESULT hr = SwDeviceCreate(L"LabDeskIddDriver",
         L"HTREE\\ROOT\\0",
         &createInfo,
         0,
