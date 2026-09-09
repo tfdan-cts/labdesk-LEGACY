@@ -923,7 +923,7 @@ mod tests {
 
     /// The compiled file, entry by entry against the contract's table, so a
     /// hand edit to `tools.json` that drifts from the Worker's copy fails here
-    /// before `cmp` fails in the critic's hands.
+    /// before the byte-for-byte comparison fails.
     #[test]
     fn the_compiled_catalog_is_the_contract_table() {
         let c = catalog();

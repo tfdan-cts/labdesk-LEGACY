@@ -63,8 +63,8 @@ One file, byte identical in both repositories:
 - site: `src/worker/tools.json`, imported by `src/worker/tool-catalog.ts`.
 
 Each side asserts against its own copy: `cargo test labdesk::tools` and
-`npx vitest run test/jobs.test.ts` (the verifiers section 9 names for WP13). The critic diffs the
-two copies with `cmp` as part of the WP13 verifier; a difference fails the round.
+`npx vitest run test/jobs.test.ts` (the verifiers section 9 names for WP13). Compare the
+two copies with `cmp` as part of the WP13 verification; any difference fails the check.
 
 Schema (JSON, no comments in the file itself):
 

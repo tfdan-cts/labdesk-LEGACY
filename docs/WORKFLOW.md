@@ -1,8 +1,6 @@
 # LabDesk development workflow
 
-This is the binding workflow for this repository. It applies to every contributor and every
-automated agent, on every machine, in every session. Where any other document conflicts with
-this one, this one wins.
+This document describes the contribution and release workflow for this repository.
 
 ## Branches
 
@@ -35,7 +33,7 @@ hooks* below.
    `master` with explicit owner approval, and merge the same fix back to `labdesk-next`
    immediately.
 
-A release may contain only the work the owner explicitly ordered. If `labdesk-next` carries
+A release may contain only its approved scope. If `labdesk-next` carries
 anything else, do not cut the release: surface it and wait.
 
 ## Versions
@@ -106,8 +104,7 @@ on private hosts recorded outside this repository.
 
 ## Private files
 
-Working files for automated agents are excluded locally and must never be committed. Do not name
-them in the public `.gitignore` either, because naming them there is itself a disclosure.
+Keep private working files outside the published source tree. Review the staged diff before committing.
 
 Before any commit made with `git add -A`, check `git diff --cached` and confirm every hunk is
 intended.

@@ -68,7 +68,7 @@ const DISK_INTERVAL: Duration = Duration::from_secs(3600);
 /// administrator who enrolled it is still looking at the console.
 const DISK_FIRST: Duration = Duration::from_secs(60);
 /// Ticket delivery and claim reporting are independent of telemetry's 300 s cadence.
-/// ponytail: 17,280 idle requests/device/day; a push channel replaces polling if fleet scale requires it.
+/// 17,280 idle requests/device/day; a push channel replaces polling if fleet scale requires it.
 const TICKET_POLL: Duration = Duration::from_secs(5);
 
 /// Start the collector on its own thread with its own runtime.
