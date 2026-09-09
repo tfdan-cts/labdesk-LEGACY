@@ -178,7 +178,7 @@ server's own configuration and the client source, not the installer's summary.
 |---|---|---|
 | 80/tcp | **Closed.** | Traefik obtains certificates by TLS-ALPN on 443 (`--certificatesresolvers.letsencrypt.acme.tlschallenge=true`), so 80 only served an HTTP-to-HTTPS redirect. Removed from Traefik, the host firewall and the security group. |
 | 443/tcp | **Open, and necessary; the admin paths on it are fenced.** | Peers register and receive their network map over gRPC (`/management.ManagementService/`), exchange connection candidates over gRPC (`/signalexchange.SignalExchange/`), and fall back to the relay over WebSocket (`/relay`, `/ws-proxy/`). Every one of those is TLS, and a peer authenticates with its one-off setup key and its WireGuard key; the server never holds a peer's private key and cannot read relayed traffic. The daemon never calls `/api` or `/oauth2` (no code path in `client/` does), so `/api`, `/oauth2` and the dashboard sit behind a Traefik IP allow list: Cloudflare's published ranges (the lab-desk.net Worker's calls arrive from 172.69.x, measured with a probe Worker), the VM's own address and its Docker network. From anywhere else they answer 403. |
-| 3478/udp | **Open, kept by owner decision (2026-09-03).** | STUN. A peer sends one small request and learns the public address and port its NAT gave it, which is what lets two machines behind two NATs connect directly. The server can replace it with external STUN (`server.stuns` in `config.yaml`; the embedded listener switches off when external servers are listed, `combined/cmd/config.go`), or run without STUN (peers then meet only through the relay on 443). |
+| 3478/udp | **Open, enabled for direct connections.** | STUN. A peer sends one small request and learns the public address and port its NAT gave it, which is what lets two machines behind two NATs connect directly. The server can replace it with external STUN (`server.stuns` in `config.yaml`; the embedded listener switches off when external servers are listed, `combined/cmd/config.go`), or run without STUN (peers then meet only through the relay on 443). |
 | 22/tcp | Reachable from inside the subnet only (the shared security list allows it from 10.30.20.8, the jump host). | |
 | 111 (rpcbind) | **Disabled.** Ubuntu's default `rpcbind` was listening on every interface for nothing this server does. | |
 
@@ -250,7 +250,7 @@ survives until the next restart is not a rule.
 - **Lynis PKGS-7388, "can't find any security repository".** False. `noble-security` is
   configured in `/etc/apt/sources.list.d/ubuntu.sources`, and twenty packages were installed from
   it. Lynis does not parse the deb822 format that Ubuntu 24.04 uses.
-- **STUN on 3478/udp served by this box.** Owner decision, recorded above. The relay is TCP and
+- **STUN on 3478/udp served by this box.** The relay is TCP and
   cannot reflect the UDP mapping WireGuard needs, public STUN would hand peer addresses to a third
   party, and relay-only forfeits the direct path.
 - ~~Traefik mounts the Docker socket read-only.~~ NO LONGER TRUE, and it was never as safe as this
@@ -291,7 +291,7 @@ kernel, never from the file that was written.
 
 ### The Docker socket, and why Traefik no longer has one
 
-A blind critic put the strongest finding plainly: Traefik ran as root with a **writable** Docker
+Traefik ran as root with a **writable** Docker
 socket. The `:ro` on the bind mount freezes the mount point, not the socket inode, so the process
 inside could still write to the Docker API, and write access to the Docker API is host root. One
 remote-code-execution bug in the most exposed process on the box would have defeated every other
@@ -324,7 +324,7 @@ already holds. All three now run `cap_drop: ALL`: Traefik and the server keep on
 Both changes were confirmed to survive a second deliberate reboot, along with the firewall
 policy, the disabled apport and `fs.suid_dumpable` reading 0.
 
-### Two more gaps, found by the second critic
+### Two additional security gaps
 
 **The containers could read the cloud's identity.** From inside any of the three containers'
 network namespaces, `http://169.254.169.254/opc/v2/identity/cert.pem` answered 200 with a real
@@ -362,7 +362,7 @@ because the dashboard is a public PKCE client, so nothing was leaking; the mode 
 
 ### The third round, and the change that was wrong
 
-The third critic found that `config.yaml` was bind-mounted read-write into `netbird-server`, the
+`config.yaml` was bind-mounted read-write into `netbird-server`, the
 container that terminates peer traffic and runs as uid 0. Code execution there could rewrite the
 control plane's own configuration on the host, which the operator would then load on the next
 restart. The server only reads that file (`combined/cmd/config.go`, `LoadConfig` is an
@@ -413,8 +413,7 @@ still showed only 443 open, and STUN still answered.
 
 ### The compromise removed
 
-The fourth critic pass confirmed the three previous fixes and then found the root cause of the one
-compromise this session had accepted. Container egress had been left open because `netbird-server`
+Container egress had been left open because `netbird-server`
 downloads its GeoLite2 database at every start and treats failure as fatal. That was true, but it
 was a symptom, not a constraint.
 

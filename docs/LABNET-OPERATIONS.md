@@ -136,7 +136,7 @@ performed in response to failures.
 ## Alert delivery acceptance — open
 
 Required delivery is through LabDesk's built-in notification preferences: authorized
-owner/overseer and affected-device recipients, OS push/popups, email and supported
+administrators and affected-device recipients, OS push/popups, email and supported
 integrations. The product notification service owns durable events, recipient
 authorization, preferences, deduplication and delivery. Domain email setup owns the
 operator mail route and outbound provider. Neither delivery implementation is proved

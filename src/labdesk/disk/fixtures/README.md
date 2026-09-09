@@ -186,9 +186,7 @@ Two buffers below are the exception to "constructed programmatically": they were
 read off drives on homebox-devserver (Lubuntu 26.04, kernel 7.0.0-30) by a
 harness that compiled this directory verbatim and ran `linux::nvme_health_page`
 and `linux::ata_smart_table` as root. Neither structure carries a serial number;
-the drive identity lives in `/sys` and is not here. The raw capture, with the
-harness source hashes, is in the phase 1 evidence directory of that session
-(`gauntlet-evidence/p1-rust-core/round-1/homebox-disk-harness.txt`).
+the drive identity lives in `/sys` and is not here. The fixture descriptions below identify the captured hardware and the checks covering each buffer.
 
 ### `nvme_health_micron3400.bin` (512 bytes)
 

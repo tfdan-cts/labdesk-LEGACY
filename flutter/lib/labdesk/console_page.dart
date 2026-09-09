@@ -201,7 +201,7 @@ class _LabDeskConsolePageState extends State<LabDeskConsolePage> {
     LabDeskGroupsModel.ensureLoaded();
     platformFFI.registerEventHandler('labdesk_refresh_fleet', 'labdesk-console',
         (_) async { if (mounted) await _pollInbox(); });
-    // ponytail: a one second repaint rather than plumbing change notification
+    // A one second repaint rather than plumbing change notification
     // through a store that is deliberately plain Dart. This is a monitoring
     // surface whose figures are seconds old by nature, and the alternative is
     // reactive wiring in a layer kept free of it on purpose.
